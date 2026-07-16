@@ -63,7 +63,7 @@ def test_wrong_signature_rejected() -> None:
     now = datetime.now(UTC)
     token = pyjwt.encode(
         {"sub": str(uuid.uuid4()), "iat": now, "exp": now + timedelta(minutes=5), "type": "access"},
-        "some-other-secret",
+        "another-secret-that-is-long-enough-0123456789",
         algorithm=JWT_ALGORITHM,
     )
     assert decode_access_token(token) is None

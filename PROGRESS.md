@@ -204,3 +204,263 @@ the carve-out covers only live traffic against the running stack.
 revision → Phase 1) — all logged above.
 
 ---
+
+## Phase 1 — Thin end-to-end slice (2026-07-16)
+
+### Architecture decisions
+
+**Auth token model: short-lived JWT access token (15 min, HS256) in the
+JSON body + opaque rotating refresh token (7 days) in an HttpOnly cookie
+scoped to `/api/auth`.** The SPA holds the access token in module memory
+only — never localStorage — so a script-injection bug cannot exfiltrate a
+persistent credential. Refresh tokens are 256-bit random strings; only
+their SHA-256 lands in the DB (`refresh_tokens.token_hash`), so a DB
+leak yields nothing replayable. Every refresh rotates the token and
+records `replaced_by`; presenting a rotated/revoked token is treated as
+evidence of theft and revokes the user's entire outstanding token family.
+Login runs an Argon2id verify against a dummy hash when the email is
+unknown so response timing doesn't reveal which accounts exist.
+
+**Refresh must be single-flight on the client.** Direct consequence of
+rotation-with-reuse-detection: two concurrent 401-triggered refreshes
+would present the same cookie twice — the second one *is* "reuse of a
+rotated token" and nukes the session. The API client shares one in-flight
+refresh promise across all callers (concurrent data queries, the
+boot-time silent refresh, React StrictMode's double-mounted effects).
+This wasn't theoretical: the site-detail page fires two queries in
+parallel, and after token expiry the pre-fix behavior logged the user
+out. Regression-tested in `frontend/tests/api.test.ts`.
+
+**Baselines are trust anchors; scans are observations.** A baseline
+capture that comes back with HTTP ≥ 400 is refused and marked failed —
+storing a 503/404 page as "trusted" would make the next identical error
+page compare as *clean* (found live against an httpbin 503 during this
+phase's stack verification). A *scan* that fetches an error page, by
+contrast, completes normally and flags the change — that's a legitimate
+observation of the site's current state.
+
+**In-flight rows must be un-stickable.** Three layers guarantee a
+baseline can never sit in `pending`/`capturing` (nor a scan in
+`pending`/`running`) forever, which would 409-block
+rebaseline/scan-now for that site permanently:
+1. Expected failures (unreachable, timeout, SSRF-blocked) are caught in
+   the task body and mark the row failed with a user-safe message.
+2. Unexpected exceptions (disk full, DB blip, soft time limit) are caught
+   by the Celery task wrapper, which best-effort marks the row failed —
+   and only if it's still in-flight (a finished row is never overwritten).
+3. If the worker died too hard even for that (SIGKILL, lost enqueue), the
+   API treats in-flight rows older than 10 minutes (Celery hard limit is
+   240 s) as abandoned: rebaseline/scan-now fail the stale row and
+   proceed instead of 409ing.
+
+**One-current-baseline is a DB invariant, not just app logic.** Partial
+unique index on `baselines(site_id) WHERE is_current` (works on both
+Postgres and SQLite via per-dialect `where` kwargs) backstops any race
+between concurrent capture tasks; the capture transaction demotes the old
+current and promotes the new one atomically.
+
+**API process never imports worker code.** Playwright and friends stay
+out of the FastAPI image; tasks are dispatched *by name* through a
+broker-only Celery client with fail-fast transport options — Redis being
+down surfaces as HTTP 503 with a clear message, never a hung request or a
+silently dropped task. Worker-side, each task run builds and disposes its
+own async engine because task bodies run under a fresh `asyncio.run()`
+event loop each time (an engine cannot be shared across loops).
+
+**SSRF policy is default-deny with a per-site opt-in (§9).**
+`app/ssrf.py` refuses non-http(s) schemes, credential-bearing URLs,
+oversized URLs, and any host resolving to a non-global address
+(`is_global` covers RFC1918/loopback/link-local/ULA/CGNAT/reserved in one
+property; multicast is checked separately since 224/4 reports
+`is_global=True`). `sites.allow_private_networks` relaxes only the
+address-range checks — never schemes or credentials. Validation runs at
+site creation (immediate user feedback; in a worker thread so the DNS
+resolution can't block the event loop) and again in the worker
+immediately before every fetch, and the fetcher re-validates the *final*
+URL after redirects so a public site redirecting to an internal address
+is refused. Known limitation, deliberately deferred to the Phase 5
+hardening pass: check-time and fetch-time DNS are separate resolutions,
+so a fast-flipping record (rebinding) could pass validation and resolve
+privately at fetch; closing it fully needs pin-the-IP transport.
+
+**Playwright navigation waits on `load`, not `networkidle`** —
+Playwright's own docs discourage `networkidle`, and any page with
+long-polling or analytics beacons never goes idle (guaranteed 45 s
+timeout). A fixed 2 s settle window after `load` lets late JS DOM writes
+land before capture. Content is normalized (line endings, trailing
+whitespace) before SHA-256 so representation noise doesn't flag; the
+normalization is deliberately conservative — dynamic-content false
+positives are for suppression rules (Phase 3), not for hashing less.
+
+**SPA fallback must not swallow API 404s.** The `app` container serves
+the built frontend with an index.html fallback for client-side routes,
+but unmatched `/api/*` paths stay real JSON 404s — a typo'd API call
+returning 200 text/html masks bugs badly (and Starlette normalizes paths
+with `os.path.normpath`, so the guard normalizes `\` → `/` to behave
+identically on Windows dev machines).
+
+**Identity/branding:** tagline chosen — **"The watch that never stands
+down."** (candidates considered: "Vigilance for every deployment",
+"Your site's standing guard"). Ward mark drawn as a single even-odd
+SVG path: a shield silhouette containing a negative-space keyhole/
+sentinel figure, monochrome white-on-black, legible 16 px → 512 px;
+exported to PNG (16/32/48/256/512) and multi-size `.ico` for the
+Phase 6 Windows shortcut. Fonts wired per §4 substitutions via
+Fontsource packages: Fraunces (display serif, `opsz` 144 + ss01),
+Instrument Sans (display-lg/subtitle/body-md lane, with the −0.5%
+tracking compensation the design doc mandates for ABC Favorit
+substitutes), Inter (UI lane), Geist Mono (code, unchanged). Lane
+discipline from the design doc is enforced by the `@utility` classes in
+`index.css` — components use role utilities, never raw font families.
+
+### Version verification log (all checked against live registries 2026-07-16)
+
+New backend dev deps (PyPI): aiosqlite 0.22.1 · greenlet 3.5.3 (both for
+the in-memory async-SQLite unit-test backend; no Postgres needed on the
+host to run tests).
+
+New frontend deps (npm): @fontsource-variable/fraunces 5.2.9 ·
+@fontsource-variable/instrument-sans 5.2.8 · @fontsource-variable/inter
+5.2.8 · @fontsource/geist-mono 5.2.8 · radix-ui 1.6.2 (unified package,
+per current shadcn/ui guidance) · class-variance-authority 0.7.1 ·
+clsx 2.1.1 · tailwind-merge 3.6.0 · sonner 2.0.7 · tw-animate-css 1.4.0.
+
+Everything else runs on the Phase 0 locks, unchanged.
+
+### What was built
+
+**Database (first Alembic revision, `76f6f5dcf922`):** `users` (role
+enum admin/analyst/viewer from day one — enforcement is Phase 5),
+`refresh_tokens` (hash-only storage, rotation lineage via `replaced_by`),
+`sites` (with the §9 `allow_private_networks` opt-in), `baselines`
+(status machine pending→capturing→ready/failed, partial-unique
+`is_current`, `capture_meta` JSON), `scans` (status + verdict enums,
+`layer_scores` JSON dict that layer 1 populates now and layers 2–9 extend
+in Phase 2 without a schema change). JSONB on Postgres / JSON on SQLite
+via `with_variant`; enum *values* (not Python member names) stored via
+`values_callable`. Downgrade path drops the Postgres enum types
+explicitly (autogenerate forgets them). `alembic/env.py` wired to
+`Base.metadata` for autogenerate.
+
+**Backend API:** `/api/auth/login|refresh|logout|me` (full rotation +
+reuse-revocation semantics above); `/api/sites` CRUD; site detail with
+current-baseline summary (falls back to the newest attempt so
+pending/failed captures are visible); `/api/sites/{id}/rebaseline` and
+`/scan-now` (202 + enqueue, 409 on genuine in-flight, stale-row
+recovery); `/api/sites/{id}/scans` (last 50); `/api/artifacts/...`
+screenshot endpoints (auth-required; paths come only from DB rows and are
+additionally resolved-and-confined to the artifacts root). All endpoints
+in OpenAPI (asserted by a test). `app/seed_admin.py` seeds the first
+admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD` (min 12 chars), idempotent,
+only resets a password when `ADMIN_RESET_PASSWORD=true`.
+
+**Worker:** `wardress.capture_baseline` and `wardress.run_scan` Celery
+tasks (async bodies under `asyncio.run`, per-run engine); Playwright
+fetcher (Chromium headless, 1366×900, 45 s nav / 30 s screenshot
+timeouts, 10 MB HTML cap, full-page PNG, curated response-header subset);
+artifact store writing `page.html` + `screenshot.png` under
+`<root>/<kind>/<id>/` with volume-relative paths in the DB (the volume
+can move without a migration); layer-1 hash diff returning the §5
+`{score, evidence}` shape.
+
+**Frontend:** login page (glow-anchored card per the design doc's
+elevation rules), app shell (64 px nav bar, hairline border, wordmark +
+status + sign-out), sites list (status dots, polling every 3 s only
+while a capture is in flight), add-site dialog (URL/name validation
+surfaced inline, private-network opt-in checkbox), site detail
+(baseline card, scan table polling every 2 s only while a scan is in
+flight, rebaseline + scan-now buttons that disable according to state),
+delete with confirm. TanStack Query for all server state; auth context
+does a boot-time silent refresh so a page reload keeps the session.
+shadcn/ui components (button, badge, card, dialog, input, label, table,
+sonner) all fully reskinned against the design tokens — hairline borders
+instead of shadows, accent colors as text/wash only (badge threat states
+use glow-strength washes, never solid fills), true-black canvas, one
+white primary button per viewport. `tsconfig` path alias `@/*` without
+`baseUrl` (deprecated in TS 6+).
+
+### Verified working (not just "should work")
+
+Automated: backend **112/112** pytest (auth flow incl. rotation, reuse
+revocation, expired tokens, deactivated users; site CRUD validation;
+SSRF matrix; hashing/normalization incl. non-UTF8 and 5 MB inputs;
+worker task state machines incl. idempotent redelivery, error-page
+refusal, never-stuck guarantees; artifact serving incl. root
+confinement; SPA-vs-API routing; OpenAPI completeness). Frontend **8/8**
+vitest (login rendering, single-flight refresh under concurrent 401s,
+session-expiry propagation, error shaping, 204 handling). `ruff check` +
+`format --check` clean, `tsc -b` clean, oxlint 0 errors (3 pre-existing
+fast-refresh warnings in shadcn-style files, non-blocking), `pnpm build`
+clean.
+
+Live compose stack (rebuilt from the fixed code): migration at head;
+admin seeded; login → `/me` round-trip; site created via API → baseline
+`pending → capturing → ready` (worker → Playwright → Postgres →
+artifacts volume); `scan-now` → 202, duplicate scan-now → 409, scan
+`running → completed / clean / layer1 score 0.0`; dynamic-content site
+(httpbin/uuid) correctly produced hash mismatch evidence end-to-end;
+Example-404 page → baseline refused with the HTTP-status message;
+httpbin 503 → capture failed cleanly with a user-safe error (that
+endpoint stalls, so it exercised the nav-timeout path); baseline and
+scan screenshots served as image/png with auth, 401 without; unknown
+`/api/*` → JSON 404 while `/sites/<id>` deep link → SPA 200; SSRF 422
+with actionable detail on a private-range URL at creation time;
+cookie-level refresh rotation verified with curl cookie jars (refresh
+200 → old cookie 401 → successor also 401 because reuse revoked the
+family). Worker logs show zero unexpected errors after the fixes.
+
+### Incidents & resolutions (found during this phase's QA pass)
+
+1. **Concurrent-refresh logout (frontend).** Two parallel queries hitting
+   401 both called `/api/auth/refresh`; the second presented the
+   just-rotated cookie and tripped the backend's reuse detection,
+   revoking the whole token family and logging the user out. Fixed with
+   a shared single-flight refresh promise used by both the 401-retry
+   path and the boot-time silent refresh. Regression test added.
+2. **Error pages could become trusted baselines (worker).** Found live:
+   an httpbin 503 page was captured as a `ready` baseline, and a later
+   scan of the same broken endpoint compared *clean*. Baselines now
+   refuse HTTP ≥ 400 responses with a clear error; scans still complete
+   on error pages (they're observations). Tests added for both halves.
+3. **Rows could stick in-flight forever (worker + API).** An unexpected
+   task exception (or a SIGKILLed worker) left baselines in `capturing`
+   forever, and the 409 in-flight guards then blocked
+   rebaseline/scan-now permanently. Fixed with the three-layer guarantee
+   described in the decisions section. Tests added (wrapper catch-all,
+   finished-rows-never-overwritten, stale-row API recovery).
+4. **SPA fallback swallowed API 404s (app).** `GET /api/typo` returned
+   200 + index.html instead of a JSON 404. Fixed in `SPAStaticFiles`
+   with a path guard (plus `\`→`/` normalization because Starlette
+   normpaths with the OS separator on Windows). Test initially still
+   failed on Windows until the separator fix — that's why the guard
+   normalizes.
+5. **Blocking DNS in the event loop (API).** `assert_url_allowed` calls
+   `getaddrinfo`; on a slow resolver that stalls every request on the
+   loop. Site creation now runs the check via `asyncio.to_thread`.
+6. Minor: `deps.py` missed `TypeError` when the JWT `sub` claim is a
+   non-string (now 401, not 500); site-detail scans query had no error
+   branch (spinner forever on failure — now shows an error line); a
+   security test signed with a 17-byte HMAC key and warned (lengthened).
+
+### Deliberate deferrals (not bugs)
+
+- **DNS pin-the-IP transport** for the rebinding edge → Phase 5
+  hardening (documented in `app/ssrf.py`'s docstring).
+- **Artifact files of deleted sites** are left on the volume (DB rows
+  cascade); a janitor task lands in a later phase — files are small and
+  harmless meanwhile.
+- **Rate limiting on auth endpoints** (§9 per-user/per-IP) → Phase 5
+  hardening pass alongside the rest of the rate-limit work.
+- **`cookie_secure` defaults false** (localhost self-hosted HTTP);
+  Phase 6 installer docs will cover fronting with HTTPS and flipping it.
+- **RBAC enforcement** — roles exist in the schema/JWT but every
+  authenticated user currently sees everything; enforcement is Phase 5
+  per the roadmap.
+- **Scan history pagination** — `/scans` returns the latest 50; real
+  pagination when the dashboard grows a history view (Phase 3).
+- The 3 oxlint fast-refresh warnings in shadcn-pattern files (component +
+  variant export in one file) are accepted as-is — that's the upstream
+  shadcn layout.
+
+---
+

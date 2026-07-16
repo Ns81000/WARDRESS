@@ -212,6 +212,10 @@ export function SiteDetailPage() {
       <div className="rounded-lg border border-hairline-strong bg-surface-card">
         {scans.isLoading ? (
           <p className="p-8 text-body-sm text-mute">Loading scans…</p>
+        ) : scans.isError ? (
+          <p className="p-8 text-body-sm text-accent-red">
+            Could not load scans — is the API reachable?
+          </p>
         ) : scans.data && scans.data.length > 0 ? (
           <Table>
             <TableHeader>

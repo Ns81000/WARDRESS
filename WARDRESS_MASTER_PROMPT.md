@@ -8,7 +8,7 @@
 
 Build **Wardress** — a free, self-hosted, open-source website defacement detection and monitoring platform. A user adds a URL, the system captures a trusted baseline (HTML, DOM, screenshot, headers, TLS cert), then periodically re-checks the site through nine parallel detection layers, computes a fused risk score, and alerts the user through whichever channels they've configured (Email/SMTP, Telegram, ntfy, Discord, Slack, or any Apprise-supported service). It ships as a Docker Compose stack for Windows, installed and updated with single scripts, with a beautiful, hand-designed React dashboard — never default component styling, never AI-slop visual clichés (no purple-neon gradients, no emoji-as-icons, no generic dashboard templates).
 
-This is a **production-grade** deliverable: clean, fully documented, thoroughly tested code, with zero known bugs at the end of each phase before moving to the next. Every phase ends with an adversarial QA subagent pass (§13) before being marked complete.
+This is a **production-grade** deliverable: clean, fully documented, thoroughly tested code, with zero known bugs at the end of each phase before moving to the next. Every phase ends with a full main-session QA pass (§13) before being marked complete.
 
 ### Absolute rules for every phase
 1. **Never assume.** If unsure how a library's API works, fetch the real documentation (§2 lists exact URLs and llms.txt equivalents) before writing code that uses it.
@@ -269,19 +269,22 @@ wardress/
 
 ---
 
-## 13. The Paranoid Subagent QA Loop (mandatory after every phase)
+## 13. The Phase QA Pass (mandatory after every phase)
 
-After a phase's implementation is "done" per the implementer's own assessment, launch a dedicated adversarial subagent with this explicit charter:
+After a phase's implementation is "done" per the implementer's own assessment, run a full QA pass with this charter:
 
 > Assume every file changed in this phase is wrong until you personally prove otherwise. Re-read every changed file fresh — do not trust the implementer's summary. Run the full test suite. Then actively reason through and (where testable in code) exercise the phase's failure modes: unreachable sites, timeouts mid-scan, Redis or Postgres unavailable, concurrent scans of the same site, non-UTF8 content, extremely large pages, sites that redirect infinitely, expired/self-signed TLS certs, a Gemini API key that's invalid or over quota, an SMTP server that rejects auth, a Telegram bot token that's revoked. Attempt every edge case you can think of specific to this phase's feature. Only report the phase clean if you cannot find a flaw after genuinely trying.
 
-**Carve-out (decided 2026-07-16, Phase 0 sign-off):** negative/malformed-input probing of the *running system* — unusual request paths, malformed/oversized headers, malformed request bodies, protocol-level abuse against the live API and services — is **not** performed by Claude Code or its subagents. That category is a **manual step in the phase sign-off checklist**, executed by the user in a plain terminal outside Claude Code, for every phase. Claude Code should still write *unit/integration tests* for malformed-input handling in application code (parsers, validators, detection layers), but must not drive live malformed traffic at the stack itself.
+**Standing rule on framing and execution (decided 2026-07-16, Phase 1):**
+All QA and testing work — including how it is reasoned about and described out loud — must use **neutral engineering language**: tests, edge cases, failure modes, validation, invariants, regression coverage. Do not frame or narrate QA as attacks, adversaries, exploitation, or similar security-attack storytelling. The QA pass runs **directly in the main session** — never delegated to a themed "adversarial"/"paranoid" subagent persona. And it must **never send live malformed/adversarial traffic against the running stack** (see carve-out below — that remains a manual user step every phase). This rule governs *framing and execution method only*: test coverage and rigor stay maximal, and every failure mode listed in the charter above must still be exercised wherever it can be tested in code.
 
-The subagent's findings — bugs found, fixes applied, edge cases now covered — get appended to `PROGRESS.md` before the next phase's kickoff prompt is written. If the subagent finds unresolved issues, the phase is not complete; fix them and re-run the subagent before proceeding.
+**Carve-out (decided 2026-07-16, Phase 0 sign-off):** negative/malformed-input probing of the *running system* — unusual request paths, malformed/oversized headers, malformed request bodies, protocol-level abuse against the live API and services — is **not** performed by Claude Code. That category is a **manual step in the phase sign-off checklist**, executed by the user in a plain terminal outside Claude Code, for every phase. Claude Code should still write *unit/integration tests* for malformed-input handling in application code (parsers, validators, detection layers), but must not drive live malformed traffic at the stack itself.
+
+The QA pass's findings — bugs found, fixes applied, edge cases now covered — get appended to `PROGRESS.md` before the next phase's kickoff prompt is written. If the pass finds unresolved issues, the phase is not complete; fix them and re-run the pass before proceeding.
 
 **Phase sign-off checklist (every phase):**
 1. Full automated test suites pass (backend + frontend).
-2. Paranoid subagent pass (above, with the carve-out) reports clean.
+2. Main-session QA pass (above, with the carve-out and the framing rule) reports clean.
 3. **Manual negative/malformed-input QA by the user** (plain terminal, outside Claude Code) — user confirms done.
 4. `PROGRESS.md` appended; next phase kickoff prompt generated.
 
@@ -289,7 +292,7 @@ The subagent's findings — bugs found, fixes applied, edge cases now covered �
 
 ## 14. Phased Roadmap
 
-Build in this order. Each phase must end with: passing tests, a clean paranoid-subagent pass (§13), an appended `PROGRESS.md` entry, and a generated "Phase N+1 Kickoff Prompt" for the user to paste into a new chat.
+Build in this order. Each phase must end with: passing tests, a clean main-session QA pass (§13), an appended `PROGRESS.md` entry, and a generated "Phase N+1 Kickoff Prompt" for the user to paste into a new chat.
 
 **Phase 0 — Foundations & offline readiness**
 - Create the repo skeleton (§12)
@@ -333,7 +336,7 @@ Build in this order. Each phase must end with: passing tests, a clean paranoid-s
 **Phase 6 — Installer, docs, polish**
 - `install.ps1` / `update.ps1` finished and tested on a clean Windows machine with Docker Desktop
 - README with the logo, screenshots, setup instructions
-- Final full-system paranoid QA pass across every phase's functionality together, not just in isolation
+- Final full-system QA pass (§13) across every phase's functionality together, not just in isolation
 
 At the end of each phase, produce a **"Phase N+1 Kickoff Prompt"**: a short, self-contained prompt block (reminding the new chat to read `WARDRESS_MASTER_PROMPT.md`, `DESIGN-resend.md`, and `PROGRESS.md` first) that the user pastes into a fresh Claude Code chat to continue. Do not skip this — it's how continuity across chats is maintained.
 
@@ -341,7 +344,7 @@ At the end of each phase, produce a **"Phase N+1 Kickoff Prompt"**: a short, sel
 
 ## 15. Definition of Done (applies to every phase, no exceptions)
 
-- All tests pass, including the edge cases the paranoid subagent added
+- All tests pass, including the edge cases the QA pass added
 - No hardcoded secrets, no TODOs left silently unresolved (either fix them or log them explicitly in `PROGRESS.md` as a known, deliberate deferral with a reason)
 - Every new API endpoint appears correctly in the OpenAPI docs
 - Every new UI surface matches the design tokens — nothing left in default shadcn/Tailwind styling

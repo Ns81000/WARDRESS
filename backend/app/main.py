@@ -30,13 +30,18 @@ app.include_router(artifacts.router)
 
 class SPAStaticFiles(StaticFiles):
     """StaticFiles that falls back to index.html for client-side routes
-    (React Router paths like /sites/<id> must load the SPA, not 404)."""
+    (React Router paths like /sites/<id> must load the SPA, not 404).
+    Unmatched /api/* paths stay real 404s — an API typo must never come
+    back as a 200 HTML page."""
 
     async def get_response(self, path: str, scope) -> Response:
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404:
+            # Starlette normalizes the path with os.path.normpath, so the
+            # separator is "\" on Windows dev machines — normalize back.
+            posix_path = path.replace("\\", "/")
+            if exc.status_code == 404 and posix_path != "api" and not posix_path.startswith("api/"):
                 return await super().get_response("index.html", scope)
             raise
 

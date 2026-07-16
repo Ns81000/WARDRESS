@@ -9,7 +9,11 @@ import {
 } from "react"
 
 import * as apiClient from "@/lib/api"
-import { setAccessToken, setSessionExpiredHandler } from "@/lib/api"
+import {
+  refreshSession,
+  setAccessToken,
+  setSessionExpiredHandler,
+} from "@/lib/api"
 
 interface AuthState {
   user: apiClient.UserOut | null
@@ -25,15 +29,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   // On mount: try a silent refresh (HttpOnly cookie survives reloads even
-  // though the in-memory access token does not).
+  // though the in-memory access token does not). Uses the shared
+  // single-flight refreshSession — StrictMode double-mounts this effect,
+  // and two parallel refresh calls would trip the backend's rotated-token
+  // reuse detection and revoke the session.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        const resp = await fetch("/api/auth/refresh", { method: "POST" })
-        if (resp.ok && !cancelled) {
-          const body = await resp.json()
-          setAccessToken(body.access_token)
+        if ((await refreshSession()) && !cancelled) {
           const u = await apiClient.me()
           if (!cancelled) setUser(u)
         }

@@ -32,7 +32,7 @@ async def get_current_user(
         raise _credentials_error
     try:
         user_id = uuid.UUID(payload["sub"])
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, TypeError):
         raise _credentials_error from None
     user = await db.scalar(select(User).where(User.id == user_id))
     if user is None or not user.is_active:

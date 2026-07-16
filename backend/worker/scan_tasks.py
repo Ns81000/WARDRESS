@@ -54,6 +54,23 @@ async def _capture_baseline(baseline_id: uuid.UUID) -> str:
             logger.warning("Baseline %s failed: %s", baseline_id, exc)
             return "failed"
 
+        # A baseline is the trust anchor for every future verdict. An HTTP
+        # error page (site down, rate-limited, auth-walled) must never be
+        # stored as "trusted" — it would poison all later comparisons.
+        # Scans are different: fetching an error page during a scan is a
+        # legitimate scan result and still completes.
+        if result.http_status is not None and result.http_status >= 400:
+            baseline.status = BaselineStatus.failed
+            baseline.error = (
+                f"Site responded with HTTP {result.http_status} — a trusted baseline "
+                "needs a healthy response. Try again when the site is up."
+            )
+            await db.commit()
+            logger.warning(
+                "Baseline %s refused: target returned HTTP %s", baseline_id, result.http_status
+            )
+            return "failed"
+
         html_rel, shot_rel = store_artifacts(
             "baselines", str(baseline.id), result.html, result.screenshot
         )
@@ -132,6 +149,31 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         return scan.verdict.value
 
 
+async def _mark_baseline_failed(baseline_id: uuid.UUID, message: str) -> None:
+    """Best-effort: record an unexpected failure on the row so it never
+    sits in pending/capturing forever (which would 409-block rebaseline)."""
+    async with task_session() as db:
+        baseline = await db.scalar(select(Baseline).where(Baseline.id == baseline_id))
+        if baseline is not None and baseline.status in (
+            BaselineStatus.pending,
+            BaselineStatus.capturing,
+        ):
+            baseline.status = BaselineStatus.failed
+            baseline.error = message
+            await db.commit()
+
+
+async def _mark_scan_failed(scan_id: uuid.UUID, message: str) -> None:
+    async with task_session() as db:
+        scan = await db.scalar(select(Scan).where(Scan.id == scan_id))
+        if scan is not None and scan.status in (ScanStatus.pending, ScanStatus.running):
+            scan.status = ScanStatus.failed
+            scan.verdict = ScanVerdict.error
+            scan.error = message
+            scan.finished_at = _utcnow()
+            await db.commit()
+
+
 @celery_app.task(name="wardress.capture_baseline")
 def capture_baseline(baseline_id: str) -> str:
     """Fetch a site and store its trusted baseline (HTML, screenshot,
@@ -141,7 +183,21 @@ def capture_baseline(baseline_id: str) -> str:
     except ValueError:
         logger.error("capture_baseline got a non-UUID id: %r", baseline_id)
         return "bad-id"
-    return asyncio.run(_capture_baseline(parsed))
+    try:
+        return asyncio.run(_capture_baseline(parsed))
+    except Exception:
+        # Expected failure modes (unreachable site, timeout, blocked URL)
+        # are handled inside _capture_baseline; anything landing here is
+        # unexpected (disk full, DB outage mid-task, soft time limit).
+        # The row must still leave the in-flight state.
+        logger.exception("Unexpected error capturing baseline %s", baseline_id)
+        try:
+            asyncio.run(
+                _mark_baseline_failed(parsed, "Capture failed unexpectedly — see worker logs")
+            )
+        except Exception:
+            logger.exception("Could not mark baseline %s failed", baseline_id)
+        return "error"
 
 
 @celery_app.task(name="wardress.run_scan")
@@ -153,4 +209,12 @@ def run_scan(scan_id: str) -> str:
     except ValueError:
         logger.error("run_scan got a non-UUID id: %r", scan_id)
         return "bad-id"
-    return asyncio.run(_run_scan(parsed))
+    try:
+        return asyncio.run(_run_scan(parsed))
+    except Exception:
+        logger.exception("Unexpected error running scan %s", scan_id)
+        try:
+            asyncio.run(_mark_scan_failed(parsed, "Scan failed unexpectedly — see worker logs"))
+        except Exception:
+            logger.exception("Could not mark scan %s failed", scan_id)
+        return "error"

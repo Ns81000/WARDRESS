@@ -1,6 +1,8 @@
 """Site CRUD + baseline/scan endpoints (§7 slice for Phase 1)."""
 
+import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,12 +11,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import CurrentUser
-from app.models import Baseline, BaselineStatus, Scan, ScanStatus, Site
+from app.models import Baseline, BaselineStatus, Scan, ScanStatus, ScanVerdict, Site
 from app.schemas import BaselineOut, ScanOut, SiteCreate, SiteDetailOut, SiteOut
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from app.tasks import enqueue_baseline_capture, enqueue_scan
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
+
+# In-flight rows older than this are treated as abandoned (the Celery hard
+# time limit is 240s, so nothing legitimate runs this long). Covers a
+# worker killed too hard to run its failure handler, and rows whose
+# enqueue was lost. Without a cutoff, one orphaned row would 409-block
+# rebaseline/scan-now for its site forever.
+STALE_INFLIGHT = timedelta(minutes=10)
+
+
+def _is_stale(created_at: datetime) -> bool:
+    if created_at.tzinfo is None:  # SQLite test backend returns naive datetimes
+        created_at = created_at.replace(tzinfo=UTC)
+    return created_at < datetime.now(UTC) - STALE_INFLIGHT
 
 
 async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID) -> Site:
@@ -40,7 +55,11 @@ async def create_site(
     try:
         # SSRF policy check at creation time gives the user immediate
         # feedback; the worker re-validates before every actual fetch.
-        assert_url_allowed(url, allow_private_networks=body.allow_private_networks)
+        # Runs in a thread: the check resolves DNS, which would otherwise
+        # block the event loop for up to the resolver timeout.
+        await asyncio.to_thread(
+            assert_url_allowed, url, allow_private_networks=body.allow_private_networks
+        )
     except SSRFBlockedError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
 
@@ -148,7 +167,15 @@ async def rebaseline(
         )
     )
     if in_flight is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A baseline capture is already in progress")
+        if _is_stale(in_flight.created_at):
+            # Orphaned row (worker killed, enqueue lost) — fail it and
+            # let this request proceed instead of 409-blocking forever.
+            in_flight.status = BaselineStatus.failed
+            in_flight.error = "Capture never completed — superseded by a new capture"
+        else:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "A baseline capture is already in progress"
+            )
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
     db.add(baseline)
     await db.commit()
@@ -180,7 +207,13 @@ async def scan_now(
         )
     )
     if in_flight is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A scan is already in progress")
+        if _is_stale(in_flight.created_at):
+            in_flight.status = ScanStatus.failed
+            in_flight.verdict = ScanVerdict.error
+            in_flight.error = "Scan never completed — superseded by a new scan"
+            in_flight.finished_at = datetime.now(UTC)
+        else:
+            raise HTTPException(status.HTTP_409_CONFLICT, "A scan is already in progress")
     scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
     db.add(scan)
     await db.commit()

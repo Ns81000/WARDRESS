@@ -37,12 +37,29 @@ async function parseDetail(resp: Response): Promise<string> {
   }
 }
 
-async function tryRefresh(): Promise<boolean> {
-  const resp = await fetch("/api/auth/refresh", { method: "POST" })
-  if (!resp.ok) return false
-  const body = await resp.json()
-  accessToken = body.access_token
-  return true
+// Single-flight: every caller that needs a refresh (401 retry here, the
+// boot-time silent refresh in AuthProvider) must share ONE in-flight
+// call. The backend rotates the refresh token on every use and treats
+// reuse of a rotated token as theft (revoking the whole family), so two
+// parallel refresh requests would log the user out. Exported for
+// AuthProvider; StrictMode's double-mounted effect also relies on this.
+let refreshInFlight: Promise<boolean> | null = null
+
+export function refreshSession(): Promise<boolean> {
+  refreshInFlight ??= (async () => {
+    try {
+      const resp = await fetch("/api/auth/refresh", { method: "POST" })
+      if (!resp.ok) return false
+      const body = await resp.json()
+      accessToken = body.access_token
+      return true
+    } catch {
+      return false
+    } finally {
+      refreshInFlight = null
+    }
+  })()
+  return refreshInFlight
 }
 
 export async function api<T>(
@@ -61,7 +78,7 @@ export async function api<T>(
 
   let resp = await doFetch()
   if (resp.status === 401 && !path.startsWith("/api/auth/")) {
-    if (await tryRefresh()) {
+    if (await refreshSession()) {
       resp = await doFetch()
     } else {
       onSessionExpired?.()

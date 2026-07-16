@@ -2,12 +2,13 @@
 queue behavior is covered by the compose-stack verification, not unit tests."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import select
 
-from app.models import Baseline, BaselineStatus
+from app.models import Baseline, BaselineStatus, Scan, ScanStatus
 from app.routers import sites as sites_router
 
 
@@ -151,6 +152,70 @@ async def test_rebaseline_conflict_while_pending(
     # Initial baseline is still pending -> rebaseline conflicts.
     resp = await client.post(f"/api/sites/{created['id']}/rebaseline", headers=auth_headers)
     assert resp.status_code == 409
+
+
+async def test_rebaseline_recovers_stale_inflight(
+    client: httpx.AsyncClient, auth_headers: dict, db_factory, stub_enqueue: dict
+) -> None:
+    """An in-flight baseline whose worker died (row stuck in pending far
+    past the task time limit) must not block rebaseline forever."""
+    created = await _create_site(client, auth_headers)
+    site_id = uuid.UUID(created["id"])
+    async with db_factory() as db:
+        await db.execute(
+            Baseline.__table__.update()
+            .where(Baseline.__table__.c.site_id == site_id)
+            .values(created_at=datetime.now(UTC) - timedelta(hours=1))
+        )
+        await db.commit()
+
+    resp = await client.post(f"/api/sites/{site_id}/rebaseline", headers=auth_headers)
+    assert resp.status_code == 202
+    assert len(stub_enqueue["baseline"]) == 2
+
+    # The abandoned row was marked failed, not left pending.
+    async with db_factory() as db:
+        stale = (
+            await db.scalars(
+                select(Baseline).where(
+                    Baseline.site_id == site_id, Baseline.status == BaselineStatus.failed
+                )
+            )
+        ).all()
+        assert len(stale) == 1
+
+
+async def test_scan_now_recovers_stale_inflight(
+    client: httpx.AsyncClient, auth_headers: dict, db_factory, stub_enqueue: dict
+) -> None:
+    created = await _create_site(client, auth_headers)
+    site_id = uuid.UUID(created["id"])
+    async with db_factory() as db:
+        db.add(
+            Baseline(
+                site_id=site_id,
+                status=BaselineStatus.ready,
+                is_current=True,
+                content_hash="a" * 64,
+                captured_at=datetime.now(UTC),
+            )
+        )
+        db.add(
+            Scan(
+                site_id=site_id,
+                status=ScanStatus.running,
+                created_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
+        await db.commit()
+
+    resp = await client.post(f"/api/sites/{site_id}/scan-now", headers=auth_headers)
+    assert resp.status_code == 202
+    assert len(stub_enqueue["scan"]) == 1
+
+    scans = (await client.get(f"/api/sites/{site_id}/scans", headers=auth_headers)).json()
+    statuses = sorted(s["status"] for s in scans)
+    assert statuses == ["failed", "pending"]
 
 
 async def test_rebaseline_after_failure(
