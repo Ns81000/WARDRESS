@@ -1,12 +1,20 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+/* Fonts — §4 substitutions: Fraunces (display serif, replaces Domaine
+ * Display), Instrument Sans (display-lg/subtitle, replaces ABC Favorit),
+ * Inter (body/UI), Geist Mono (code, unchanged — already OFL). */
+@import "@fontsource-variable/fraunces/index.css";
+@import "@fontsource-variable/instrument-sans/index.css";
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource/geist-mono/index.css";
 
 /*
  * Wardress design tokens — adapted from DESIGN-resend.md (§4 of the master
- * prompt). Font substitutions: Fraunces replaces Domaine Display,
- * Instrument Sans replaces ABC Favorit for display/subtitle roles,
- * Inter carries body/UI, Geist Mono carries code. Fonts themselves are
- * wired in Phase 1 alongside the shell layout; the color/radius/spacing
- * foundation lives here from Phase 0 so nothing ever renders off-token.
+ * prompt). The color/radius/spacing foundation is verbatim from the design
+ * doc; shadcn's semantic names (background, primary, border, ring...) are
+ * mapped onto these tokens below so every shadcn component renders in the
+ * Wardress skin with no default styling anywhere.
  */
 @theme {
   /* Canvas & surfaces — true black, never near-black */
@@ -50,6 +58,35 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+
+  /* Font stacks */
+  --font-display: "Fraunces Variable", ui-serif, Georgia, serif;
+  --font-display-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  /* --- shadcn semantic mapping (the Wardress reskin) --- */
+  --color-background: var(--color-canvas);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-surface-card);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-surface-elevated);
+  --color-popover-foreground: var(--color-ink);
+  /* button-primary spec: white surface, black label — the page's
+   * single brightest pixel */
+  --color-primary: #fcfdff;
+  --color-primary-foreground: #000000;
+  /* button-ghost spec: surface-elevated with ink label */
+  --color-secondary: var(--color-surface-elevated);
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted: var(--color-surface-elevated);
+  --color-muted-foreground: var(--color-mute);
+  --color-accent: var(--color-surface-elevated);
+  --color-accent-foreground: var(--color-ink);
+  --color-destructive: var(--color-accent-red);
+  --color-border: var(--color-hairline-strong);
+  --color-input: var(--color-hairline-strong);
+  --color-ring: var(--color-ink);
 }
 
 html,
@@ -57,4 +94,102 @@ body {
   background-color: var(--color-canvas);
   color: var(--color-ink);
   min-height: 100vh;
+  font-family: var(--font-sans);
+}
+
+/* Typography roles from DESIGN-resend.md, with the §4 substitutions.
+ * Display sizes keep lineHeight 1.0 and negative tracking exactly as the
+ * spec mandates; Fraunces gets the opsz axis pushed high for the display
+ * cut, and ss01 engaged per the substitution note. */
+@utility text-display-xxl {
+  font-family: var(--font-display);
+  font-size: 96px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.96px;
+  font-variation-settings: "opsz" 144;
+  font-feature-settings: "ss01", "liga";
+}
+@utility text-display-xl {
+  font-family: var(--font-display);
+  font-size: 76.8px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.768px;
+  font-variation-settings: "opsz" 144;
+  font-feature-settings: "ss01", "liga";
+}
+@utility text-display-lg {
+  font-family: var(--font-display-sans);
+  font-size: 56px;
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -2.8px;
+}
+@utility text-heading-md {
+  font-family: var(--font-sans);
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: -0.4px;
+}
+@utility text-heading-sm {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.3px;
+}
+@utility text-subtitle {
+  font-family: var(--font-display-sans);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.3;
+}
+@utility text-body-lg {
+  font-family: var(--font-sans);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+@utility text-body-md {
+  /* body-md rides Instrument Sans (ABC Favorit lane) with the -0.5%
+   * compensation the substitution note requires on body sizes */
+  font-family: var(--font-display-sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.88px;
+}
+@utility text-body-sm {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.43;
+}
+@utility text-button-md {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.43;
+}
+@utility text-button-sm {
+  font-family: var(--font-display-sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.43;
+  letter-spacing: 0.35px;
+}
+@utility text-caption {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+@utility text-code-md {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  font-feature-settings: "liga" 0;
 }

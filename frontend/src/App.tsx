@@ -1,18 +1,43 @@
-/**
- * Wardress — Phase 0 placeholder shell.
- * The real dashboard shell (nav bar, logo, routed pages) arrives in Phase 1;
- * this exists only to prove the toolchain (React 19 + Vite + Tailwind v4)
- * builds and renders on the true-black canvas.
- */
+import { Navigate, Route, Routes } from "react-router"
+
+import { AppShell } from "@/components/app-shell"
+import { Toaster } from "@/components/ui/sonner"
+import { useAuth } from "@/lib/auth"
+import { LoginPage } from "@/pages/login"
+import { SiteDetailPage } from "@/pages/site-detail"
+import { SitesPage } from "@/pages/sites"
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
+        <p className="text-body-sm text-mute">Loading…</p>
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-canvas">
-      <div className="rounded-lg border border-hairline-strong bg-surface-card px-8 py-6 text-center">
-        <h1 className="text-2xl font-medium tracking-tight text-ink">Wardress</h1>
-        <p className="mt-2 text-sm text-charcoal">
-          Defacement detection platform — Phase 0 stack online.
-        </p>
-      </div>
-    </main>
+    <>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<SitesPage />} />
+          <Route path="/sites/:siteId" element={<SiteDetailPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <Toaster />
+    </>
   )
 }

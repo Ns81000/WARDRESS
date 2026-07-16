@@ -1,7 +1,7 @@
 """Celery application instance.
 
-Phase 0: broker wiring only, with a single self-test task so
-`docker compose up` can prove worker <-> redis connectivity.
+Broker wiring plus the scan/baseline task modules. Task bodies live in
+worker/scan_tasks.py.
 """
 
 import os
@@ -12,6 +12,7 @@ celery_app = Celery(
     "wardress",
     broker=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
     backend=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
+    include=["worker.scan_tasks"],
 )
 
 celery_app.conf.update(
@@ -24,6 +25,10 @@ celery_app.conf.update(
     # crashed worker never silently drops a scan.
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Hard backstop: a wedged browser must not hold a worker slot forever.
+    # Fetch-level timeouts (worker/fetcher.py) fire long before these.
+    task_soft_time_limit=180,
+    task_time_limit=240,
 )
 
 

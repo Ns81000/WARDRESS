@@ -43,8 +43,13 @@ services:
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports:
       - "${WARDRESS_HTTP_PORT:-8321}:8000"
+    volumes:
+      # Read-only: the app serves screenshots; only the worker writes.
+      - scan-artifacts:/data/artifacts:ro
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +70,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Worker imports app settings (shared config module); it needs the
+      # same required secrets even though it never signs tokens itself.
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
     volumes:
@@ -84,6 +92,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
     depends_on:
       redis:
         condition: service_healthy
