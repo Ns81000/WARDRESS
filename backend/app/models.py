@@ -21,8 +21,11 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
+    Integer,
+    SmallInteger,
     String,
     Text,
     Uuid,
@@ -61,7 +64,8 @@ class ScanStatus(enum.StrEnum):
 
 class ScanVerdict(enum.StrEnum):
     clean = "clean"
-    changed = "changed"
+    changed = "changed"  # differences found, fused risk below the site threshold
+    flagged = "flagged"  # fused risk at/above the site threshold — needs attention
     error = "error"
 
 
@@ -127,6 +131,20 @@ class Site(Base):
     # the user explicitly enables this per site.
     allow_private_networks: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # --- Phase 2: per-site detection/scheduling knobs (§5, §11) ---
+    # Fused risk score at or above this flags the scan (0-1, default 0.5).
+    flag_threshold: Mapped[float] = mapped_column(Float, default=0.5)
+    # Recurring scans (Celery Beat). `scan_interval_minutes` is the user's
+    # chosen base cadence; `current_interval_minutes` is what the adaptive
+    # scheduler is actually using right now (tightens after a change,
+    # relaxes back toward base while stable); `next_scan_at` is the due
+    # time the dispatcher polls on.
+    auto_scan_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    scan_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    current_interval_minutes: Mapped[int | None] = mapped_column(Integer, default=None)
+    next_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     baselines: Mapped[list["Baseline"]] = relationship(
@@ -197,9 +215,12 @@ class Scan(Base):
     html_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     screenshot_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     # Per-layer results: {"layer1_hash": {"score": 1.0, "evidence": {...}}}.
-    # Layers 2-9 add keys in Phase 2; the fused risk score gets its own
-    # column then (needs indexing/thresholding, not burying in JSON).
+    # Kept as the compact summary the scan table reads; the full per-layer
+    # evidence for UI drilldown lives in scan_findings rows (§5).
     layer_scores: Mapped[dict | None] = mapped_column(default=None)
+    # Fused risk score from layer 9 (0-1). Own indexed column — the
+    # dashboard filters and thresholds on it (never buried in JSON).
+    risk_score: Mapped[float | None] = mapped_column(Float, default=None, index=True)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -207,5 +228,40 @@ class Scan(Base):
 
     site: Mapped[Site] = relationship(back_populates="scans")
     baseline: Mapped[Baseline | None] = relationship()
+    findings: Mapped[list["ScanFinding"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (Index("ix_scans_site_created", "site_id", "created_at"),)
+
+
+class ScanFinding(Base):
+    """One detection layer's result for one scan (§5): the layer's score
+    plus its full evidence dict for UI drilldown — never just a bare
+    number. Skipped layers get a row too (`skipped=True` + the reason in
+    evidence) so the pipeline's gating decisions stay auditable."""
+
+    __tablename__ = "scan_findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    scan_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scans.id", ondelete="CASCADE"), index=True
+    )
+    # 1-9 per the §5 layer table.
+    layer: Mapped[int] = mapped_column(SmallInteger)
+    # Stable machine key, e.g. "layer2_dom_structure".
+    layer_key: Mapped[str] = mapped_column(String(64))
+    score: Mapped[float | None] = mapped_column(Float, default=None)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Matched keywords, diff snippets, new-link lists, header diffs, or
+    # {"reason": ...} when skipped.
+    evidence: Mapped[dict | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    scan: Mapped[Scan] = relationship(back_populates="findings")
+
+    __table_args__ = (
+        # One row per layer per scan — a redelivered task must upsert,
+        # never duplicate.
+        Index("uq_scan_findings_scan_layer", "scan_id", "layer", unique=True),
+    )

@@ -464,3 +464,303 @@ family). Worker logs show zero unexpected errors after the fixes.
 
 ---
 
+## Phase 2 — Full detection engine (2026-07-16)
+
+### Architecture decisions
+
+**Layers are pure functions over plain data; the pipeline owns gating.**
+Every layer is `(baseline: PageData, current: ScanPageData) -> {score:
+0-1, evidence: dict}` in `worker/detection/` — no ORM rows, no network
+handles, no gate logic inside layers. That keeps each one independently
+testable (63 layer/fusion/pipeline unit tests run without a DB or
+browser). Gating lives in `pipeline.py`: an identical layer-1 hash skips
+layers 2/3/4/5/8 (byte-identical content cannot differ structurally,
+visually, or semantically — and rendering noise in a re-screenshot is
+exactly the false-positive class the gate suppresses); layers 6
+(metadata) and 7 (cloaking) always run because TLS/header downgrades and
+per-UA divergence are invisible to the primary content hash. Every skip
+is recorded as a `scan_findings` row with `skipped=true` and the reason
+(§5's "always log that the layer was skipped and why"). Each layer is
+also crash-isolated: an unexpected exception becomes a skip-with-error
+finding and the other layers still run (rule 6).
+
+**Findings are rows, not JSON blobs.** `scan_findings` (scan_id, layer
+1-9, layer_key, score, skipped, evidence JSONB) with a unique
+(scan_id, layer) index — acks_late redelivery upserts (delete+rewrite in
+the same txn), never duplicates. `scans.layer_scores` stays as a compact
+`{key: {score, skipped}}` summary for the scan table; full evidence
+comes from `/api/sites/{id}/scans/{scan_id}` for the Phase 3 drilldown
+UI. The fused risk got its own indexed `scans.risk_score` column
+(dashboard filtering/thresholding — never buried in JSON), per the
+Phase 1 plan.
+
+**Fusion (layer 9): seed-fitted logistic regression, not a hand-tuned
+weighted sum.** No labeled scan history exists at install time, so the
+scikit-learn LogisticRegression is fitted at first use on ~25 seed
+scenario vectors (clean rescans, dynamic noise, benign deploys and
+redesigns, cert rotations, full/stealth/signature/cloaking/semantic/
+visual defacements) encoding the same domain knowledge a weighted sum
+would — but producing calibrated probabilities and a drop-in upgrade
+path: retrain on real labeled rows (then gradient boosting, §5) without
+touching the pipeline. Fit is deterministic (fixed seeds, lbfgs, C=50 —
+C swept explicitly; low C over-regularized the separation until benign
+deploys crossed 0.5). Verified calibration: benign scenarios ≤ 0.26,
+hostile ≥ 0.73, default threshold 0.5 in the gap. Skipped layers enter
+the feature vector as 0.0 with a `layers_ran` mask in evidence. A model
+failure degrades to max-sub-score with a note — fusion can never crash a
+scan.
+
+**Layer 7 compares raw-vs-raw, never rendered-vs-raw.** The metadata
+prober (`worker/probe.py`, httpx) fetches the page under three UAs —
+desktop Chrome (reference), Googlebot, mobile Safari — and layer 7
+compares rotated UAs against that raw reference. Comparing against the
+Playwright-rendered DOM would false-flag every JS-heavy site. Bot
+blocking (non-2xx for a crawler UA) is recorded as evidence but scores
+zero — it is common and legitimate, not cloaking. Divergence is
+token-set Jaccard on visible text with a soft knee at 0.5 (Jaccard
+exaggerates small edits on short pages — found by a unit test, knee
+raised from 0.25).
+
+**TLS probing observes, it doesn't judge.** `probe_tls` handshakes with
+CERT_NONE and parses the DER via `cryptography` — an expired or
+self-signed cert must still be *captured* (its weirdness is layer-6
+evidence), not cause the probe to see nothing. Same philosophy for the
+probe's httpx client (`verify=False` with an S501 waiver comment):
+layer 6 must keep seeing sites whose TLS just broke. Fingerprint change
+with same issuer+subject scores 0.1 (routine reissue); with a different
+issuer/subject 0.55; expiry 0.5; each removed security header 0.3.
+Headers *appearing* score zero — improvements are not threats.
+
+**Header comparison is full-map-vs-full-map or nothing.** The Playwright
+fetcher keeps its curated 4-header subset (Phase 1 shape, unchanged);
+layer 6 only compares the probe's full header captures. If either side
+lacks probe headers (probe degraded, or a Phase 1-era baseline), the
+header comparison is skipped with a note — comparing full-vs-subset
+would report every security header as "removed". (Found in this phase's
+QA pass — see incidents.)
+
+**Signature/semantic layers match on NEW text only.** Layers 5 and 8
+diff visible text (lxml text nodes minus script/style) against the
+baseline and run their regex/lexicon passes on sentences that weren't
+there before — a security blog whose baseline already discusses
+defacement can't flag on every rescan. Script-mixing detection (layer 5)
+buckets alphabetic chars by Unicode-name prefix and only fires when a
+clear dominant script (≥60%) flips to a different clear dominant script.
+
+**MiniLM is baked into the worker image at build time** (`HF_HOME`
+download in Dockerfile.worker, after the dependency layer, before source
+copy). A scan must never depend on a HuggingFace download at runtime —
+self-hosted installs may be offline. If the bake fails the build
+proceeds with a warning and layer 8's embedding feature degrades to None
+at runtime (logged, never crashes). Embedder is process-cached, CPU
+pinned (`device="cpu"`).
+
+**Beat stays dumb; adaptive state lives in the DB.** One fixed 60 s
+periodic task (`wardress.dispatch_due_scans`) polls
+`sites.next_scan_at <= now` (indexed) and enqueues due scans — so a Beat
+restart loses nothing, and the "single scheduler instance" rule from the
+Celery docs is trivially satisfied. The dispatcher applies exactly the
+API's semantics via the shared `app/scanning.py` policy module: genuine
+in-flight scan -> skip without creating a row (the 409 rule — no
+pile-up); stale in-flight (>10 min) -> fail it and proceed (the Phase 1
+three-layer never-stuck guarantee, now shared); no ready baseline ->
+skip. `next_scan_at` advances *before* enqueue, so a crash or lost
+enqueue delays a site by one interval instead of tight-looping it; the
+tick is capped at 50 dispatches (backlog drains over subsequent ticks);
+the periodic task carries `expires=2 ticks` so a Redis backlog cannot
+burst-fire stale ticks; a DB outage fails the tick gracefully and Beat
+keeps ticking.
+
+**Adaptive cadence tightens on *material* change (risk ≥ 0.15), not on
+any nonzero score.** A dynamic page whose hash flips every scan (~0.03
+risk) must relax back to its base cadence, or "adaptive" would mean
+"permanently tightened". Change -> base/4 (floor 5 min); each stable
+scan -> ×1.5 back toward base (cap 24 h). Verified live: flagged scan
+took 60 min -> 15 min; next clean scan relaxed 15 -> 22 min. Scan
+completion reschedules adaptively in the task; the dispatcher's advance
+is the safety net for scans that never complete. Changing the base
+interval via PATCH resets adaptive state (the user asked for that
+rhythm; honor it).
+
+**Verdict vocabulary grew: clean | changed | flagged | error.**
+`changed` = differences exist but fused risk is below the site's
+threshold; `flagged` = risk ≥ threshold (needs attention). Postgres enum
+extended with ALTER TYPE ADD VALUE; the downgrade path rewrites flagged
+-> changed and rebuilds the type (documented in the migration).
+
+**Celery time limits raised 180/240 -> 300/360.** A Phase 2 scan runs
+fetch + probe + nine layers + MiniLM inference. Still well under the
+10-minute stale cutoff (now shared in `app/scanning.py`). Detection runs
+in `asyncio.to_thread` so the CPU-bound layers don't stall the task's
+event loop.
+
+### Version verification log (checked against live registries 2026-07-16)
+
+No new packages needed — every Phase 2 library (lxml 6.1.1,
+scikit-image 0.26.0, imagehash 4.3.2, sentence-transformers 5.6.0,
+scikit-learn 1.9.0, httpx 0.28.1) was already pinned and locked in
+Phase 0. pillow 12.3.0 and numpy 2.5.1 were *promoted from transitive to
+direct* dependencies (the detection layers import them directly; a
+transitive drop must not break us silently) — both verified current on
+PyPI 2026-07-16, lockfile resolution unchanged (150 packages), zero
+nvidia entries, torch still 2.13.0+cpu (verified live in the worker:
+`torch.cuda.is_available() == False`). pip-audit: no known
+vulnerabilities. Docs re-read this phase: lxml parsing/HTMLParser
+recovery semantics (fetched fresh into docs-cache/lxml-parsing.html +
+lxml-html.html), scikit-image SSIM data_range warning (cache), imagehash
+usage + hex_to_hash (cache), sentence-transformers v5 quickstart
+(cache), scikit-learn LogisticRegression/predict_proba (fetched fresh
+into docs-cache/sklearn-logreg.html), Celery Beat entries/crontab/
+single-scheduler rule (cache). WebFetch tooling was again unavailable
+(Phase 0 incident repeated); curl into docs-cache/ used instead.
+
+### What was built
+
+**Schema (Alembic `b41c7a9e2d05`):** `scan_findings` (unique
+(scan_id, layer), JSONB evidence, CASCADE delete); `scans.risk_score`
+(indexed float); `sites.flag_threshold` (default 0.5),
+`auto_scan_enabled` (default true), `scan_interval_minutes` (default
+60, clamp 5-1440), `current_interval_minutes` (adaptive state),
+`next_scan_at` (indexed, the dispatcher's poll target); scan_verdict
+enum + 'flagged'. Downgrade path tested live (downgrade -> upgrade
+round-trip on the compose Postgres).
+
+**Detection engine (`worker/detection/`):** types.py (PageData/
+ScanPageData/UAVariant, layer_result/skip_result helpers), dom.py
+(layers 2+3: recovering lxml parse, tag-tree stats with weighted
+script/iframe/hidden attention, reference-set diff with new-external-
+domain weighting, evidence capped at 50 items/list), visual.py (layer
+4: SSIM at bounded compare size with explicit data_range, 16×16
+pHash+dHash, shared-top-region crop for legitimately-grown pages,
+decompression-bomb guard kept), signatures.py (layer 5: weighted
+strong/medium/weak defacement-phrasing regexes, profanity burst,
+Unicode-script-flip detection, new-text-only matching), metadata.py
+(layer 6: TLS fingerprint/issuer/expiry diff, security-header removal/
+weakening, robots.txt diff, full-map-or-skip rule), cloaking.py (layer
+7: raw-reference UA comparison, bot-blocking-is-not-cloaking),
+semantics.py (layer 8: aggression lexicon + topic keywords on new text,
+MiniLM cosine drift, Gemini/Ollama escalation hook documented as Phase
+4), fusion.py (layer 9 as above), pipeline.py (ordering, gating, crash
+isolation, degraded-baseline handling).
+
+**Worker:** `probe.py` (TLS/robots/headers/UA-rotation prober, every
+sub-probe individually fail-safe, SSRF-validated including
+per-redirect-hop re-validation via httpx event hook); `scan_tasks.py`
+extended (baseline capture stores probe metadata in capture_meta; scan
+runs probe + nine layers in a thread, persists findings idempotently,
+computes verdict vs per-site threshold, reschedules adaptively);
+`beat_tasks.py` (the dispatcher); artifact read helpers with root
+confinement.
+
+**API:** `PATCH /api/sites/{id}` (threshold/interval/auto-scan, with
+the adaptive-state-reset semantics); `GET /api/sites/{id}/scans/
+{scan_id}` (scan + ordered findings — the Phase 3 drilldown contract);
+site create/list/detail responses carry the new fields; scan responses
+carry risk_score. OpenAPI completeness test extended.
+
+**Frontend (minimal per roadmap — full SOC dashboard is Phase 3):**
+site-detail Monitoring card became a settings card (threshold %, base
+interval, auto-scan toggle, next-scan display; design-token styling);
+scan table shows verdict (flagged=red badge, changed=orange), risk %,
+layers-ran summary; api.ts typed for all new fields/endpoints.
+
+**Tests: 216 backend (was 112) + 8 frontend.** New: 30 layer tests
+(2-5), 34 metadata/cloaking/semantics/fusion/pipeline tests, 9 probe
+tests (httpx MockTransport — request handling only, no live traffic),
+17 scheduler tests (adaptive policy + dispatcher semantics incl.
+in-flight skip, stale recovery, enqueue failure, DB outage, per-tick
+cap), 14 Phase 2 API tests (settings validation, findings drilldown,
+cross-site 404, cascade). All ruff/format clean; tsc/oxlint/vitest/
+build clean.
+
+### Verified working (not just "should work")
+
+Live compose stack, rebuilt from final code, migration at head:
+- example.com scanned through the full engine: layer 1 identical ->
+  layers 2/3/4/5/8 skipped with logged gate reason, layers 6/7/9 ran
+  (TLS fingerprint captured with real expiry date; googlebot +
+  mobile_safari variants both 200 with similarity 1.0), risk 0.035,
+  verdict clean. All nine findings rows stored with evidence.
+- Deliberately changed page flagged with correct per-layer evidence: a
+  local test page (private-network opt-in) was baselined, then replaced
+  with defacement-style content (signature phrases, new external
+  script + hidden iframe domains, black/red visual). Scan verdict
+  **flagged**, risk 0.9999: L2 0.878 (script/iframe/hidden counts 0->1
+  each), L3 0.835 (evil-cdn.example.net in added_new_domains for both
+  script and iframe), L4 0.889 (SSIM 0.0, pHash distance 144 bits),
+  L5 1.0 (matched "HACKED BY", "gr33tz", "We are legion", "Expect us",
+  "Your security was weak"), L8 0.926 (real MiniLM inference in the
+  container: semantic similarity 0.063; topic hit contact_defacer),
+  L6/L7 correctly 0.0 (same server, no cloaking).
+- Adaptive scheduling observed live: flagged scan tightened 60 -> 15
+  min and set next_scan_at; page restored + site forced due -> Beat
+  tick dispatched exactly one scan ({'due': 1, 'enqueued': 1}), verdict
+  clean, cadence relaxed 15 -> 22 min. Dispatcher ticks run every 60 s
+  in the worker (logs confirm) and no-op cleanly when nothing is due.
+- Migration downgrade -> upgrade round-trip clean on live Postgres;
+  scan_findings table shape verified via psql (JSONB, unique index,
+  CASCADE FK).
+- torch 2.13.0+cpu inside the worker container, cuda unavailable; MiniLM
+  loads from the baked HF_HOME cache (no runtime download).
+- SPA still served, unknown /api/* still JSON 404, auth flow unchanged
+  (all 112 Phase 1 tests still pass).
+- Test sites deleted after verification (cascade removed scans and
+  findings); local test server stopped.
+
+### Incidents & resolutions (found during this phase's QA pass)
+
+1. **Layer 6 header comparison could false-positive against degraded or
+   Phase 1-era baselines.** The baseline reader fell back from the
+   probe's full header map to the fetcher's curated 4-header subset;
+   comparing full-vs-subset would report every security header as
+   "removed" (0.3+ each). Fixed: layer 6 compares full-map-vs-full-map
+   or skips with a note; the scan side no longer falls back to the
+   curated subset either. Regression test added.
+2. **Fusion under-separated with C=2.0.** Default-ish regularization
+   squashed the seed scenarios: benign deploy scored 0.505 — over the
+   default 0.5 flag threshold. Swept C explicitly (5/10/20/50), added a
+   heavy-but-benign "site redesign" seed row, settled on C=50: benign
+   ≤ 0.26, hostile ≥ 0.73. Calibration assertions are unit-tested so a
+   future seed edit that breaks separation fails CI.
+3. **Layer 7's divergence knee was too low.** Token-set Jaccard
+   exaggerates small edits on short pages: one dynamic "Visitor #42"
+   line produced divergence 0.4 -> score 0.2. Unit test caught it; knee
+   raised to 0.5 (soft ramp to 1.0 above it).
+4. **Visual layer carried dead padding code.** The pad-with-white branch
+   was unreachable (both arrays were already cropped to the shared
+   height); removed, and the crop-top-region semantics documented
+   honestly instead of the misleading "pad" comment.
+5. **Scheduling would have tightened on *any* nonzero layer score**
+   (including a 0.03-risk dynamic-content hash flip), permanently
+   pinning dynamic sites at minimum interval. Changed to a
+   MATERIAL_CHANGE_RISK=0.15 floor before tightening; tests added.
+6. **CRLF regressions** in files edited via shell heredocs on Windows;
+   swept all source trees back to LF (Phase 0 line-ending rule).
+
+### Deliberate deferrals (not bugs)
+
+- **Gemini/Ollama escalation for layer 8's ambiguous band** -> Phase 4
+  (per the kickoff's "only if natural" — the local pass is complete and
+  the escalation hook is documented in evidence as "not configured").
+- **Fusion retraining on real labeled history + gradient boosting
+  upgrade** -> once per-site verdict history accumulates (§5's
+  documented upgrade path; the feature order is fixed and stored per
+  finding for compatibility).
+- **Multi-region cloaking fetch via user proxy nodes** (§5 optional) ->
+  needs the proxy-node settings UI; evidence notes it as not configured.
+- **Suppression rules (css/regex/bbox)** -> Phase 3 per roadmap (the
+  point-and-click UI); layer evidence already carries the diffs the UI
+  will need.
+- **Findings drilldown UI** -> Phase 3 (the API contract + data are
+  live; the site-detail table shows summary scores only).
+- **DNS pin-the-IP** (Phase 1 deferral) still Phase 5; the probe reuses
+  the same assert-then-fetch pattern including per-hop redirect
+  re-validation, so its exposure equals the fetcher's.
+- **Beat tick observability** (queue depth, last-dispatch age on
+  /api/health) -> Phase 5 health page.
+- The probe intentionally keeps `verify=False` (observation, not trust —
+  S501-waived with rationale); revisit only if a user-facing "strict
+  TLS" toggle appears.
+
+---
+

@@ -1,5 +1,6 @@
+import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, RefreshCcw, ScanSearch } from "lucide-react"
+import { ArrowLeft, RefreshCcw, ScanSearch, Settings2 } from "lucide-react"
 import { Link, useParams } from "react-router"
 import { toast } from "sonner"
 
@@ -13,6 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Table,
   TableBody,
@@ -22,7 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import * as apiClient from "@/lib/api"
-import { ApiError, type Scan } from "@/lib/api"
+import { ApiError, type Scan, type Site } from "@/lib/api"
 
 function verdictBadge(scan: Scan) {
   if (scan.status === "failed" || scan.verdict === "error")
@@ -30,16 +33,143 @@ function verdictBadge(scan: Scan) {
   if (scan.status === "pending" || scan.status === "running")
     return <Badge variant="secondary">{scan.status === "pending" ? "Queued" : "Running"}</Badge>
   if (scan.verdict === "clean") return <Badge variant="clean">Clean</Badge>
-  if (scan.verdict === "changed") return <Badge variant="threat">Changed</Badge>
+  if (scan.verdict === "changed") return <Badge variant="pending">Changed</Badge>
+  if (scan.verdict === "flagged") return <Badge variant="threat">Flagged</Badge>
   return <Badge variant="secondary">Unknown</Badge>
 }
 
 function scanDot(scan: Scan): DotState {
   if (scan.status === "pending" || scan.status === "running") return "pending"
   if (scan.status === "failed" || scan.verdict === "error") return "pending"
-  if (scan.verdict === "changed") return "threat"
+  if (scan.verdict === "flagged") return "threat"
+  if (scan.verdict === "changed") return "pending"
   if (scan.verdict === "clean") return "clean"
   return "idle"
+}
+
+function riskCell(scan: Scan) {
+  if (scan.risk_score == null) return <span className="text-mute">—</span>
+  const pct = Math.round(scan.risk_score * 100)
+  const tone =
+    scan.verdict === "flagged"
+      ? "text-accent-red"
+      : scan.verdict === "changed"
+        ? "text-accent-orange"
+        : "text-accent-green"
+  return <span className={`text-code-md ${tone}`}>{pct}%</span>
+}
+
+function layerSummary(scan: Scan): string {
+  if (!scan.layer_scores) return "—"
+  const entries = Object.entries(scan.layer_scores).filter(
+    ([k]) => k !== "layer9_fusion"
+  )
+  const ran = entries.filter(([, v]) => !v.skipped)
+  const hits = ran.filter(([, v]) => (v.score ?? 0) > 0.05).length
+  return `${ran.length}/${entries.length} layers ran · ${hits} signaled`
+}
+
+function SettingsCard({ site }: { site: Site }) {
+  const queryClient = useQueryClient()
+  const [threshold, setThreshold] = useState(String(Math.round(site.flag_threshold * 100)))
+  const [interval, setInterval] = useState(String(site.scan_interval_minutes))
+  const [autoScan, setAutoScan] = useState(site.auto_scan_enabled)
+
+  const mutation = useMutation({
+    mutationFn: (patch: apiClient.SiteSettingsPatch) =>
+      apiClient.updateSite(site.id, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", site.id] })
+      toast.success("Monitoring settings saved")
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : "Could not save settings")
+    },
+  })
+
+  const save = () => {
+    const t = Number(threshold)
+    const i = Number(interval)
+    if (!Number.isFinite(t) || t < 0 || t > 100) {
+      toast.error("Flag threshold must be between 0 and 100%")
+      return
+    }
+    if (!Number.isFinite(i) || i < 5 || i > 1440) {
+      toast.error("Scan interval must be between 5 and 1440 minutes")
+      return
+    }
+    mutation.mutate({
+      flag_threshold: t / 100,
+      scan_interval_minutes: Math.round(i),
+      auto_scan_enabled: autoScan,
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Monitoring</CardTitle>
+        <CardDescription>
+          Scans run automatically on an adaptive cadence: faster right after
+          a change, relaxing back while stable.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2 text-body-sm text-body">
+          <StatusDot state={site.allow_private_networks ? "pending" : "clean"} />
+          {site.allow_private_networks
+            ? "Private-network target allowed (explicit opt-in)"
+            : "Public targets only (SSRF guard active)"}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-threshold">Flag threshold (%)</Label>
+            <Input
+              id="flag-threshold"
+              inputMode="numeric"
+              value={threshold}
+              onChange={(e) => setThreshold(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="scan-interval">Base interval (min)</Label>
+            <Input
+              id="scan-interval"
+              inputMode="numeric"
+              value={interval}
+              onChange={(e) => setInterval(e.target.value)}
+            />
+          </div>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-body-sm text-body">
+          <input
+            type="checkbox"
+            checked={autoScan}
+            onChange={(e) => setAutoScan(e.target.checked)}
+            className="size-4 accent-ink"
+          />
+          Scheduled scans enabled
+        </label>
+        {site.next_scan_at && site.auto_scan_enabled && (
+          <p className="text-caption text-mute">
+            Next scheduled scan {new Date(site.next_scan_at).toLocaleString()}
+            {site.current_interval_minutes
+              ? ` · current cadence ${site.current_interval_minutes} min`
+              : ""}
+          </p>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={save}
+        >
+          <Settings2 />
+          Save settings
+        </Button>
+      </CardContent>
+    </Card>
+  )
 }
 
 export function SiteDetailPage() {
@@ -189,23 +319,7 @@ export function SiteDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Monitoring</CardTitle>
-            <CardDescription>
-              Phase 1 checks the content hash (layer 1). The full nine-layer
-              engine arrives with scheduled scans.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2 text-body-sm text-body">
-              <StatusDot state={s.allow_private_networks ? "pending" : "clean"} />
-              {s.allow_private_networks
-                ? "Private-network target allowed (explicit opt-in)"
-                : "Public targets only (SSRF guard active)"}
-            </div>
-          </CardContent>
-        </Card>
+        <SettingsCard key={s.id + String(s.flag_threshold)} site={s} />
       </div>
 
       <h2 className="mb-4 text-heading-md text-ink">Scans</h2>
@@ -222,7 +336,8 @@ export function SiteDetailPage() {
               <TableRow>
                 <TableHead>Status</TableHead>
                 <TableHead>Verdict</TableHead>
-                <TableHead>Content hash</TableHead>
+                <TableHead>Risk</TableHead>
+                <TableHead>Layers</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Detail</TableHead>
               </TableRow>
@@ -237,8 +352,9 @@ export function SiteDetailPage() {
                     </span>
                   </TableCell>
                   <TableCell>{verdictBadge(scan)}</TableCell>
-                  <TableCell className="text-code-md text-charcoal">
-                    {scan.content_hash ? `${scan.content_hash.slice(0, 16)}…` : "—"}
+                  <TableCell>{riskCell(scan)}</TableCell>
+                  <TableCell className="text-caption text-mute">
+                    {layerSummary(scan)}
                   </TableCell>
                   <TableCell className="text-body-sm text-mute">
                     {scan.started_at
@@ -248,11 +364,13 @@ export function SiteDetailPage() {
                   <TableCell className="max-w-md truncate text-body-sm text-charcoal">
                     {scan.error
                       ? scan.error
-                      : scan.verdict === "changed"
-                        ? "Content hash differs from baseline"
-                        : scan.verdict === "clean"
-                          ? "Content identical to baseline"
-                          : "—"}
+                      : scan.verdict === "flagged"
+                        ? "Risk above the site threshold — review the evidence"
+                        : scan.verdict === "changed"
+                          ? "Changes detected below the flag threshold"
+                          : scan.verdict === "clean"
+                            ? "No change against baseline"
+                            : "—"}
                   </TableCell>
                 </TableRow>
               ))}

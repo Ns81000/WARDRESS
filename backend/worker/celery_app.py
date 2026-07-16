@@ -12,7 +12,7 @@ celery_app = Celery(
     "wardress",
     broker=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
     backend=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
-    include=["worker.scan_tasks"],
+    include=["worker.scan_tasks", "worker.beat_tasks"],
 )
 
 celery_app.conf.update(
@@ -26,9 +26,13 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     # Hard backstop: a wedged browser must not hold a worker slot forever.
-    # Fetch-level timeouts (worker/fetcher.py) fire long before these.
-    task_soft_time_limit=180,
-    task_time_limit=240,
+    # Fetch/probe-level timeouts (worker/fetcher.py, worker/probe.py) fire
+    # long before these. Phase 2 raised them (was 180/240): a scan now runs
+    # the metadata probe + nine layers + MiniLM inference after the fetch.
+    # Both stay well under the 10-minute stale-in-flight cutoff the API
+    # and Beat dispatcher use (app/scanning.py).
+    task_soft_time_limit=300,
+    task_time_limit=360,
 )
 
 

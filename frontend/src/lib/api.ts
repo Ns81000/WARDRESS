@@ -107,7 +107,7 @@ export interface UserOut {
 
 export type BaselineStatus = "pending" | "capturing" | "ready" | "failed"
 export type ScanStatus = "pending" | "running" | "completed" | "failed"
-export type ScanVerdict = "clean" | "changed" | "error" | null
+export type ScanVerdict = "clean" | "changed" | "flagged" | "error" | null
 
 export interface Site {
   id: string
@@ -115,6 +115,11 @@ export interface Site {
   url: string
   allow_private_networks: boolean
   is_active: boolean
+  flag_threshold: number
+  auto_scan_enabled: boolean
+  scan_interval_minutes: number
+  current_interval_minutes: number | null
+  next_scan_at: string | null
   created_at: string
   baseline_status: BaselineStatus | null
   baseline_captured_at: string | null
@@ -128,11 +133,31 @@ export interface Scan {
   status: ScanStatus
   verdict: ScanVerdict
   content_hash: string | null
-  layer_scores: Record<string, { score: number; evidence: Record<string, unknown> }> | null
+  layer_scores: Record<string, { score: number | null; skipped: boolean }> | null
+  risk_score: number | null
   error: string | null
   created_at: string
   started_at: string | null
   finished_at: string | null
+}
+
+export interface ScanFinding {
+  id: string
+  layer: number
+  layer_key: string
+  score: number | null
+  skipped: boolean
+  evidence: Record<string, unknown> | null
+}
+
+export interface ScanDetail extends Scan {
+  findings: ScanFinding[]
+}
+
+export interface SiteSettingsPatch {
+  flag_threshold?: number
+  auto_scan_enabled?: boolean
+  scan_interval_minutes?: number
 }
 
 export const login = (email: string, password: string) =>
@@ -154,8 +179,12 @@ export const createSite = (payload: {
   api<Site>("/api/sites", { method: "POST", body: JSON.stringify(payload) })
 export const deleteSite = (id: string) =>
   api<void>(`/api/sites/${id}`, { method: "DELETE" })
+export const updateSite = (id: string, patch: SiteSettingsPatch) =>
+  api<Site>(`/api/sites/${id}`, { method: "PATCH", body: JSON.stringify(patch) })
 export const rebaseline = (id: string) =>
   api<unknown>(`/api/sites/${id}/rebaseline`, { method: "POST" })
 export const scanNow = (id: string) =>
   api<Scan>(`/api/sites/${id}/scan-now`, { method: "POST" })
 export const listScans = (id: string) => api<Scan[]>(`/api/sites/${id}/scans`)
+export const getScan = (siteId: string, scanId: string) =>
+  api<ScanDetail>(`/api/sites/${siteId}/scans/${scanId}`)

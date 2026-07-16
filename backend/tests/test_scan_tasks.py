@@ -1,18 +1,20 @@
-"""Worker task-body tests: baseline capture and layer-1 scan state
-machines. The network fetch and artifact store are stubbed — what's under
-test is row state handling: success, fetch failure, missing prerequisites,
-idempotence, and the never-stuck-in-flight guarantee. Live queue/browser
-behavior is covered by the compose-stack verification."""
+"""Worker task-body tests: baseline capture and scan state machines.
+The network fetch, metadata probe, and artifact store are stubbed — what's
+under test is row state handling: success, fetch failure, missing
+prerequisites, idempotence, and the never-stuck-in-flight guarantee.
+Layer behavior is covered in test_detection_*; live queue/browser
+behavior by the compose-stack verification."""
 
 import uuid
 from contextlib import asynccontextmanager
 
 import pytest
 
-from app.models import Baseline, BaselineStatus, Scan, ScanStatus, Site
+from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, Site
 from worker import scan_tasks
 from worker.fetcher import FetchError, FetchResult
 from worker.hashing import content_sha256
+from worker.probe import ProbeResult
 
 HTML = "<html><body><h1>Welcome</h1></body></html>"
 
@@ -29,7 +31,8 @@ def _fetch_result(html: str = HTML) -> FetchResult:
 
 @pytest.fixture(autouse=True)
 def wire_worker(monkeypatch: pytest.MonkeyPatch, db_factory, tmp_path):
-    """Point the task bodies at the test DB and a temp artifacts dir."""
+    """Point the task bodies at the test DB, a temp artifacts dir, an
+    empty metadata probe, and embedding-free semantics."""
 
     @asynccontextmanager
     async def fake_task_session():
@@ -43,8 +46,29 @@ def wire_worker(monkeypatch: pytest.MonkeyPatch, db_factory, tmp_path):
         (d / "screenshot.png").write_bytes(screenshot)
         return f"{kind}/{record_id}/page.html", f"{kind}/{record_id}/screenshot.png"
 
+    def fake_read_text(rel_path):
+        if not rel_path:
+            return None
+        p = tmp_path / rel_path
+        return p.read_text(encoding="utf-8") if p.exists() else None
+
+    def fake_read_bytes(rel_path):
+        if not rel_path:
+            return None
+        p = tmp_path / rel_path
+        return p.read_bytes() if p.exists() else None
+
+    async def fake_probe(url: str, *, allow_private_networks: bool = False) -> ProbeResult:
+        return ProbeResult()
+
+    from worker.detection import semantics
+
     monkeypatch.setattr(scan_tasks, "task_session", fake_task_session)
     monkeypatch.setattr(scan_tasks, "store_artifacts", fake_store)
+    monkeypatch.setattr(scan_tasks, "read_artifact_text", fake_read_text)
+    monkeypatch.setattr(scan_tasks, "read_artifact_bytes", fake_read_bytes)
+    monkeypatch.setattr(scan_tasks, "probe_site", fake_probe)
+    monkeypatch.setattr(semantics, "embed_text", lambda text: None)
 
 
 @pytest.fixture
@@ -170,10 +194,10 @@ async def test_scan_of_error_page_still_completes(
     site, baseline = await _ready_site_and_baseline(db_factory)
     scan = await _make_scan(db_factory, site.id, baseline.id)
 
-    assert await scan_tasks._run_scan(scan.id) == "changed"
+    assert await scan_tasks._run_scan(scan.id) in ("changed", "flagged")
     row = await _get(db_factory, Scan, scan.id)
     assert row.status is ScanStatus.completed
-    assert row.verdict.value == "changed"
+    assert row.verdict.value in ("changed", "flagged")
 
 
 async def test_capture_missing_row(db_factory, fetch_calls) -> None:
@@ -239,8 +263,20 @@ async def test_scan_clean(db_factory, fetch_calls) -> None:
     assert row.status is ScanStatus.completed
     assert row.verdict.value == "clean"
     assert row.layer_scores["layer1_hash"]["score"] == 0.0
-    assert row.layer_scores["layer1_hash"]["evidence"]["identical"] is True
+    assert row.risk_score is not None and row.risk_score < 0.5
     assert row.started_at is not None and row.finished_at is not None
+    # Per-layer findings persisted, one row per layer incl. skips (§5).
+    async with db_factory() as db:
+        findings = (
+            await db.execute(ScanFinding.__table__.select().where(ScanFinding.scan_id == scan.id))
+        ).all()
+    assert len(findings) == 9
+    by_key = {f.layer_key: f for f in findings}
+    assert by_key["layer1_hash"].evidence["identical"] is True
+    # Identical hash gates the content layers; the skip reason is logged.
+    assert by_key["layer2_dom_structure"].skipped is True
+    assert "gated by layer 1" in by_key["layer2_dom_structure"].evidence["reason"]
+    assert by_key["layer9_fusion"].score is not None
 
 
 async def test_scan_changed(db_factory, fetch_calls) -> None:
@@ -249,12 +285,14 @@ async def test_scan_changed(db_factory, fetch_calls) -> None:
     )
     scan = await _make_scan(db_factory, site.id, baseline.id)
 
-    assert await scan_tasks._run_scan(scan.id) == "changed"
+    verdict = await scan_tasks._run_scan(scan.id)
+    assert verdict in ("changed", "flagged")
 
     row = await _get(db_factory, Scan, scan.id)
-    assert row.verdict.value == "changed"
+    assert row.verdict.value == verdict
     assert row.layer_scores["layer1_hash"]["score"] == 1.0
     assert row.content_hash == content_sha256(HTML)
+    assert row.risk_score is not None
 
 
 async def test_scan_fetch_failure(db_factory, monkeypatch: pytest.MonkeyPatch) -> None:

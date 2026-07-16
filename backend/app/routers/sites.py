@@ -1,4 +1,4 @@
-"""Site CRUD + baseline/scan endpoints (§7 slice for Phase 1)."""
+"""Site CRUD + baseline/scan endpoints (§7, extended for Phase 2)."""
 
 import asyncio
 import uuid
@@ -11,25 +11,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import CurrentUser
-from app.models import Baseline, BaselineStatus, Scan, ScanStatus, ScanVerdict, Site
-from app.schemas import BaselineOut, ScanOut, SiteCreate, SiteDetailOut, SiteOut
+from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, ScanVerdict, Site
+from app.scanning import clamp_interval, is_stale
+from app.schemas import (
+    BaselineOut,
+    ScanDetailOut,
+    ScanFindingOut,
+    ScanOut,
+    SiteCreate,
+    SiteDetailOut,
+    SiteOut,
+    SiteUpdate,
+)
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from app.tasks import enqueue_baseline_capture, enqueue_scan
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
 
-# In-flight rows older than this are treated as abandoned (the Celery hard
-# time limit is 240s, so nothing legitimate runs this long). Covers a
-# worker killed too hard to run its failure handler, and rows whose
-# enqueue was lost. Without a cutoff, one orphaned row would 409-block
-# rebaseline/scan-now for its site forever.
-STALE_INFLIGHT = timedelta(minutes=10)
-
 
 def _is_stale(created_at: datetime) -> bool:
-    if created_at.tzinfo is None:  # SQLite test backend returns naive datetimes
-        created_at = created_at.replace(tzinfo=UTC)
-    return created_at < datetime.now(UTC) - STALE_INFLIGHT
+    return is_stale(created_at)
 
 
 async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID) -> Site:
@@ -68,9 +69,16 @@ async def create_site(
         url=url,
         created_by=user.id,
         allow_private_networks=body.allow_private_networks,
+        flag_threshold=body.flag_threshold,
+        auto_scan_enabled=body.auto_scan_enabled,
+        scan_interval_minutes=clamp_interval(body.scan_interval_minutes),
     )
     db.add(site)
     await db.flush()
+    # First auto-scan due one interval after creation (the baseline
+    # capture below anchors "now"); manual scan-now works immediately.
+    if site.auto_scan_enabled:
+        site.next_scan_at = datetime.now(UTC) + timedelta(minutes=site.scan_interval_minutes)
 
     # Kick off the initial baseline capture immediately.
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
@@ -120,6 +128,52 @@ async def get_site(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SiteDetailOut:
     site = await _get_site_or_404(db, site_id)
+    baseline = await _current_baseline(db, site.id)
+    if baseline is None:
+        baseline = await db.scalar(
+            select(Baseline)
+            .where(Baseline.site_id == site.id)
+            .order_by(Baseline.created_at.desc())
+            .limit(1)
+        )
+    return SiteDetailOut(
+        **SiteOut.model_validate(site).model_dump(),
+        baseline_status=baseline.status if baseline else None,
+        baseline_captured_at=baseline.captured_at if baseline else None,
+        baseline_error=baseline.error if baseline else None,
+    )
+
+
+@router.patch("/{site_id}", response_model=SiteDetailOut)
+async def update_site(
+    site_id: uuid.UUID,
+    body: SiteUpdate,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SiteDetailOut:
+    """Per-site detection/scheduling settings (§5 threshold, §11 adaptive
+    interval). Name/URL edits are deliberately excluded — a different URL
+    means a different trust anchor, i.e. a new site."""
+    site = await _get_site_or_404(db, site_id)
+    if body.flag_threshold is not None:
+        site.flag_threshold = body.flag_threshold
+    if body.auto_scan_enabled is not None:
+        site.auto_scan_enabled = body.auto_scan_enabled
+        if not body.auto_scan_enabled:
+            site.next_scan_at = None
+        elif site.next_scan_at is None:
+            site.next_scan_at = datetime.now(UTC) + timedelta(
+                minutes=clamp_interval(site.scan_interval_minutes)
+            )
+    if body.scan_interval_minutes is not None:
+        site.scan_interval_minutes = clamp_interval(body.scan_interval_minutes)
+        # A new base cadence resets the adaptive state: the user asked for
+        # this rhythm, so honor it from the next scan onward.
+        site.current_interval_minutes = None
+        if site.auto_scan_enabled:
+            site.next_scan_at = datetime.now(UTC) + timedelta(minutes=site.scan_interval_minutes)
+    await db.commit()
+
     baseline = await _current_baseline(db, site.id)
     if baseline is None:
         baseline = await db.scalar(
@@ -234,3 +288,27 @@ async def list_scans(
         )
     ).all()
     return [ScanOut.model_validate(s) for s in scans]
+
+
+@router.get("/{site_id}/scans/{scan_id}", response_model=ScanDetailOut)
+async def get_scan(
+    site_id: uuid.UUID,
+    scan_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ScanDetailOut:
+    """One scan with its per-layer findings — the §5 evidence drilldown
+    (full dashboard UI lands in Phase 3; the data contract lands now)."""
+    await _get_site_or_404(db, site_id)
+    scan = await db.scalar(select(Scan).where(Scan.id == scan_id, Scan.site_id == site_id))
+    if scan is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan not found")
+    findings = (
+        await db.scalars(
+            select(ScanFinding).where(ScanFinding.scan_id == scan.id).order_by(ScanFinding.layer)
+        )
+    ).all()
+    return ScanDetailOut(
+        **ScanOut.model_validate(scan).model_dump(),
+        findings=[ScanFindingOut.model_validate(f) for f in findings],
+    )

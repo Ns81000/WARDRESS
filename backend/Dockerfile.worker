@@ -29,6 +29,13 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
+# Bake the MiniLM embedding model into the image (layer 8/9). A scan
+# must never depend on a HuggingFace download at runtime — self-hosted
+# installs may be offline, and rule 6 forbids network surprises mid-scan.
+# CPU-only per rule 3 (torch wheel above is +cpu).
+ENV HF_HOME=/opt/hf-cache
+RUN uv run --no-project python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')"     || echo "WARNING: MiniLM pre-download failed; layer 8 embeddings will degrade gracefully"
+
 # Project source
 COPY backend/ .
 RUN --mount=type=cache,target=/root/.cache/uv \

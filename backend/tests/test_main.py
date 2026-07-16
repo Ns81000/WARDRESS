@@ -57,7 +57,7 @@ async def test_spa_does_not_swallow_api_404(spa_client: httpx.AsyncClient) -> No
     assert resp.status_code == 404
 
 
-def test_openapi_lists_phase1_endpoints() -> None:
+def test_openapi_lists_all_endpoints() -> None:
     paths = app.openapi()["paths"]
     for expected in (
         "/api/health",
@@ -70,7 +70,10 @@ def test_openapi_lists_phase1_endpoints() -> None:
         "/api/sites/{site_id}/rebaseline",
         "/api/sites/{site_id}/scan-now",
         "/api/sites/{site_id}/scans",
+        "/api/sites/{site_id}/scans/{scan_id}",
         "/api/artifacts/baselines/{baseline_id}/screenshot",
         "/api/artifacts/scans/{scan_id}/screenshot",
     ):
         assert expected in paths, f"{expected} missing from OpenAPI schema"
+    # PATCH settings endpoint present on the site path.
+    assert "patch" in paths["/api/sites/{site_id}"]

@@ -37,6 +37,10 @@ class SiteCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     url: HttpUrl
     allow_private_networks: bool = False
+    # §5 fused-risk threshold and §11 recurring-scan cadence.
+    flag_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    auto_scan_enabled: bool = True
+    scan_interval_minutes: int = Field(default=60, ge=5, le=24 * 60)
 
     @field_validator("name")
     @classmethod
@@ -56,6 +60,15 @@ class SiteCreate(BaseModel):
         return v
 
 
+class SiteUpdate(BaseModel):
+    """Patchable per-site detection/scheduling settings. All optional —
+    only provided fields change."""
+
+    flag_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    auto_scan_enabled: bool | None = None
+    scan_interval_minutes: int | None = Field(default=None, ge=5, le=24 * 60)
+
+
 class SiteOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -64,6 +77,11 @@ class SiteOut(BaseModel):
     url: str
     allow_private_networks: bool
     is_active: bool
+    flag_threshold: float
+    auto_scan_enabled: bool
+    scan_interval_minutes: int
+    current_interval_minutes: int | None
+    next_scan_at: datetime | None
     created_at: datetime
 
 
@@ -101,7 +119,25 @@ class ScanOut(BaseModel):
     verdict: ScanVerdict | None
     content_hash: str | None
     layer_scores: dict | None
+    risk_score: float | None
     error: str | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class ScanFindingOut(BaseModel):
+    """One layer's §5 result: score + full evidence for UI drilldown."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    layer: int
+    layer_key: str
+    score: float | None
+    skipped: bool
+    evidence: dict | None
+
+
+class ScanDetailOut(ScanOut):
+    findings: list[ScanFindingOut] = []

@@ -22,6 +22,11 @@ dependencies = [
     "lxml==6.1.1",
     "scikit-image==0.26.0",
     "imagehash==4.3.2",
+    # pillow/numpy arrive transitively (imagehash, scikit-image) but the
+    # detection layers import them directly — declare them so a transitive
+    # drop can never break us silently (rule 2; versions verified on PyPI).
+    "pillow==12.3.0",
+    "numpy==2.5.1",
     "sentence-transformers==5.6.0",
     "scikit-learn==1.9.0",
     # torch is a transitive dep of sentence-transformers; it must be declared
