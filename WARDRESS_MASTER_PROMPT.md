@@ -273,9 +273,17 @@ wardress/
 
 After a phase's implementation is "done" per the implementer's own assessment, launch a dedicated adversarial subagent with this explicit charter:
 
-> Assume every file changed in this phase is wrong until you personally prove otherwise. Re-read every changed file fresh — do not trust the implementer's summary. Run the full test suite. Then actively try to break the phase's functionality: empty/malformed responses from target sites, unreachable sites, timeouts mid-scan, Redis or Postgres unavailable, concurrent scans of the same site, malformed HTML, non-UTF8 content, extremely large pages, sites that redirect infinitely, expired/self-signed TLS certs, a Gemini API key that's invalid or over quota, an SMTP server that rejects auth, a Telegram bot token that's revoked. Attempt every edge case you can think of specific to this phase's feature. Only report the phase clean if you cannot find a flaw after genuinely trying.
+> Assume every file changed in this phase is wrong until you personally prove otherwise. Re-read every changed file fresh — do not trust the implementer's summary. Run the full test suite. Then actively reason through and (where testable in code) exercise the phase's failure modes: unreachable sites, timeouts mid-scan, Redis or Postgres unavailable, concurrent scans of the same site, non-UTF8 content, extremely large pages, sites that redirect infinitely, expired/self-signed TLS certs, a Gemini API key that's invalid or over quota, an SMTP server that rejects auth, a Telegram bot token that's revoked. Attempt every edge case you can think of specific to this phase's feature. Only report the phase clean if you cannot find a flaw after genuinely trying.
+
+**Carve-out (decided 2026-07-16, Phase 0 sign-off):** negative/malformed-input probing of the *running system* — unusual request paths, malformed/oversized headers, malformed request bodies, protocol-level abuse against the live API and services — is **not** performed by Claude Code or its subagents. That category is a **manual step in the phase sign-off checklist**, executed by the user in a plain terminal outside Claude Code, for every phase. Claude Code should still write *unit/integration tests* for malformed-input handling in application code (parsers, validators, detection layers), but must not drive live malformed traffic at the stack itself.
 
 The subagent's findings — bugs found, fixes applied, edge cases now covered — get appended to `PROGRESS.md` before the next phase's kickoff prompt is written. If the subagent finds unresolved issues, the phase is not complete; fix them and re-run the subagent before proceeding.
+
+**Phase sign-off checklist (every phase):**
+1. Full automated test suites pass (backend + frontend).
+2. Paranoid subagent pass (above, with the carve-out) reports clean.
+3. **Manual negative/malformed-input QA by the user** (plain terminal, outside Claude Code) — user confirms done.
+4. `PROGRESS.md` appended; next phase kickoff prompt generated.
 
 ---
 

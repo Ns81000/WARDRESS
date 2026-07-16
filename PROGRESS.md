@@ -160,3 +160,47 @@ see incident log) · node 22.14.0 · Docker 28.3.2.
   below High won't block; revisit in the Phase 5 hardening pass.
 
 ---
+
+## Phase 0 — Sign-off (2026-07-16, fresh session)
+
+### Decision log
+
+**Negative/malformed-input QA is deferred to manual verification by the
+user, for every phase going forward.** Probing the running system with
+unusual request paths, malformed/oversized headers, and malformed request
+bodies will be done manually by the user in a plain terminal, **outside
+Claude Code** — Claude Code and its QA subagents must not attempt this
+category of live testing themselves. It is now an explicit manual step in
+the phase sign-off checklist (master prompt §13, updated this session).
+Claude Code still writes normal unit/integration tests for malformed-input
+handling inside application code (parsers, validators, detection layers) —
+the carve-out covers only live traffic against the running stack.
+
+### Sign-off verification (re-verified directly in this session, not assumed)
+
+- Repo structure matches §12 (scripts/ and assets/brand/ exist as
+  placeholders per the deliberate-deferral log; reference/changedetection.io
+  and docs-cache/ populated).
+- `uv run pytest` — 2/2 pass. `pnpm vitest run` — 1/1 pass.
+- Docker Compose stack: db, redis, app all healthy; worker + beat up;
+  `GET /api/health` → `{"status":"ok"}`; `GET /` serves the built SPA
+  (200, text/html). Celery round-trip inside the worker container:
+  `ping.delay().get()` → `"pong"`. `telegram-bot` (profile service) was
+  found exited 137 (killed when its profile wasn't included in a previous
+  `compose up`); restarted with `--profile telegram` and confirmed it
+  idles politely without a token — behavior correct, not a bug.
+- CI workflow present at `.github/workflows/ci.yml` (backend lint/audit/
+  test, frontend audit/lint/typecheck/test/build, compose-config jobs).
+- Line-ending audit: `git ls-files --eol` — every indexed text file is
+  `i/lf`. One working-tree-only CRLF (`frontend/package.json`, written by
+  pnpm on Windows) was converted to LF in the working copy;
+  `git add --renormalize .` produced **zero index changes**, so no
+  renormalization commit was needed.
+- Manual negative/malformed-input QA: per the decision above, owned by the
+  user outside Claude Code.
+
+**Phase 0 is signed off complete.** Only intentional deferrals remain
+(fonts/logo/tagline → Phase 1; installers → Phase 6; first Alembic
+revision → Phase 1) — all logged above.
+
+---
