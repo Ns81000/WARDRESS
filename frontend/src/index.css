@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/*
+ * Wardress design tokens — adapted from DESIGN-resend.md (§4 of the master
+ * prompt). Font substitutions: Fraunces replaces Domaine Display,
+ * Instrument Sans replaces ABC Favorit for display/subtitle roles,
+ * Inter carries body/UI, Geist Mono carries code. Fonts themselves are
+ * wired in Phase 1 alongside the shell layout; the color/radius/spacing
+ * foundation lives here from Phase 0 so nothing ever renders off-token.
+ */
+@theme {
+  /* Canvas & surfaces — true black, never near-black */
+  --color-canvas: #000000;
+  --color-surface-card: #0a0a0c;
+  --color-surface-elevated: #101012;
+  --color-surface-deep: #06060a;
+  --color-surface-light: #f1f7fe;
+
+  /* Text */
+  --color-ink: #fcfdff;
+  --color-body: rgba(252, 253, 255, 0.86);
+  --color-charcoal: rgba(252, 253, 255, 0.7);
+  --color-mute: #a1a4a5;
+  --color-ash: #888e90;
+  --color-stone: #464a4d;
+  --color-on-light: #000000;
+  --color-on-light-mute: rgba(0, 0, 51, 0.7);
+
+  /* Hairlines replace drop shadows entirely */
+  --color-hairline: rgba(255, 255, 255, 0.06);
+  --color-hairline-strong: rgba(255, 255, 255, 0.14);
+  --color-divider-soft: rgba(255, 255, 255, 0.04);
+
+  /* Accents — glows only, never solid fills */
+  --color-accent-orange: #ff801f;
+  --color-accent-yellow: #ffc53d;
+  --color-accent-blue: #3b9eff;
+  --color-accent-green: #11ff99;
+  --color-accent-red: #ff2047;
+  --color-link: #3b9eff;
+
+  --color-glow-orange: rgba(255, 89, 0, 0.22);
+  --color-glow-blue: rgba(0, 117, 255, 0.34);
+  --color-glow-green: rgba(34, 255, 153, 0.18);
+  --color-glow-red: rgba(255, 32, 71, 0.34);
+
+  /* Radius vocabulary */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  min-height: 100vh;
+}

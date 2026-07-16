@@ -1,0 +1,88 @@
+[project]
+name = "wardress-backend"
+version = "0.1.0"
+description = "Wardress — self-hosted website defacement detection and monitoring platform (backend)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+dependencies = [
+    # --- Web framework / API ---
+    "fastapi==0.139.0",
+    "uvicorn[standard]==0.51.0",
+    "pydantic-settings==2.14.2",
+    # --- Persistence ---
+    "sqlalchemy[asyncio]==2.0.51",
+    "alembic==1.18.5",
+    "asyncpg==0.31.0",
+    # --- Task queue ---
+    "celery==5.6.3",
+    "redis==8.0.1",
+    # --- Detection engine ---
+    "playwright==1.61.0",
+    "lxml==6.1.1",
+    "scikit-image==0.26.0",
+    "imagehash==4.3.2",
+    "sentence-transformers==5.6.0",
+    "scikit-learn==1.9.0",
+    # torch is a transitive dep of sentence-transformers; it must be declared
+    # directly so [tool.uv.sources] can force the CPU-only wheel index
+    # (master prompt rule 3: no GPU dependencies, ever).
+    "torch>=2.5",
+    "httpx==0.28.1",
+    # --- Optional intelligence layer ---
+    "google-genai==2.12.0",
+    "aiolimiter==1.2.1",
+    # --- Notifications / reporting ---
+    "apprise==1.12.0",
+    "python-telegram-bot==22.8",
+    "jinja2==3.1.6",
+    "premailer==3.10.0",
+    "aiosmtplib==5.1.2",
+    "weasyprint==69.0",
+    # --- Security ---
+    "argon2-cffi==25.1.0",
+    "pyjwt==2.13.0",
+    "cryptography==49.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.15.21",
+    "pip-audit==2.10.1",
+]
+
+# --- CPU-only torch (master prompt rule 3: no GPU dependencies, ever) ---
+# sentence-transformers pulls torch transitively; force the CPU wheel index
+# so no CUDA libraries ever enter the lockfile or the Docker image.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
+ignore = ["S101"]  # allow asserts in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]  # test fixtures may contain fake credentials
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "worker"]

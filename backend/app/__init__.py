@@ -1,0 +1,1 @@
+"""Wardress FastAPI application package."""

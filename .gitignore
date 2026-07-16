@@ -1,0 +1,33 @@
+# --- Secrets / environment ---
+.env
+*.env.local
+
+# --- Python / uv ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Node / pnpm ---
+node_modules/
+frontend/dist/
+.pnpm-store/
+
+# --- Reference clones & cached docs (Phase 0 read-only material, not shipped) ---
+reference/
+docs-cache/
+
+# --- Runtime data volumes (never commit user data) ---
+data/
+*.sqlite3
+
+# --- OS / editor noise ---
+Thumbs.db
+.DS_Store
+*.swp
+.idea/
+.vscode/
