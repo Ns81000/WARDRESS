@@ -1020,3 +1020,236 @@ as Phase 1), all sources LF.
   Phase 0 sign-off decision — unchanged for this phase.
 
 ---
+
+## Phase 4 — Notifications & Intelligence (2026-07-17)
+
+### Architecture decisions
+
+**Every integration secret is encrypted at rest with Fernet and never
+round-trips to the client.** `app/crypto.py` derives the Fernet key as
+urlsafe-b64(SHA-256(`CREDENTIALS_ENCRYPTION_KEY`)) so the .env value can
+be any string; `app/settings_store.py` stores SMTP/Telegram/Gemini/
+Ollama configuration as encrypted JSON blobs in a new `app_settings`
+table, and notification channels carry their own `config_encrypted`
+column. GET endpoints return redacted hints only ("smtp.ex...",
+"1234567890:AAAA...", key prefixes) plus `configured` flags; PUT uses
+patch semantics where `None` keeps the stored secret and `""` clears it,
+so editing a host never silently wipes a credential. A `DecryptionError`
+(rotated key, corrupted row) is treated as "not configured" — surfaced
+as a re-save prompt in the UI, never a crash.
+
+**Alert delivery is a separate Celery task, never part of the scan
+body.** A flagged `_run_scan` creates the `Alert` row (unique
+`scan_id` — acks_late redelivery reuses it instead of duplicating) and
+enqueues `wardress.deliver_alert`; the enqueue itself is wrapped so a
+dead Redis at alert time logs and moves on — the scan verdict is already
+committed and is never affected (rule 6). The delivery task resolves the
+channel set (per-site channels plus global ones), writes one
+`alert_deliveries` row per channel with status sent/failed/skipped and a
+human-readable detail, and commits per channel so one slow SMTP server
+cannot roll back another channel's outcome. Re-running the task skips
+channels that already have delivery rows (idempotence guard). Mute is a
+delivery-time decision: `sites.muted_until` in the future turns every
+delivery into a recorded `skipped` row — scans, verdicts, and the alert
+row itself continue unaffected, and the skips stay visible on the
+Alerts page.
+
+**One delivery primitive shared by real alerts and every test button.**
+`app/alerting.py` exposes `send_email` (Jinja2 HTML template, CSS
+inlined with premailer, sent via aiosmtplib with an SMTP error taxonomy
+mapped to actionable messages) and `send_apprise` (tgram:// built from
+the stored bot token + captured chat, or the raw user Apprise URL, 40s
+timeout). Everything returns `(ok, detail)` instead of raising; the
+worker records failures as delivery rows, the settings test buttons
+show them verbatim. Channel creation validates the Apprise URL with the
+same `apprise` library the delivery path uses — a channel that saves is
+a channel that can send.
+
+**The §8 "Send Test Email" button really gates Save.** The SMTP test
+endpoint accepts optional inline settings (the unsaved form values;
+omitted password falls back to the stored credential) so the test proves
+the exact configuration about to be saved. The frontend disables Save
+until a test against the *current* form values succeeds, and any edit
+re-locks it. This replaced an initial test-after-save design the QA
+pass caught as contradicting the master prompt.
+
+**The Telegram bot is a real two-way python-telegram-bot v22 app in its
+own container, with a manual PTB lifecycle.** `run_polling()` owns the
+loop and only stops on process signals, so the bot instead drives
+initialize/start/start_polling itself and re-reads the encrypted DB
+settings every 60s — pasting a new BotFather token into Settings
+restarts polling with it within a minute, no container restart. A
+missing token idles politely; `InvalidToken` (revoked/mistyped) logs a
+plain-language warning and retries on a 60s backoff — the container
+never crash-loops and nothing in it can affect scanning. The first
+/start captures that chat ID into settings (shown in the UI as
+confirmation); every other chat is refused — one bot, one owner.
+Commands: /status /sites /scan /ack /mute /explain /help, all wrapped in
+an authorization + crash-isolation guard, all plain text (no markdown
+parsing surprises from site names, no emoji). Outbound alert pushes go
+through Apprise tgram://, not this bot — it is a control surface, not a
+delivery path.
+
+**LLM escalation can only raise a verdict, and only in the ambiguous
+band.** `worker/llm_escalation.py` consults the configured provider
+solely when fused risk lands in [0.35, 0.75) on a changed-but-not-
+flagged scan; a malicious classification with confidence >= 0.6
+upgrades changed to flagged and records the model's reasoning in the
+layer-8 evidence (visible in drilldown and reports). Already-flagged
+scans never spend an LLM call; a benign classification changes nothing
+(the deterministic engine's verdict stands — the LLM is a tiebreaker,
+never a veto). `escalate_scan` cannot raise: no key, rate limit, quota,
+network failure, or garbage response all degrade to "no escalation"
+with a status string in evidence. Gemini (`gemini-2.5-flash` via
+google-genai) is preferred when both providers are enabled; Ollama
+(OpenAI-compatible /v1) is the local fallback. `app/llm.py` enforces an
+aiolimiter 8-requests/60s ceiling, a 200-call/day in-process budget,
+and 3-attempt backoff on 429s.
+
+**"Explain this incident" is one cached implementation with two
+surfaces.** `app/explain.py` builds a compact incident-summary prompt
+from the scan + findings, calls the same provider resolution as
+escalation, and caches the result on the scan row
+(`explanation`/`explanation_provider`/`explanation_at`). The dashboard
+button and the bot's /explain both call it: same prompt, same cache
+(force-regenerate available in the UI), same degradation — no provider
+configured returns a clear "not configured" message, never a 500.
+
+**PDF export is WeasyPrint rendered in a worker thread inside the API
+process** — the Phase 0 WeasyPrint-over-Playwright rationale explicitly
+includes "report rendering must work even if the browser pool is
+saturated or wedged", so it must not queue behind scan jobs. The report
+is a Jinja2 HTML template using CSS Paged Media (dark cover page,
+running footer, numbered pages), screenshots embedded as data URIs read
+strictly from within the artifacts root (path-confined; a missing file
+degrades to a report without that image, never a failed export), and a
+pre-rendered static SVG timeline (no live JS in a print pipeline). The
+Markdown export shares the same `app/reporting.py` loader/formatting so
+both formats describe a scan identically; a WeasyPrint failure returns
+a 500 that names the Markdown export as the fallback. Evidence values
+are capped before rendering so oversized blobs never leak into an
+exported document. Report downloads in the SPA go through the
+authenticated blob helper (Bearer header, filename parsed from
+Content-Disposition).
+
+### Features landed
+
+Migration `e9a2b7c15f04`: `notification_channels`, `app_settings`,
+`alerts` (unique scan_id), `alert_deliveries`, `sites.muted_until`,
+`scans.explanation`/`explanation_provider`/`explanation_at`.
+`worker/telegram_stub.py` deleted — replaced by the real bot container.
+
+API: `/api/settings/{smtp,telegram,gemini,ollama}` GET/PUT + test
+endpoints, `/api/notification-channels` CRUD + per-channel test,
+`/api/alerts` (paginated, unacknowledged filter) + ack,
+`/api/sites/{id}/scans/{id}/explain` (force flag),
+`/api/reports/{scan_id}/{pdf,markdown}`; site PATCH gained
+`mute_minutes` (0 unmutes, 7-day cap — same cap as the bot's /mute).
+
+Frontend: new Settings page (channel presets ntfy/Discord/Slack/
+webhook + Email + Telegram, scope all-sites/per-site, per-channel
+test/disable/delete; SMTP card with test-gates-save; Telegram card with
+the BotFather walkthrough and live /start chat-capture polling; Gemini/
+Ollama card; secrets-at-rest note), new Alerts page (paginated feed,
+per-delivery status rows, idempotent acknowledge, 30s refresh), nav
+Sites / Alerts / Settings, scan drilldown gained PDF/Markdown export
+buttons and the Explain card (cached text + provider/timestamp,
+regenerate), site settings gained mute 1h/24h/unmute with the skipped-
+delivery explanation. All on the design tokens; no emoji.
+
+**Tests: 313 backend (was 249) + 19 frontend (was 17).** New backend
+(64): crypto round-trip/rotation, settings-store patch semantics,
+redaction (no secret ever appears in a GET body), channel validation
+(bad Apprise URL, missing recipient, cross-type fields), SMTP error
+taxonomy, delivery task (per-channel rows, mute -> skipped, idempotent
+re-run, broken-channel isolation), alert-on-flagged integration (alert
+row + enqueue, clean scan -> nothing, dead Redis never fails the scan,
+redelivery no duplicate), escalation wiring (band boundaries, upgrade +
+evidence, benign no-op, already-flagged short-circuit, exploding DB
+degrades), explain caching/degradation, report loader/markdown/
+filename/404s, inline-SMTP-test gating. New frontend: report download
+carries the Authorization header + parses the server filename; fallback
+filename when the header is missing.
+
+### Verified working (not just "should work")
+
+Live compose stack (all backend images rebuilt serially in the
+foreground; `alembic upgrade head` applied e9a2b7c15f04):
+- End-to-end alert chain with a real webhook receiver: local static
+  site baselined, page replaced with defacement-style content,
+  scan-now, **flagged at risk 0.99996**, alert row created,
+  `wardress.deliver_alert` ran, delivery row `sent`, and the receiver
+  logged the full Apprise JSON payload (title "Wardress alert: Phase4
+  Verify flagged at 100% risk", top-signal list, details link).
+  Acknowledge from the dashboard verified.
+- Flagged-scan PDF export (7 pages) rendered and visually reviewed
+  page-by-page: dark cover, executive summary, side-by-side
+  baseline/current screenshots, timeline SVG, per-layer findings
+  tables, numbered footer. Markdown export verified. Both filenames
+  carry the site slug + scan-id prefix.
+- Explain endpoint with no provider configured returns the clean
+  "no AI provider is configured" degradation (503), not a stack trace.
+- Telegram bot lifecycle against the live DB: idle with no token; a
+  placeholder token saved through Settings was picked up from the DB
+  within ~30s; Telegram's InvalidToken answered with the plain-language
+  warning + 60s backoff (no crash-loop); token cleared, bot idle again.
+  (`TELEGRAM_BOT_TOKEN` and `GEMINI_API_KEY` confirmed empty in .env —
+  checked lengths only, values never printed.)
+- Settings/Alerts/scan-drilldown UI driven headlessly against the live
+  stack; screenshots reviewed against DESIGN-resend.md (true-black
+  canvas, hairline cards, correct type lanes; no emoji).
+- All QA fixtures cleaned up afterwards: verify site + channel deleted,
+  local receivers stopped, scratch directories removed.
+
+### Incidents & resolutions (found during this phase's QA pass)
+
+1. **The SMTP test button did not actually gate Save.** §8 says "Send
+   Test Email" gates the Save action, but the first implementation
+   tested only stored settings — the user had to save unverified
+   credentials first. Fixed: the test endpoint accepts inline unsaved
+   settings (omitted password falls back to stored), and the frontend
+   disables Save until a test passes against the current form values,
+   re-locking on any edit. Two regression tests pin the endpoint
+   semantics.
+2. **Escalation integration tests initially asserted the wrong band** —
+   the defacement fixture fuses to risk ~0.9999, above the tests' 0.9
+   threshold, so the scan was already flagged and escalation never ran.
+   Thresholds raised to 1.0 in those tests so the ambiguous-band path
+   is genuinely exercised.
+3. **`app/reporting.py`'s docstring contradicted the implementation**
+   (claimed PDF rendering happens in the worker; it happens in the API
+   process per the reports-router rationale). Docstring corrected —
+   caught by the fresh-file re-read rule of the §13 charter.
+4. **jsdom/Node Response mismatch in the new frontend test** — jsdom's
+   Blob lacks `stream()`, so Node's `Response` constructor rejected it;
+   fixed by passing bytes/strings directly, with an explanatory comment.
+5. Access token expired twice during live verification (15-minute TTL,
+   by design) — re-logged in from .env credentials without printing
+   them. Same class as the Phase 3 incident; live-QA scripts now
+   re-login as a matter of course.
+
+### Deliberate deferrals (not bugs)
+
+- **The LLM daily budget is per-process and in-memory** (resets on
+  restart). It is a cost guardrail, not an entitlement system; a
+  durable counter is unnecessary complexity at this scale.
+- **The Telegram bot is single-owner by design** — one captured chat,
+  every other chat refused. Multi-user bot access belongs with the
+  Phase 5 RBAC work, if it is wanted at all.
+- **Alert channels and settings are not RBAC-scoped yet** — the same
+  standing deferral as every other mutating endpoint until the Phase 5
+  role-enforcement pass.
+- **Escalation runs only in the [0.35, 0.75) band on changed scans.**
+  Below it the engine is confidently clean; above it the deterministic
+  layers already flag. Widening the band is a tuning decision for
+  real-world feedback, not a change to make now.
+- **No live Gemini/Ollama key verification this phase** — no real keys
+  exist in this environment; the invalid-key, rate-limit, and
+  dead-endpoint degradation paths are covered by tests, and the
+  Settings test buttons give the user a one-click live check once keys
+  are added.
+- **Manual negative/malformed-traffic QA** against the running stack
+  remains the user's sign-off step outside Claude Code, per the
+  Phase 0 sign-off decision — unchanged for this phase.
+
+---

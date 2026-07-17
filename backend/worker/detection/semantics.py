@@ -152,8 +152,9 @@ def layer8_semantics(baseline: PageData, current: PageData) -> dict:
         ),
         "semantic_drift_score": round(drift_score, 4),
         "new_text_chars": len(new_text),
-        # Phase 4 wires Gemini (gemini-2.5-flash) / Ollama here for the
-        # ambiguous middle band; absent config must never block scans.
-        "escalation": "not configured (local pass only in Phase 2)",
+        # §8 escalation: the scan task overwrites this dict for scans in
+        # the ambiguous risk band when Gemini/Ollama is configured; the
+        # local pass never depends on it (degrade silently).
+        "escalation": {"status": "not evaluated (outside ambiguous band or not configured)"},
     }
     return layer_result(score, evidence)

@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://redis:6379/0"
     jwt_secret: str
+    # Fernet key material for credentials at rest (app/crypto.py). Any
+    # sufficiently-random string; install.ps1 generates it. No default —
+    # a missing key must fail loudly, never fall back to guessable.
+    credentials_encryption_key: str
+
+    @field_validator("credentials_encryption_key")
+    @classmethod
+    def encryption_key_strong_enough(cls, v: str) -> str:
+        if len(v.encode("utf-8")) < 32:
+            raise ValueError("CREDENTIALS_ENCRYPTION_KEY must be at least 32 bytes")
+        return v
 
     @field_validator("jwt_secret")
     @classmethod
@@ -40,6 +51,18 @@ class Settings(BaseSettings):
     # Set true when serving over HTTPS so the refresh cookie is
     # Secure-flagged. Defaults false for the localhost self-hosted case.
     cookie_secure: bool = False
+
+    # --- Optional intelligence layer (§8). The DB settings rows (Settings
+    # screen) are the source of truth; these env values act only as
+    # bootstrap defaults for a fresh install that pre-set them in .env.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    enable_ollama: bool = False
+    ollama_base_url: str = "http://ollama:11434/v1"
+
+    # Shown in alert emails/messages as the dashboard link target; the
+    # self-hosted default is the local port from install.ps1.
+    public_base_url: str = "http://localhost:8321"
 
 
 @lru_cache

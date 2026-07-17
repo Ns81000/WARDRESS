@@ -37,6 +37,28 @@ export function AppShell() {
             >
               Sites
             </NavLink>
+            <NavLink
+              to="/alerts"
+              className={({ isActive }) =>
+                cn(
+                  "text-button-sm transition-colors",
+                  isActive ? "text-ink" : "text-charcoal hover:text-ink"
+                )
+              }
+            >
+              Alerts
+            </NavLink>
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  "text-button-sm transition-colors",
+                  isActive ? "text-ink" : "text-charcoal hover:text-ink"
+                )
+              }
+            >
+              Settings
+            </NavLink>
           </nav>
 
           <div className="flex items-center gap-4">

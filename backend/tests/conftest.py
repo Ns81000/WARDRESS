@@ -8,6 +8,9 @@ import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production-0123456789abcdef")
+os.environ.setdefault(
+    "CREDENTIALS_ENCRYPTION_KEY", "test-encryption-key-not-for-production-0123456789"
+)
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

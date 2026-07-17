@@ -42,6 +42,15 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """Normalize a DB datetime to aware-UTC. The SQLite test backend
+    returns naive datetimes; Postgres returns aware ones — comparisons
+    against datetime.now(UTC) must work identically on both."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
 class Base(DeclarativeBase):
     type_annotation_map = {
         dict: JSONDict,
@@ -80,6 +89,24 @@ class SuppressionRuleType(enum.StrEnum):
     css_selector = "css_selector"
     regex = "regex"
     bbox = "bbox"
+
+
+class NotificationChannelType(enum.StrEnum):
+    """§6 notification_channels.type. `email` sends through the stored
+    SMTP settings; `telegram` builds an Apprise tgram:// URL from the
+    stored bot token + chat ID; `apprise_url` is a raw user-supplied
+    Apprise URL (Discord/Slack/ntfy/webhook/...)."""
+
+    email = "email"
+    telegram = "telegram"
+    apprise_url = "apprise_url"
+
+
+class AlertDeliveryStatus(enum.StrEnum):
+    pending = "pending"
+    sent = "sent"
+    failed = "failed"  # logged and visible in the UI — never crashes a scan
+    skipped = "skipped"  # e.g. site muted, channel disabled
 
 
 def _enum(e: type[enum.StrEnum], name: str) -> Enum:
@@ -151,6 +178,11 @@ class Site(Base):
     next_scan_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None, index=True
     )
+    # --- Phase 4: alerting state ---
+    # Muted sites still scan and store findings; only alert *delivery* is
+    # suppressed (recorded as skipped, visible in the UI). Set via the
+    # Telegram bot's /mute or the dashboard.
+    muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     baselines: Mapped[list["Baseline"]] = relationship(
@@ -194,6 +226,103 @@ class SuppressionRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     site: Mapped[Site] = relationship(back_populates="suppression_rules")
+
+
+class NotificationChannel(Base):
+    """§6 notification_channels: one alert destination. `config` is a
+    Fernet-encrypted JSON blob (app/crypto.py) — an Apprise URL, or the
+    telegram chat reference — because Apprise URLs embed credentials
+    (webhook tokens, SMTP passwords) and must never sit in plaintext.
+
+    `site_id` NULL = global channel (alerts for every site); set = only
+    that site's alerts (§8 "configurable per site or globally")."""
+
+    __tablename__ = "notification_channels"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), default=None, index=True
+    )
+    type: Mapped[NotificationChannelType] = mapped_column(
+        _enum(NotificationChannelType, "notification_channel_type")
+    )
+    # Human label ("Ops Discord", "On-call email").
+    name: Mapped[str] = mapped_column(String(200))
+    config_encrypted: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AppSetting(Base):
+    """Singleton config blobs keyed by name ("smtp", "telegram", "gemini",
+    "ollama"). Values are Fernet-encrypted JSON — every one of these
+    holds a credential or sits next to one."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value_encrypted: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Alert(Base):
+    """§6 alerts: one row per flagged scan. Delivery attempts live in
+    alert_deliveries; acknowledgement (dashboard or bot /ack) here."""
+
+    __tablename__ = "alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), index=True
+    )
+    scan_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scans.id", ondelete="CASCADE"), index=True, unique=True
+    )
+    risk_score: Mapped[float | None] = mapped_column(Float, default=None)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    # "dashboard" | "telegram" — where the ack came from.
+    acknowledged_via: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    deliveries: Mapped[list["AlertDelivery"]] = relationship(
+        back_populates="alert", cascade="all, delete-orphan"
+    )
+
+
+class AlertDelivery(Base):
+    """One delivery attempt of one alert to one channel. Failures are
+    recorded here (status=failed + detail) and surfaced in the UI —
+    a broken channel must be visible, and must never crash a scan."""
+
+    __tablename__ = "alert_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("alerts.id", ondelete="CASCADE"), index=True
+    )
+    channel_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("notification_channels.id", ondelete="SET NULL"), default=None
+    )
+    # Denormalized so a deleted channel's history stays readable.
+    channel_name: Mapped[str] = mapped_column(String(200))
+    channel_type: Mapped[str] = mapped_column(String(32))
+    status: Mapped[AlertDeliveryStatus] = mapped_column(
+        _enum(AlertDeliveryStatus, "alert_delivery_status"),
+        default=AlertDeliveryStatus.pending,
+    )
+    # User-safe failure/skip reason ("SMTP authentication failed", "site
+    # muted until ..."), never a raw traceback or a credential.
+    detail: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    alert: Mapped[Alert] = relationship(back_populates="deliveries")
 
 
 class Baseline(Base):
@@ -262,6 +391,12 @@ class Scan(Base):
     # Fused risk score from layer 9 (0-1). Own indexed column — the
     # dashboard filters and thresholds on it (never buried in JSON).
     risk_score: Mapped[float | None] = mapped_column(Float, default=None, index=True)
+    # Phase 4 "Explain this incident" (§8): plain-English summary from
+    # Gemini/Ollama, generated on demand and cached here (one explanation
+    # per scan; regenerating overwrites).
+    explanation: Mapped[str | None] = mapped_column(Text, default=None)
+    explanation_provider: Mapped[str | None] = mapped_column(String(32), default=None)
+    explanation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

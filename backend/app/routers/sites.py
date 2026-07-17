@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import CurrentUser
+from app.explain import ExplainError, explain_scan
 from app.models import (
     Baseline,
     BaselineStatus,
@@ -24,6 +25,7 @@ from app.models import (
 from app.scanning import clamp_interval, is_stale
 from app.schemas import (
     BaselineOut,
+    ExplainResponse,
     ScanDetailOut,
     ScanFindingOut,
     ScanOut,
@@ -187,6 +189,14 @@ async def update_site(
         site.current_interval_minutes = None
         if site.auto_scan_enabled:
             site.next_scan_at = datetime.now(UTC) + timedelta(minutes=site.scan_interval_minutes)
+    if body.mute_minutes is not None:
+        # Alert mute (Phase 4): scans continue, only delivery is skipped
+        # (and recorded as skipped). 0 unmutes immediately.
+        site.muted_until = (
+            datetime.now(UTC) + timedelta(minutes=body.mute_minutes)
+            if body.mute_minutes > 0
+            else None
+        )
     await db.commit()
 
     baseline = await _current_baseline(db, site.id)
@@ -341,6 +351,37 @@ async def get_scan(
     return ScanDetailOut(
         **ScanOut.model_validate(scan).model_dump(),
         findings=[ScanFindingOut.model_validate(f) for f in findings],
+        explanation=scan.explanation,
+        explanation_provider=scan.explanation_provider,
+        explanation_at=scan.explanation_at,
+    )
+
+
+@router.post("/{site_id}/scans/{scan_id}/explain", response_model=ExplainResponse)
+async def explain_incident(
+    site_id: uuid.UUID,
+    scan_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    force: Annotated[bool, Query()] = False,
+) -> ExplainResponse:
+    """§8 "Explain this incident": plain-English summary of the scan's
+    findings via the configured Gemini/Ollama provider, cached on the
+    scan. 503 when no provider is configured or it cannot answer — never
+    a crash, and never a blocker for anything else."""
+    await _get_site_or_404(db, site_id)
+    scan = await db.scalar(select(Scan).where(Scan.id == scan_id, Scan.site_id == site_id))
+    if scan is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan not found")
+    try:
+        result = await explain_scan(db, scan_id, force=force)
+    except ExplainError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from None
+    return ExplainResponse(
+        explanation=result["explanation"],
+        provider=result["provider"],
+        generated_at=result["generated_at"],
+        cached=result["cached"],
     )
 
 

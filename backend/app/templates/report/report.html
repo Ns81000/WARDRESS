@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wardress incident report</title>
+<style>
+  /* WeasyPrint CSS Paged Media (§8): cover page, running headers/footers,
+     numbered pages, controlled breaks around tables and images. Print
+     surfaces are light (paper), with the brand carried by type and the
+     accent tokens from DESIGN-resend.md used as text/border colors only. */
+  @page {
+    size: A4;
+    margin: 22mm 18mm 20mm 18mm;
+    @top-left {
+      content: "WARDRESS";
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 8pt;
+      letter-spacing: 1px;
+      color: #888e90;
+    }
+    @top-right {
+      content: "{{ site_name }} — incident report";
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 8pt;
+      color: #888e90;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 8pt;
+      color: #888e90;
+    }
+  }
+  @page cover {
+    margin: 0;
+    @top-left { content: none; }
+    @top-right { content: none; }
+    @bottom-right { content: none; }
+  }
+
+  body {
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    color: #1a1c1e;
+    margin: 0;
+  }
+
+  /* --- Cover page: the one dark surface, per the brand canvas --- */
+  .cover {
+    page: cover;
+    width: 100%;
+    height: 297mm;
+    background-color: #000000;
+    color: #fcfdff;
+    page-break-after: always;
+  }
+  .cover-inner { padding: 40mm 22mm; }
+  .cover .wordmark {
+    font-size: 11pt; font-weight: 600; letter-spacing: 3px;
+    color: rgba(252, 253, 255, 0.7); margin: 0 0 28mm 0;
+  }
+  .cover h1 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 30pt; font-weight: 400; line-height: 1.05;
+    letter-spacing: -0.5pt; margin: 0 0 10mm 0; color: #fcfdff;
+  }
+  .cover .verdict {
+    font-size: 13pt; margin: 0 0 20mm 0;
+    color: {{ verdict_color }};
+  }
+  .cover table { border-collapse: collapse; }
+  .cover td {
+    font-size: 10pt; padding: 2.5mm 0;
+    border-bottom: 0.3pt solid rgba(255, 255, 255, 0.14);
+    color: rgba(252, 253, 255, 0.86);
+  }
+  .cover td.k { color: #a1a4a5; width: 42mm; padding-right: 6mm; }
+  .cover .tagline {
+    position: absolute; bottom: 18mm; left: 22mm;
+    font-size: 9pt; color: #888e90;
+  }
+
+  /* --- Content pages --- */
+  h2 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 16pt; font-weight: 400; letter-spacing: -0.2pt;
+    margin: 0 0 4mm 0; padding-bottom: 2mm;
+    border-bottom: 0.5pt solid #c8ccce;
+    page-break-after: avoid;
+  }
+  section { margin-bottom: 9mm; }
+  h3 {
+    font-size: 11pt; font-weight: 600; margin: 6mm 0 2mm 0;
+    page-break-after: avoid;
+  }
+  p { margin: 0 0 3mm 0; }
+  .muted { color: #5c6164; }
+
+  table.data {
+    width: 100%; border-collapse: collapse; margin: 2mm 0 4mm 0;
+    page-break-inside: auto;
+  }
+  table.data th {
+    text-align: left; font-size: 8.5pt; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5pt; color: #5c6164;
+    padding: 1.8mm 2.5mm; border-bottom: 0.7pt solid #9aa0a3;
+  }
+  table.data td {
+    font-size: 9pt; padding: 1.8mm 2.5mm; vertical-align: top;
+    border-bottom: 0.3pt solid #dfe2e4;
+  }
+  table.data tr { page-break-inside: avoid; }
+  td.evidence-key { width: 42mm; color: #5c6164; }
+  td.num { text-align: right; white-space: nowrap; }
+
+  .finding {
+    border: 0.5pt solid #c8ccce; border-radius: 3mm;
+    padding: 4mm 5mm; margin: 0 0 4mm 0;
+    page-break-inside: avoid;
+  }
+  .finding.allow-break { page-break-inside: auto; }
+  .finding-head { width: 100%; }
+  .finding-title { font-size: 11pt; font-weight: 600; }
+  .finding-score { float: right; font-size: 11pt; font-weight: 600; }
+  .score-high { color: #d31438; }
+  .score-mid { color: #c05a00; }
+  .score-low { color: #0f7a4d; }
+  .score-skip { color: #888e90; font-weight: 400; }
+
+  .shots { width: 100%; margin: 2mm 0 4mm 0; page-break-inside: avoid; }
+  .shots td { width: 50%; padding: 0 2mm 0 0; vertical-align: top; }
+  .shots img {
+    width: 100%; border: 0.5pt solid #c8ccce; border-radius: 2mm;
+  }
+  .shots .cap {
+    font-size: 8pt; color: #5c6164; margin-top: 1mm;
+  }
+
+  .timeline-wrap { page-break-inside: avoid; }
+  .timeline-wrap svg, .timeline-wrap img { width: 100%; }
+
+  .explanation {
+    border-left: 1mm solid #3b9eff; padding: 2mm 0 2mm 4mm;
+    margin: 2mm 0 4mm 0; page-break-inside: avoid;
+  }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="cover-inner">
+    <p class="wordmark">WARDRESS</p>
+    <h1>Incident report<br>{{ site_name }}</h1>
+    <p class="verdict">Verdict: {{ verdict_label }} &mdash; fused risk {{ risk_pct }}</p>
+    <table>
+      <tr><td class="k">Site URL</td><td>{{ site_url }}</td></tr>
+      <tr><td class="k">Scan</td><td>{{ scan_id }}</td></tr>
+      <tr><td class="k">Scanned</td><td>{{ scanned_at }}</td></tr>
+      <tr><td class="k">Baseline captured</td><td>{{ baseline_at }}</td></tr>
+      <tr><td class="k">Alert threshold</td><td>{{ threshold_pct }}</td></tr>
+      <tr><td class="k">Report generated</td><td>{{ generated_at }}</td></tr>
+    </table>
+    <p class="tagline">The watch that never stands down.</p>
+  </div>
+</div>
+
+<section>
+  <h2>Executive summary</h2>
+  <p>
+    Wardress scanned <strong>{{ site_name }}</strong> ({{ site_url }}) on {{ scanned_at }}
+    and reached the verdict <strong>{{ verdict_label }}</strong> with a fused risk score of
+    <strong>{{ risk_pct }}</strong> against an alert threshold of {{ threshold_pct }}.
+    {{ summary_sentence }}
+  </p>
+  {% if explanation %}
+  <div class="explanation">
+    <p class="muted" style="font-size:8.5pt; margin-bottom:1mm;">AI analyst summary ({{ explanation_provider }})</p>
+    <p>{{ explanation }}</p>
+  </div>
+  {% endif %}
+</section>
+
+{% if baseline_shot or scan_shot %}
+<section>
+  <h2>Captured evidence</h2>
+  <table class="shots">
+    <tr>
+      <td>
+        {% if baseline_shot %}<img src="{{ baseline_shot }}" alt="Baseline screenshot">
+        <p class="cap">Trusted baseline ({{ baseline_at }})</p>{% endif %}
+      </td>
+      <td>
+        {% if scan_shot %}<img src="{{ scan_shot }}" alt="Current screenshot">
+        <p class="cap">This scan ({{ scanned_at }})</p>{% endif %}
+      </td>
+    </tr>
+  </table>
+</section>
+{% endif %}
+
+<section>
+  <h2>Incident timeline</h2>
+  <p class="muted">Fused risk across the {{ history_count }} most recent scans; the dashed line marks the alert threshold, the highlighted point is this report's scan.</p>
+  <div class="timeline-wrap">{{ timeline_svg }}</div>
+</section>
+
+<section>
+  <h2>Per-layer findings</h2>
+  {% for finding in findings %}
+  <div class="finding{% if finding.rows|length > 12 %} allow-break{% endif %}">
+    <div class="finding-head">
+      <span class="finding-score {{ finding.score_class }}">{{ finding.score_display }}</span>
+      <span class="finding-title">{{ finding.title }}</span>
+    </div>
+    {% if finding.skipped %}
+    <p class="muted">Skipped: {{ finding.skip_reason }}</p>
+    {% elif finding.rows %}
+    <table class="data">
+      <tr><th>Evidence</th><th>Value</th></tr>
+      {% for key, value in finding.rows %}
+      <tr><td class="evidence-key">{{ key }}</td><td>{{ value }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No additional evidence recorded.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section>
+  <h2>Recent scan history</h2>
+  <table class="data">
+    <tr><th>Scan time</th><th>Verdict</th><th style="text-align:right">Risk</th></tr>
+    {% for row in history %}
+    <tr>
+      <td>{{ row.when }}</td>
+      <td>{{ row.verdict }}{% if row.mine %} (this report){% endif %}</td>
+      <td class="num">{{ row.risk }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+</body>
+</html>

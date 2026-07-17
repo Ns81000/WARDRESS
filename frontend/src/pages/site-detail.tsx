@@ -94,6 +94,9 @@ function SettingsCard({ site }: { site: Site }) {
   const [interval, setInterval] = useState(String(site.scan_interval_minutes))
   const [autoScan, setAutoScan] = useState(site.auto_scan_enabled)
 
+  const muted =
+    site.muted_until != null && new Date(site.muted_until).getTime() > Date.now()
+
   const mutation = useMutation({
     mutationFn: (patch: apiClient.SiteSettingsPatch) =>
       apiClient.updateSite(site.id, patch),
@@ -103,6 +106,22 @@ function SettingsCard({ site }: { site: Site }) {
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Could not save settings")
+    },
+  })
+
+  const muteMutation = useMutation({
+    mutationFn: (minutes: number) =>
+      apiClient.updateSite(site.id, { mute_minutes: minutes }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: ["sites", site.id] })
+      toast.success(
+        updated.muted_until
+          ? `Alerts muted until ${new Date(updated.muted_until).toLocaleString()}`
+          : "Alerts unmuted"
+      )
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : "Could not change mute state")
     },
   })
 
@@ -175,6 +194,51 @@ function SettingsCard({ site }: { site: Site }) {
             {site.current_interval_minutes
               ? ` · current cadence ${site.current_interval_minutes} min`
               : ""}
+          </p>
+        )}
+        <div className="flex items-center justify-between border-t border-hairline pt-4">
+          <div className="flex items-center gap-2 text-body-sm text-body">
+            <StatusDot state={muted ? "pending" : "clean"} />
+            {muted
+              ? `Alerts muted until ${new Date(site.muted_until!).toLocaleString()}`
+              : "Alert delivery active"}
+          </div>
+          <div className="flex items-center gap-1">
+            {muted ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={muteMutation.isPending}
+                onClick={() => muteMutation.mutate(0)}
+              >
+                Unmute
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={muteMutation.isPending}
+                  onClick={() => muteMutation.mutate(60)}
+                >
+                  Mute 1h
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={muteMutation.isPending}
+                  onClick={() => muteMutation.mutate(24 * 60)}
+                >
+                  24h
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+        {muted && (
+          <p className="text-caption text-mute">
+            Scans keep running while muted; skipped deliveries stay visible on
+            the Alerts page.
           </p>
         )}
         <Button

@@ -6,7 +6,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
-from app.models import BaselineStatus, ScanStatus, ScanVerdict, SuppressionRuleType, UserRole
+from app.models import (
+    AlertDeliveryStatus,
+    BaselineStatus,
+    NotificationChannelType,
+    ScanStatus,
+    ScanVerdict,
+    SuppressionRuleType,
+    UserRole,
+)
 
 # --- Auth ---
 
@@ -68,6 +76,9 @@ class SiteUpdate(BaseModel):
     flag_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     auto_scan_enabled: bool | None = None
     scan_interval_minutes: int | None = Field(default=None, ge=5, le=24 * 60)
+    # Alert mute (Phase 4): minutes from now; 0 unmutes. Scans continue,
+    # only alert delivery is skipped (and recorded as skipped).
+    mute_minutes: int | None = Field(default=None, ge=0, le=7 * 24 * 60)
 
 
 class SiteOut(BaseModel):
@@ -83,6 +94,7 @@ class SiteOut(BaseModel):
     scan_interval_minutes: int
     current_interval_minutes: int | None
     next_scan_at: datetime | None
+    muted_until: datetime | None
     created_at: datetime
 
 
@@ -143,6 +155,10 @@ class ScanFindingOut(BaseModel):
 
 class ScanDetailOut(ScanOut):
     findings: list[ScanFindingOut] = []
+    # Cached "Explain this incident" output (§8), if generated.
+    explanation: str | None = None
+    explanation_provider: str | None = None
+    explanation_at: datetime | None = None
 
 
 class ScanPage(BaseModel):
@@ -236,3 +252,231 @@ class SuppressionRuleOut(BaseModel):
     value: str
     note: str | None
     created_at: datetime
+
+
+# --- Phase 4: notification channels (§6/§8) ---
+
+# Apprise service URL schemes surfaced in the UI. Any Apprise URL is
+# accepted (that's the point of Apprise); this list only powers helper
+# text and the `kind` label stored with the channel.
+_APPRISE_URL_MAX = 1024
+
+
+class NotificationChannelCreate(BaseModel):
+    type: NotificationChannelType
+    name: str = Field(min_length=1, max_length=200)
+    site_id: uuid.UUID | None = None
+    # email channels: the recipient address.
+    to: str | None = Field(default=None, max_length=320)
+    # apprise_url channels: the service URL (discord://, slack://,
+    # ntfy://, tgram://, json:// webhook, mailto://, ...).
+    url: str | None = Field(default=None, max_length=_APPRISE_URL_MAX)
+    # Optional display label of the service kind ("discord", "ntfy", ...).
+    kind: str | None = Field(default=None, max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
+    def validate_for_type(self) -> dict:
+        """Returns the config dict to encrypt, or raises ValueError."""
+        if self.type is NotificationChannelType.email:
+            to = (self.to or "").strip()
+            if not to or "@" not in to:
+                raise ValueError("email channels need a valid recipient address")
+            return {"to": to}
+        if self.type is NotificationChannelType.telegram:
+            # Chat ID comes from the global telegram settings (auto-
+            # captured by /start); nothing channel-specific to store.
+            return {}
+        # apprise_url
+        url = (self.url or "").strip()
+        if not url:
+            raise ValueError("a service URL is required")
+        if "://" not in url:
+            raise ValueError("the service URL must look like scheme://... (an Apprise URL)")
+        # Reject URLs Apprise itself can't parse, with the same library
+        # the delivery path uses — a channel that saves must be sendable.
+        import apprise
+
+        if not apprise.Apprise().add(url):
+            raise ValueError(
+                "Apprise does not recognize this service URL — check the scheme and format"
+            )
+        return {"url": url, "kind": (self.kind or "").strip() or "apprise"}
+
+
+class NotificationChannelOut(BaseModel):
+    """Channel metadata only — the stored config is encrypted and never
+    round-trips to the client. `target_hint` is a redacted display hint
+    ("ops@ex...", "discord://...") built at read time."""
+
+    id: uuid.UUID
+    type: NotificationChannelType
+    name: str
+    site_id: uuid.UUID | None
+    is_active: bool
+    target_hint: str
+    created_at: datetime
+
+
+class NotificationChannelUpdate(BaseModel):
+    is_active: bool | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+# --- Phase 4: settings blobs (§7 /api/settings/*) ---
+
+
+class SmtpSettingsIn(BaseModel):
+    host: str = Field(min_length=1, max_length=253)
+    port: int = Field(default=587, ge=1, le=65535)
+    security: str = Field(default="starttls", pattern="^(starttls|tls|none)$")
+    username: str | None = Field(default=None, max_length=320)
+    # None means "keep the stored password" on update; empty string clears.
+    password: str | None = Field(default=None, max_length=1024)
+    from_addr: str = Field(min_length=3, max_length=320)
+    from_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("from_addr")
+    @classmethod
+    def from_addr_shape(cls, v: str) -> str:
+        v = v.strip()
+        if "@" not in v:
+            raise ValueError("from address must be an email address")
+        return v
+
+
+class SmtpSettingsOut(BaseModel):
+    configured: bool
+    host: str | None = None
+    port: int | None = None
+    security: str | None = None
+    username: str | None = None
+    has_password: bool = False
+    from_addr: str | None = None
+    from_name: str | None = None
+
+
+class SmtpTestRequest(BaseModel):
+    to: str = Field(min_length=3, max_length=320)
+    # Optional inline settings: §8's "Send Test Email" button gates the
+    # Save action, so the test must exercise the *form's* values before
+    # anything is persisted. Omitted -> test the stored settings. An
+    # omitted password inside inline settings falls back to the stored
+    # one, so editing the host doesn't force retyping the credential.
+    settings: SmtpSettingsIn | None = None
+
+    @field_validator("to")
+    @classmethod
+    def to_shape(cls, v: str) -> str:
+        v = v.strip()
+        if "@" not in v:
+            raise ValueError("recipient must be an email address")
+        return v
+
+
+class TelegramSettingsIn(BaseModel):
+    # None keeps the stored token; empty string clears the configuration.
+    bot_token: str | None = Field(default=None, max_length=256)
+
+    @field_validator("bot_token")
+    @classmethod
+    def token_shape(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if v and not re.match(r"^\d+:[\w-]+$", v):
+            raise ValueError(
+                "that does not look like a bot token (expected '<digits>:<secret>' from BotFather)"
+            )
+        return v
+
+
+class TelegramSettingsOut(BaseModel):
+    configured: bool
+    token_hint: str | None = None  # "1234567890:AAAA..." redacted
+    chat_id: str | None = None  # captured by /start; shown so the user knows it worked
+    chat_captured_at: str | None = None
+
+
+class GeminiSettingsIn(BaseModel):
+    # None keeps the stored key; empty string clears.
+    api_key: str | None = Field(default=None, max_length=256)
+    enabled: bool = True
+
+
+class GeminiSettingsOut(BaseModel):
+    configured: bool
+    enabled: bool = False
+    key_hint: str | None = None
+    model: str = "gemini-2.5-flash"
+
+
+class OllamaSettingsIn(BaseModel):
+    enabled: bool = False
+    base_url: str | None = Field(default=None, max_length=512)
+    model: str | None = Field(default=None, max_length=128)
+
+
+class OllamaSettingsOut(BaseModel):
+    configured: bool
+    enabled: bool = False
+    base_url: str | None = None
+    model: str | None = None
+
+
+class SettingsTestResult(BaseModel):
+    ok: bool
+    detail: str
+
+
+# --- Phase 4: alerts (§6/§7) ---
+
+
+class AlertDeliveryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    channel_id: uuid.UUID | None
+    channel_name: str
+    channel_type: str
+    status: AlertDeliveryStatus
+    detail: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class AlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    site_id: uuid.UUID
+    scan_id: uuid.UUID
+    risk_score: float | None
+    acknowledged_at: datetime | None
+    acknowledged_via: str | None
+    created_at: datetime
+
+
+class AlertDetailOut(AlertOut):
+    site_name: str | None = None
+    deliveries: list[AlertDeliveryOut] = []
+
+
+class AlertPage(BaseModel):
+    items: list[AlertDetailOut]
+    total: int
+    offset: int
+    limit: int
+
+
+class ExplainResponse(BaseModel):
+    explanation: str
+    provider: str
+    generated_at: datetime
+    cached: bool

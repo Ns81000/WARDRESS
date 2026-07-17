@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wardress alert</title>
+<style>
+  /* Tokens from DESIGN-resend.md: true-black canvas, off-white ink,
+     hairline borders, 12px cards, wash-only accents. Inlined by
+     premailer before send. */
+  body { margin: 0; padding: 0; background-color: #000000; }
+  .canvas { background-color: #000000; padding: 32px 16px; }
+  .card {
+    max-width: 560px; margin: 0 auto; background-color: #0a0a0c;
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;
+    padding: 32px;
+    font-family: Inter, Helvetica, Arial, sans-serif;
+    color: #fcfdff;
+  }
+  .wordmark {
+    font-size: 14px; font-weight: 500; letter-spacing: 0.35px;
+    color: rgba(252,253,255,0.7); margin: 0 0 24px 0;
+  }
+  .headline {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 28px; font-weight: 400; line-height: 1.1;
+    letter-spacing: -0.3px; color: #fcfdff; margin: 0 0 8px 0;
+  }
+  .risk-line {
+    font-size: 16px; color: #ff2047; margin: 0 0 24px 0;
+  }
+  .meta-table { width: 100%; border-collapse: collapse; margin: 0 0 24px 0; }
+  .meta-table td {
+    font-size: 14px; line-height: 1.43; padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    color: rgba(252,253,255,0.86);
+  }
+  .meta-table td.k { color: #a1a4a5; width: 128px; }
+  .signals-title {
+    font-size: 12px; font-weight: 500; letter-spacing: 0.35px;
+    text-transform: uppercase; color: #a1a4a5; margin: 0 0 8px 0;
+  }
+  .signal-row td {
+    font-size: 14px; padding: 6px 0; color: rgba(252,253,255,0.86);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .signal-row td.pct { text-align: right; color: #ff801f; }
+  .cta {
+    display: inline-block; background-color: #fcfdff; color: #000000;
+    font-size: 14px; font-weight: 500; text-decoration: none;
+    padding: 8px 16px; border-radius: 8px; margin-top: 24px;
+  }
+  .footer {
+    max-width: 560px; margin: 16px auto 0 auto; text-align: center;
+    font-family: Inter, Helvetica, Arial, sans-serif;
+    font-size: 12px; color: #888e90;
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="card">
+      <p class="wordmark">WARDRESS</p>
+      <h1 class="headline">{{ site_name }} was flagged</h1>
+      <p class="risk-line">Fused risk {{ risk_pct }} &mdash; at or above the {{ threshold_pct }} alert threshold</p>
+      <table class="meta-table">
+        <tr><td class="k">Site</td><td>{{ site_name }}</td></tr>
+        <tr><td class="k">URL</td><td>{{ site_url }}</td></tr>
+        <tr><td class="k">Detected</td><td>{{ detected_at }}</td></tr>
+      </table>
+      {% if top_layers %}
+      <p class="signals-title">Top signals</p>
+      <table class="meta-table">
+        {% for layer in top_layers %}
+        <tr class="signal-row"><td>{{ layer.label }}</td><td class="pct">{{ layer.pct }}</td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+      <a class="cta" href="{{ scan_link }}">Open the incident</a>
+    </div>
+    <p class="footer">Sent by your self-hosted Wardress instance. The watch that never stands down.</p>
+  </div>
+</body>
+</html>

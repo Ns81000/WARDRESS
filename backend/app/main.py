@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
-from app.routers import artifacts, auth, sites
+from app.routers import alerts, artifacts, auth, reports, settings, sites
 
 app = FastAPI(
     title="Wardress",
@@ -26,6 +26,10 @@ async def health() -> dict[str, str]:
 app.include_router(auth.router)
 app.include_router(sites.router)
 app.include_router(artifacts.router)
+app.include_router(alerts.router)
+app.include_router(settings.router)
+app.include_router(settings.channels_router)
+app.include_router(reports.router)
 
 
 class SPAStaticFiles(StaticFiles):

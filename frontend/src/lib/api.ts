@@ -120,6 +120,7 @@ export interface Site {
   scan_interval_minutes: number
   current_interval_minutes: number | null
   next_scan_at: string | null
+  muted_until: string | null
   created_at: string
   baseline_id: string | null
   baseline_status: BaselineStatus | null
@@ -153,6 +154,9 @@ export interface ScanFinding {
 
 export interface ScanDetail extends Scan {
   findings: ScanFinding[]
+  explanation: string | null
+  explanation_provider: string | null
+  explanation_at: string | null
 }
 
 export interface ScanPage {
@@ -177,6 +181,7 @@ export interface SiteSettingsPatch {
   flag_threshold?: number
   auto_scan_enabled?: boolean
   scan_interval_minutes?: number
+  mute_minutes?: number
 }
 
 export const login = (email: string, password: string) =>
@@ -261,4 +266,183 @@ async function artifactFetch(path: string): Promise<Response> {
   }
   if (!resp.ok) throw new ApiError(resp.status, `Artifact unavailable (${resp.status})`)
   return resp
+}
+
+// --- Phase 4: settings, notification channels, alerts, reports, explain ---
+
+export interface SmtpSettings {
+  configured: boolean
+  host: string | null
+  port: number | null
+  security: string | null
+  username: string | null
+  has_password: boolean
+  from_addr: string | null
+  from_name: string | null
+}
+
+export interface SmtpSettingsPatch {
+  host: string
+  port: number
+  security: string
+  username?: string | null
+  password?: string | null
+  from_addr: string
+  from_name?: string | null
+}
+
+export interface TelegramSettings {
+  configured: boolean
+  token_hint: string | null
+  chat_id: string | null
+  chat_captured_at: string | null
+}
+
+export interface GeminiSettings {
+  configured: boolean
+  enabled: boolean
+  key_hint: string | null
+  model: string
+}
+
+export interface OllamaSettings {
+  configured: boolean
+  enabled: boolean
+  base_url: string | null
+  model: string | null
+}
+
+export interface TestResult {
+  ok: boolean
+  detail: string
+}
+
+export type ChannelType = "email" | "telegram" | "apprise_url"
+
+export interface NotificationChannel {
+  id: string
+  type: ChannelType
+  name: string
+  site_id: string | null
+  is_active: boolean
+  target_hint: string
+  created_at: string
+}
+
+export type DeliveryStatus = "pending" | "sent" | "failed" | "skipped"
+
+export interface AlertDelivery {
+  id: string
+  channel_id: string | null
+  channel_name: string
+  channel_type: string
+  status: DeliveryStatus
+  detail: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export interface Alert {
+  id: string
+  site_id: string
+  scan_id: string
+  risk_score: number | null
+  acknowledged_at: string | null
+  acknowledged_via: string | null
+  created_at: string
+  site_name: string | null
+  deliveries: AlertDelivery[]
+}
+
+export interface AlertPage {
+  items: Alert[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export interface ExplainResult {
+  explanation: string
+  provider: string
+  generated_at: string
+  cached: boolean
+}
+
+export const getSmtpSettings = () => api<SmtpSettings>("/api/settings/smtp")
+export const putSmtpSettings = (body: SmtpSettingsPatch) =>
+  api<SmtpSettings>("/api/settings/smtp", { method: "PUT", body: JSON.stringify(body) })
+export const testSmtp = (to: string, settings?: SmtpSettingsPatch) =>
+  api<TestResult>("/api/settings/smtp/test", {
+    method: "POST",
+    body: JSON.stringify({ to, settings: settings ?? null }),
+  })
+
+export const getTelegramSettings = () => api<TelegramSettings>("/api/settings/telegram")
+export const putTelegramSettings = (bot_token: string | null) =>
+  api<TelegramSettings>("/api/settings/telegram", {
+    method: "PUT",
+    body: JSON.stringify({ bot_token }),
+  })
+export const testTelegram = () =>
+  api<TestResult>("/api/settings/telegram/test", { method: "POST" })
+
+export const getGeminiSettings = () => api<GeminiSettings>("/api/settings/gemini")
+export const putGeminiSettings = (body: { api_key?: string | null; enabled: boolean }) =>
+  api<GeminiSettings>("/api/settings/gemini", { method: "PUT", body: JSON.stringify(body) })
+export const testGemini = () => api<TestResult>("/api/settings/gemini/test", { method: "POST" })
+
+export const getOllamaSettings = () => api<OllamaSettings>("/api/settings/ollama")
+export const putOllamaSettings = (body: {
+  enabled: boolean
+  base_url?: string | null
+  model?: string | null
+}) => api<OllamaSettings>("/api/settings/ollama", { method: "PUT", body: JSON.stringify(body) })
+export const testOllama = () => api<TestResult>("/api/settings/ollama/test", { method: "POST" })
+
+export const listChannels = () => api<NotificationChannel[]>("/api/notification-channels")
+export const createChannel = (body: {
+  type: ChannelType
+  name: string
+  site_id?: string | null
+  to?: string
+  url?: string
+  kind?: string
+}) =>
+  api<NotificationChannel>("/api/notification-channels", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+export const updateChannel = (id: string, body: { is_active?: boolean; name?: string }) =>
+  api<NotificationChannel>(`/api/notification-channels/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+export const deleteChannel = (id: string) =>
+  api<void>(`/api/notification-channels/${id}`, { method: "DELETE" })
+export const testChannel = (id: string) =>
+  api<TestResult>(`/api/notification-channels/${id}/test`, { method: "POST" })
+
+export const listAlerts = (offset = 0, limit = 50, unacknowledgedOnly = false) =>
+  api<AlertPage>(
+    `/api/alerts?offset=${offset}&limit=${limit}&unacknowledged_only=${unacknowledgedOnly}`
+  )
+export const ackAlert = (id: string) => api<Alert>(`/api/alerts/${id}/ack`, { method: "POST" })
+
+export const explainScan = (siteId: string, scanId: string, force = false) =>
+  api<ExplainResult>(`/api/sites/${siteId}/scans/${scanId}/explain?force=${force}`, {
+    method: "POST",
+  })
+
+// Report downloads carry the Authorization header via artifactFetch and
+// hand back a blob URL the caller anchors to (and revokes).
+export async function downloadReport(
+  scanId: string,
+  format: "pdf" | "markdown"
+): Promise<{ url: string; filename: string }> {
+  const resp = await artifactFetch(`/api/reports/${scanId}/${format}`)
+  const disposition = resp.headers.get("content-disposition") ?? ""
+  const match = /filename="([^"]+)"/.exec(disposition)
+  const filename =
+    match?.[1] ?? `wardress-report.${format === "markdown" ? "md" : "pdf"}`
+  return { url: URL.createObjectURL(await resp.blob()), filename }
 }

@@ -41,8 +41,11 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${WARDRESS_HTTP_PORT:-8321}}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ENABLE_OLLAMA: ${ENABLE_OLLAMA:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports:
@@ -73,8 +76,13 @@ services:
       # Worker imports app settings (shared config module); it needs the
       # same required secrets even though it never signs tokens itself.
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      # Alert dispatch decrypts stored channel configs/SMTP credentials.
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${WARDRESS_HTTP_PORT:-8321}}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ENABLE_OLLAMA: ${ENABLE_OLLAMA:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
     volumes:
       - scan-artifacts:/data/artifacts
     depends_on:
@@ -93,6 +101,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
     depends_on:
       redis:
         condition: service_healthy
@@ -106,12 +115,16 @@ services:
       dockerfile: backend/Dockerfile.worker
     restart: unless-stopped
     profiles: ["telegram"]
-    command: ["python", "-m", "worker.telegram_stub"]
+    command: ["python", "-m", "worker.telegram_bot"]
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
 

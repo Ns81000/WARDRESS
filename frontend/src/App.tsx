@@ -3,8 +3,10 @@ import { Navigate, Route, Routes } from "react-router"
 import { AppShell } from "@/components/app-shell"
 import { Toaster } from "@/components/ui/sonner"
 import { useAuth } from "@/lib/auth"
+import { AlertsPage } from "@/pages/alerts"
 import { LoginPage } from "@/pages/login"
 import { ScanDetailPage } from "@/pages/scan-detail"
+import { SettingsPage } from "@/pages/settings"
 import { SiteDetailPage } from "@/pages/site-detail"
 import { SitesPage } from "@/pages/sites"
 
@@ -36,6 +38,8 @@ export default function App() {
           <Route index element={<SitesPage />} />
           <Route path="/sites/:siteId" element={<SiteDetailPage />} />
           <Route path="/sites/:siteId/scans/:scanId" element={<ScanDetailPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

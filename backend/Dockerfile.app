@@ -37,8 +37,18 @@ COPY --from=frontend-build /build/dist /app/static
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# curl for the compose healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# curl for the compose healthcheck; Pango/Cairo/GDK-PixBuf for WeasyPrint
+# (PDF reports render in the API process — the Phase 0 decision keeps
+# report rendering off the worker's browser pool entirely, and the API
+# is where the download request lands).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi8 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8000

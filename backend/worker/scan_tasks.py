@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, select, update
 
 from app.models import (
+    Alert,
     Baseline,
     BaselineStatus,
     Scan,
@@ -34,6 +35,7 @@ from worker.detection.suppress import Suppression, build_suppression
 from worker.detection.types import PageData, ScanPageData
 from worker.fetcher import FetchError, fetch_page
 from worker.hashing import content_sha256
+from worker.llm_escalation import escalate_scan, escalation_upgrades_verdict, should_escalate
 from worker.probe import probe_site
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,18 @@ logger = logging.getLogger(__name__)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _escalation_new_text(baseline_page: PageData, current_page: ScanPageData) -> str:
+    """New visible text for the LLM prompt; empty string on any parser
+    trouble (the escalation still runs on scores alone)."""
+    try:
+        from worker.detection.semantics import _new_visible_text
+
+        return _new_visible_text(baseline_page.html, current_page.html)
+    except Exception:
+        logger.exception("Could not extract new text for escalation")
+        return ""
 
 
 async def _capture_baseline(baseline_id: uuid.UUID) -> str:
@@ -248,6 +262,27 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         )
         flagged = risk >= site.flag_threshold
 
+        # §8 optional LLM escalation: only for the ambiguous middle band,
+        # only able to *raise* attention, and every outcome recorded in
+        # layer 8's evidence. Unconfigured/broken providers degrade
+        # silently inside escalate_scan — this block can never fail a scan.
+        if not flagged and should_escalate(risk, changed):
+            escalation = await escalate_scan(
+                db,
+                site_url=site.url,
+                risk=risk,
+                layer_scores={
+                    k: {"score": r.get("score"), "skipped": bool(r.get("skipped"))}
+                    for k, r in results.items()
+                },
+                new_text=_escalation_new_text(baseline_page, current_page),
+            )
+            layer8 = results.get("layer8_semantics")
+            if layer8 is not None and isinstance(layer8.get("evidence"), dict):
+                layer8["evidence"]["escalation"] = escalation
+            if escalation_upgrades_verdict(escalation):
+                flagged = True
+
         scan.content_hash = current_hash
         scan.html_path = html_rel
         scan.screenshot_path = shot_rel
@@ -269,11 +304,36 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         await _persist_findings(db, scan, results)
         await db.commit()
 
+        if flagged:
+            # Alert creation + delivery is a separate task: a broken
+            # notification channel must never block or crash a scan
+            # (rule 6). Any failure here is logged and swallowed.
+            await _create_alert(db, scan)
+
         # Scheduling tightens on *material* change (risk-based), not on
         # any nonzero layer score — a dynamic page whose hash flips every
         # scan must still relax back to its base cadence.
         await _schedule_next(db, site, changed=flagged or risk >= MATERIAL_CHANGE_RISK)
         return scan.verdict.value
+
+
+async def _create_alert(db, scan: Scan) -> None:
+    """Create the Alert row for a flagged scan and enqueue its delivery.
+    Best-effort: alerting failures are logged, never raised (rule 6).
+    The unique index on alerts.scan_id makes acks_late redelivery safe —
+    a second run finds the existing alert and enqueues delivery again,
+    where the delivery task's own idempotence guard prevents re-sends."""
+    try:
+        existing = await db.scalar(select(Alert).where(Alert.scan_id == scan.id))
+        if existing is None:
+            alert = Alert(site_id=scan.site_id, scan_id=scan.id, risk_score=scan.risk_score)
+            db.add(alert)
+            await db.commit()
+        else:
+            alert = existing
+        celery_app.send_task("wardress.deliver_alert", args=[str(alert.id)])
+    except Exception:
+        logger.exception("Could not create/enqueue alert for scan %s", scan.id)
 
 
 async def _schedule_next(db, site: Site, *, changed: bool) -> None:
