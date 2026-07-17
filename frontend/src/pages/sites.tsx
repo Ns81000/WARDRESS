@@ -26,8 +26,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { BulkImportDialog } from "@/components/bulk-import-dialog"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Site } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 
 function baselineDot(site: Site): DotState {
   switch (site.baseline_status) {
@@ -59,6 +61,10 @@ function baselineLabel(site: Site): string {
 }
 
 export function SitesPage() {
+  const { user } = useAuth()
+  // Viewers are read-only; mutating controls are hidden (the API enforces
+  // the role server-side regardless).
+  const canManage = user?.role === "admin" || user?.role === "analyst"
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [name, setName] = useState("")
@@ -125,7 +131,10 @@ export function SitesPage() {
           </p>
         </div>
 
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <BulkImportDialog />
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button>
               <Plus />
@@ -187,7 +196,9 @@ export function SitesPage() {
               </DialogFooter>
             </form>
           </DialogContent>
-        </Dialog>
+            </Dialog>
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg border border-hairline-strong bg-surface-card">
@@ -234,22 +245,24 @@ export function SitesPage() {
                     {new Date(site.created_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Delete ${site.name}`}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Remove ${site.name} and all its scan history?`
-                          )
-                        ) {
-                          deleteMutation.mutate(site.id)
-                        }
-                      }}
-                    >
-                      <Trash2 />
-                    </Button>
+                    {canManage && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete ${site.name}`}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Remove ${site.name} and all its scan history?`
+                            )
+                          ) {
+                            deleteMutation.mutate(site.id)
+                          }
+                        }}
+                      >
+                        <Trash2 />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

@@ -21,10 +21,11 @@ from app.alerting import (
     send_email,
     smtp_settings_usable,
 )
+from app.audit import record_audit
 from app.config import get_settings
 from app.crypto import DecryptionError, decrypt_json, encrypt_json
 from app.db import get_db
-from app.deps import CurrentUser
+from app.deps import AdminUser, CurrentUser
 from app.models import NotificationChannel, NotificationChannelType
 from app.schemas import (
     GeminiSettingsIn,
@@ -84,7 +85,7 @@ async def get_smtp(user: CurrentUser, db: DB) -> SmtpSettingsOut:
 
 
 @router.put("/smtp", response_model=SmtpSettingsOut)
-async def put_smtp(body: SmtpSettingsIn, user: CurrentUser, db: DB) -> SmtpSettingsOut:
+async def put_smtp(body: SmtpSettingsIn, user: AdminUser, db: DB) -> SmtpSettingsOut:
     existing = await load_setting(db, SMTP_KEY) or {}
     # password=None keeps the stored one; "" clears it (documented in the
     # schema) — so editing the host never silently wipes the credential.
@@ -98,12 +99,29 @@ async def put_smtp(body: SmtpSettingsIn, user: CurrentUser, db: DB) -> SmtpSetti
         "from_addr": body.from_addr,
         "from_name": (body.from_name or "").strip() or None,
     }
+    record_audit(
+        db,
+        actor=user,
+        action="settings.smtp.update",
+        target_type="settings",
+        target_id="smtp",
+        target_label="SMTP settings",
+        after={
+            "host": value["host"],
+            "port": value["port"],
+            "security": value["security"],
+            "username": value["username"],
+            "has_password": bool(value["password"]),
+            "from_addr": value["from_addr"],
+            "from_name": value["from_name"],
+        },
+    )
     await save_setting(db, SMTP_KEY, value)
     return await get_smtp(user, db)
 
 
 @router.post("/smtp/test", response_model=SettingsTestResult)
-async def test_smtp(body: SmtpTestRequest, user: CurrentUser, db: DB) -> SettingsTestResult:
+async def test_smtp(body: SmtpTestRequest, user: AdminUser, db: DB) -> SettingsTestResult:
     """Send a real test email — the §8 'Send Test Email' button that
     gates Save in the UI. Inline `settings` (the unsaved form values)
     take precedence over the stored row so the test proves the exact
@@ -150,13 +168,22 @@ async def get_telegram(user: CurrentUser, db: DB) -> TelegramSettingsOut:
 
 
 @router.put("/telegram", response_model=TelegramSettingsOut)
-async def put_telegram(body: TelegramSettingsIn, user: CurrentUser, db: DB) -> TelegramSettingsOut:
+async def put_telegram(body: TelegramSettingsIn, user: AdminUser, db: DB) -> TelegramSettingsOut:
     existing = await load_setting(db, TELEGRAM_KEY) or {}
     if body.bot_token is None:
         token = existing.get("bot_token") or ""
     else:
         token = body.bot_token
     if not token:
+        record_audit(
+            db,
+            actor=user,
+            action="settings.telegram.update",
+            target_type="settings",
+            target_id="telegram",
+            target_label="Telegram settings",
+            after={"configured": False},
+        )
         await delete_setting(db, TELEGRAM_KEY)
         return TelegramSettingsOut(configured=False)
     value = dict(existing)
@@ -165,12 +192,21 @@ async def put_telegram(body: TelegramSettingsIn, user: CurrentUser, db: DB) -> T
         value.pop("chat_id", None)
         value.pop("chat_captured_at", None)
     value["bot_token"] = token
+    record_audit(
+        db,
+        actor=user,
+        action="settings.telegram.update",
+        target_type="settings",
+        target_id="telegram",
+        target_label="Telegram settings",
+        after={"configured": True, "token_changed": token != existing.get("bot_token")},
+    )
     await save_setting(db, TELEGRAM_KEY, value)
     return await get_telegram(user, db)
 
 
 @router.post("/telegram/test", response_model=SettingsTestResult)
-async def test_telegram(user: CurrentUser, db: DB) -> SettingsTestResult:
+async def test_telegram(user: AdminUser, db: DB) -> SettingsTestResult:
     """Send a test message via Apprise tgram:// to the captured chat."""
     tg = await load_setting(db, TELEGRAM_KEY)
     if not tg or not tg.get("bot_token"):
@@ -202,18 +238,36 @@ async def get_gemini(user: CurrentUser, db: DB) -> GeminiSettingsOut:
 
 
 @router.put("/gemini", response_model=GeminiSettingsOut)
-async def put_gemini(body: GeminiSettingsIn, user: CurrentUser, db: DB) -> GeminiSettingsOut:
+async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiSettingsOut:
     existing = await load_setting(db, GEMINI_KEY) or {}
     key = existing.get("api_key", "") if body.api_key is None else body.api_key.strip()
     if not key:
+        record_audit(
+            db,
+            actor=user,
+            action="settings.gemini.update",
+            target_type="settings",
+            target_id="gemini",
+            target_label="Gemini settings",
+            after={"configured": False},
+        )
         await delete_setting(db, GEMINI_KEY)
         return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
+    record_audit(
+        db,
+        actor=user,
+        action="settings.gemini.update",
+        target_type="settings",
+        target_id="gemini",
+        target_label="Gemini settings",
+        after={"configured": True, "enabled": body.enabled},
+    )
     await save_setting(db, GEMINI_KEY, {"api_key": key, "enabled": body.enabled})
     return await get_gemini(user, db)
 
 
 @router.post("/gemini/test", response_model=SettingsTestResult)
-async def test_gemini(user: CurrentUser, db: DB) -> SettingsTestResult:
+async def test_gemini(user: AdminUser, db: DB) -> SettingsTestResult:
     """One cheap gemini-2.5-flash call to confirm the stored key works
     (§7). Uses the same client module the worker's escalation uses."""
     g = await load_setting(db, GEMINI_KEY)
@@ -242,18 +296,27 @@ async def get_ollama(user: CurrentUser, db: DB) -> OllamaSettingsOut:
 
 
 @router.put("/ollama", response_model=OllamaSettingsOut)
-async def put_ollama(body: OllamaSettingsIn, user: CurrentUser, db: DB) -> OllamaSettingsOut:
+async def put_ollama(body: OllamaSettingsIn, user: AdminUser, db: DB) -> OllamaSettingsOut:
     value = {
         "enabled": body.enabled,
         "base_url": (body.base_url or "").strip() or get_settings().ollama_base_url,
         "model": (body.model or "").strip() or None,
     }
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ollama.update",
+        target_type="settings",
+        target_id="ollama",
+        target_label="Ollama settings",
+        after={"enabled": value["enabled"], "base_url": value["base_url"], "model": value["model"]},
+    )
     await save_setting(db, OLLAMA_KEY, value)
     return await get_ollama(user, db)
 
 
 @router.post("/ollama/test", response_model=SettingsTestResult)
-async def test_ollama(user: CurrentUser, db: DB) -> SettingsTestResult:
+async def test_ollama(user: AdminUser, db: DB) -> SettingsTestResult:
     o = await load_setting(db, OLLAMA_KEY)
     if not o or not o.get("enabled"):
         return SettingsTestResult(ok=False, detail="Ollama is not enabled yet — save it first")
@@ -309,7 +372,7 @@ async def list_channels(user: CurrentUser, db: DB) -> list[NotificationChannelOu
     "", response_model=NotificationChannelOut, status_code=status.HTTP_201_CREATED
 )
 async def create_channel(
-    body: NotificationChannelCreate, user: CurrentUser, db: DB
+    body: NotificationChannelCreate, user: AdminUser, db: DB
 ) -> NotificationChannelOut:
     try:
         config = body.validate_for_type()
@@ -329,6 +392,21 @@ async def create_channel(
         config_encrypted=encrypt_json(config),
     )
     db.add(channel)
+    await db.flush()
+    record_audit(
+        db,
+        actor=user,
+        action="channel.create",
+        target_type="notification_channel",
+        target_id=channel.id,
+        target_label=channel.name,
+        after={
+            "type": channel.type.value,
+            "name": channel.name,
+            "site_id": str(body.site_id) if body.site_id else None,
+            "target_hint": _target_hint(channel),
+        },
+    )
     await db.commit()
     return _channel_out(channel)
 
@@ -337,7 +415,7 @@ async def create_channel(
 async def update_channel(
     channel_id: uuid.UUID,
     body: NotificationChannelUpdate,
-    user: CurrentUser,
+    user: AdminUser,
     db: DB,
 ) -> NotificationChannelOut:
     channel = await db.scalar(
@@ -345,27 +423,47 @@ async def update_channel(
     )
     if channel is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Channel not found")
+    before = {"name": channel.name, "is_active": channel.is_active}
     if body.is_active is not None:
         channel.is_active = body.is_active
     if body.name is not None:
         channel.name = body.name.strip()
+    record_audit(
+        db,
+        actor=user,
+        action="channel.update",
+        target_type="notification_channel",
+        target_id=channel.id,
+        target_label=channel.name,
+        before=before,
+        after={"name": channel.name, "is_active": channel.is_active},
+    )
     await db.commit()
     return _channel_out(channel)
 
 
 @channels_router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_channel(channel_id: uuid.UUID, user: CurrentUser, db: DB) -> None:
+async def delete_channel(channel_id: uuid.UUID, user: AdminUser, db: DB) -> None:
     channel = await db.scalar(
         select(NotificationChannel).where(NotificationChannel.id == channel_id)
     )
     if channel is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Channel not found")
+    record_audit(
+        db,
+        actor=user,
+        action="channel.delete",
+        target_type="notification_channel",
+        target_id=channel.id,
+        target_label=channel.name,
+        before={"type": channel.type.value, "name": channel.name},
+    )
     await db.delete(channel)
     await db.commit()
 
 
 @channels_router.post("/{channel_id}/test", response_model=SettingsTestResult)
-async def test_channel(channel_id: uuid.UUID, user: CurrentUser, db: DB) -> SettingsTestResult:
+async def test_channel(channel_id: uuid.UUID, user: AdminUser, db: DB) -> SettingsTestResult:
     """Send a test notification through one stored channel — the same
     delivery path a real alert takes."""
     channel = await db.scalar(

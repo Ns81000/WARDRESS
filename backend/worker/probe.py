@@ -28,6 +28,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
+from app.ssrf_transport import SSRFPinningTransport
 from worker.detection.types import UAVariant
 from worker.hashing import content_sha256
 
@@ -183,6 +184,13 @@ async def probe_site(url: str, *, allow_private_networks: bool = False) -> Probe
             limits=limits,
             timeout=timeout,
             verify=False,  # noqa: S501 — observation, not trust: layer 6 must still see sites with broken TLS; cert issues are captured as evidence by probe_tls
+            # DNS-pinning transport (§9): every hop resolves + validates +
+            # connects to the same address, closing the rebinding window.
+            # It supersedes the response-hook redirect guard (kept as a
+            # belt-and-braces check for the final URL).
+            transport=SSRFPinningTransport(
+                allow_private_networks=allow_private_networks, verify=False
+            ),
             event_hooks={"response": [_redirect_guard(allow_private_networks)]},
         ) as client:
             # robots.txt

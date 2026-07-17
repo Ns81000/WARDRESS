@@ -12,7 +12,9 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { ApiKeysCard } from "@/components/api-keys-card"
 import { StatusDot } from "@/components/status-dot"
+import { UsersCard } from "@/components/users-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -35,6 +37,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import * as apiClient from "@/lib/api"
 import { ApiError, type ChannelType } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 
 /*
  * Settings — notification channels + integrations (§8). Layout follows
@@ -892,36 +895,48 @@ function ChannelsCard() {
 }
 
 export function SettingsPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === "admin"
+
   return (
     <div>
       <div className="mb-8">
         <h1 className="text-display-lg text-ink">Settings</h1>
         <p className="mt-2 text-body-md text-charcoal">
-          Notifications and intelligence. Everything here is optional — and
-          nothing here can break a scan.
+          {isAdmin
+            ? "Notifications, intelligence, users, and API access. Everything here is optional — and nothing here can break a scan."
+            : "Your API keys. Notification and integration settings are managed by an admin."}
         </p>
       </div>
       <div className="space-y-6">
-        <ChannelsCard />
-        <SmtpCard />
-        <TelegramCard />
-        <AiCard />
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="size-4 text-charcoal" />
-              Secrets at rest
-            </CardTitle>
-            <CardDescription>
-              SMTP passwords, service URLs, bot tokens and API keys are
-              encrypted with your instance&rsquo;s CREDENTIALS_ENCRYPTION_KEY before
-              they reach the database, and never returned by the API.{" "}
-              <Badge variant="secondary" className="align-middle">
-                Fernet / AES-128-CBC + HMAC
-              </Badge>
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        {/* Everyone manages their own API keys; the rest is admin scope
+            (the API enforces this server-side — hiding is just UX). */}
+        <ApiKeysCard />
+        {isAdmin && (
+          <>
+            <UsersCard />
+            <ChannelsCard />
+            <SmtpCard />
+            <TelegramCard />
+            <AiCard />
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Server className="size-4 text-charcoal" />
+                  Secrets at rest
+                </CardTitle>
+                <CardDescription>
+                  SMTP passwords, service URLs, bot tokens and API keys are
+                  encrypted with your instance&rsquo;s CREDENTIALS_ENCRYPTION_KEY before
+                  they reach the database, and never returned by the API.{" "}
+                  <Badge variant="secondary" className="align-middle">
+                    Fernet / AES-128-CBC + HMAC
+                  </Badge>
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </>
+        )}
       </div>
     </div>
   )

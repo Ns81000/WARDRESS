@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import record_audit
 from app.db import get_db
-from app.deps import CurrentUser
+from app.deps import AnalystUser, CurrentUser
 from app.explain import ExplainError, explain_scan
 from app.models import (
     Baseline,
@@ -47,6 +48,19 @@ def _is_stale(created_at: datetime) -> bool:
     return is_stale(created_at)
 
 
+def _site_snapshot(site: Site) -> dict:
+    """Audit snapshot of a site's configurable state (no secrets here)."""
+    return {
+        "name": site.name,
+        "url": site.url,
+        "allow_private_networks": site.allow_private_networks,
+        "flag_threshold": site.flag_threshold,
+        "auto_scan_enabled": site.auto_scan_enabled,
+        "scan_interval_minutes": site.scan_interval_minutes,
+        "muted_until": site.muted_until.isoformat() if site.muted_until else None,
+    }
+
+
 async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID) -> Site:
     site = await db.scalar(select(Site).where(Site.id == site_id))
     if site is None:
@@ -63,7 +77,7 @@ async def _current_baseline(db: AsyncSession, site_id: uuid.UUID) -> Baseline | 
 @router.post("", response_model=SiteDetailOut, status_code=status.HTTP_201_CREATED)
 async def create_site(
     body: SiteCreate,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SiteDetailOut:
     url = str(body.url)
@@ -97,6 +111,15 @@ async def create_site(
     # Kick off the initial baseline capture immediately.
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
     db.add(baseline)
+    record_audit(
+        db,
+        actor=user,
+        action="site.create",
+        target_type="site",
+        target_id=site.id,
+        target_label=site.name,
+        after=_site_snapshot(site),
+    )
     await db.commit()
     enqueue_baseline_capture(baseline.id)
 
@@ -165,13 +188,14 @@ async def get_site(
 async def update_site(
     site_id: uuid.UUID,
     body: SiteUpdate,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SiteDetailOut:
     """Per-site detection/scheduling settings (§5 threshold, §11 adaptive
     interval). Name/URL edits are deliberately excluded — a different URL
     means a different trust anchor, i.e. a new site."""
     site = await _get_site_or_404(db, site_id)
+    before = _site_snapshot(site)
     if body.flag_threshold is not None:
         site.flag_threshold = body.flag_threshold
     if body.auto_scan_enabled is not None:
@@ -197,6 +221,16 @@ async def update_site(
             if body.mute_minutes > 0
             else None
         )
+    record_audit(
+        db,
+        actor=user,
+        action="site.mute" if body.mute_minutes is not None else "site.update",
+        target_type="site",
+        target_id=site.id,
+        target_label=site.name,
+        before=before,
+        after=_site_snapshot(site),
+    )
     await db.commit()
 
     baseline = await _current_baseline(db, site.id)
@@ -219,12 +253,21 @@ async def update_site(
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site(
     site_id: uuid.UUID,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     site = await _get_site_or_404(db, site_id)
     # Rows cascade; artifact files are cleaned by a janitor task in a later
     # phase (deliberate deferral — files are small and harmless meanwhile).
+    record_audit(
+        db,
+        actor=user,
+        action="site.delete",
+        target_type="site",
+        target_id=site.id,
+        target_label=site.name,
+        before=_site_snapshot(site),
+    )
     await db.delete(site)
     await db.commit()
 
@@ -236,7 +279,7 @@ async def delete_site(
 )
 async def rebaseline(
     site_id: uuid.UUID,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BaselineOut:
     site = await _get_site_or_404(db, site_id)
@@ -258,6 +301,14 @@ async def rebaseline(
             )
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
     db.add(baseline)
+    record_audit(
+        db,
+        actor=user,
+        action="site.rebaseline",
+        target_type="site",
+        target_id=site.id,
+        target_label=site.name,
+    )
     await db.commit()
     enqueue_baseline_capture(baseline.id)
     return BaselineOut.model_validate(baseline)
@@ -270,7 +321,7 @@ async def rebaseline(
 )
 async def scan_now(
     site_id: uuid.UUID,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScanOut:
     site = await _get_site_or_404(db, site_id)
@@ -361,7 +412,7 @@ async def get_scan(
 async def explain_incident(
     site_id: uuid.UUID,
     scan_id: uuid.UUID,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     force: Annotated[bool, Query()] = False,
 ) -> ExplainResponse:
@@ -413,7 +464,7 @@ async def list_suppression_rules(
 async def create_suppression_rule(
     site_id: uuid.UUID,
     body: SuppressionRuleCreate,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuppressionRuleOut:
     """A new exclusion applies from the next scan onward — already-stored
@@ -433,6 +484,16 @@ async def create_suppression_rule(
         created_by=user.id,
     )
     db.add(rule)
+    await db.flush()
+    record_audit(
+        db,
+        actor=user,
+        action="suppression_rule.create",
+        target_type="suppression_rule",
+        target_id=rule.id,
+        target_label=f"{site.name}: {rule.type.value}",
+        after={"type": rule.type.value, "value": rule.value, "note": rule.note},
+    )
     await db.commit()
     return SuppressionRuleOut.model_validate(rule)
 
@@ -444,7 +505,7 @@ async def create_suppression_rule(
 async def delete_suppression_rule(
     site_id: uuid.UUID,
     rule_id: uuid.UUID,
-    user: CurrentUser,
+    user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await _get_site_or_404(db, site_id)
@@ -455,5 +516,14 @@ async def delete_suppression_rule(
     )
     if rule is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Suppression rule not found")
+    record_audit(
+        db,
+        actor=user,
+        action="suppression_rule.delete",
+        target_type="suppression_rule",
+        target_id=rule.id,
+        target_label=rule.type.value,
+        before={"type": rule.type.value, "value": rule.value, "note": rule.note},
+    )
     await db.delete(rule)
     await db.commit()

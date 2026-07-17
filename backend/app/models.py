@@ -109,6 +109,30 @@ class AlertDeliveryStatus(enum.StrEnum):
     skipped = "skipped"  # e.g. site muted, channel disabled
 
 
+class RemediationActionType(enum.StrEnum):
+    """§6 remediation_hooks.action_type — a label describing what the
+    webhook does on the receiving end. Wardress always just POSTs the
+    incident payload; the label drives UI copy and the receiver's own
+    dispatch, never different client-side behavior."""
+
+    git_rollback = "git_rollback"
+    docker_restart = "docker_restart"
+    maintenance_page_swap = "maintenance_page_swap"
+    custom_webhook = "custom_webhook"
+
+
+class RemediationExecutionStatus(enum.StrEnum):
+    """Lifecycle of one remediation firing (§9: manual-confirm default).
+    pending_confirm sits in the dashboard confirm queue; auto-execute
+    hooks (explicit per-hook opt-in) skip straight to queued."""
+
+    pending_confirm = "pending_confirm"
+    queued = "queued"  # confirmed (or auto) — waiting on the worker
+    succeeded = "succeeded"
+    failed = "failed"  # webhook unreachable/non-2xx — visible, never affects scans
+    dismissed = "dismissed"  # operator rejected the pending confirmation
+
+
 def _enum(e: type[enum.StrEnum], name: str) -> Enum:
     """Store enum *values* (lowercase strings), not Python member names."""
     return Enum(e, name=name, values_callable=lambda x: [m.value for m in x])
@@ -440,4 +464,128 @@ class ScanFinding(Base):
         # One row per layer per scan — a redelivered task must upsert,
         # never duplicate.
         Index("uq_scan_findings_scan_layer", "scan_id", "layer", unique=True),
+    )
+
+
+class AuditLog(Base):
+    """§6 audit_log: who changed what, when (Phase 5). Every config
+    change, baseline reset, suppression-rule change, settings/channel
+    edit, ack, mute, and user-management action writes a row here.
+
+    `actor_email` is denormalized so history stays readable after a user
+    is deleted. before/after snapshots NEVER contain secret values —
+    writers redact before calling record_audit (app/audit.py), and the
+    helper drops known-sensitive keys as a second line of defense.
+    Rows are immutable: no update/delete API exists, by design."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    actor_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    # Stable machine key, e.g. "site.create", "settings.smtp.update",
+    # "user.deactivate", "alert.ack" — filterable in the UI.
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target_type: Mapped[str] = mapped_column(String(32), index=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Human display label for the target ("blog", "SMTP settings") so the
+    # log stays readable after the target row is deleted.
+    target_label: Mapped[str | None] = mapped_column(String(256), default=None)
+    before_json: Mapped[dict | None] = mapped_column(default=None)
+    after_json: Mapped[dict | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class ApiKey(Base):
+    """§6 api_keys: per-user keys for scripting against the REST API.
+    The raw key is shown exactly once at creation; only its SHA-256 is
+    stored (same rationale as refresh tokens — a DB leak yields nothing
+    usable). Requests authenticated by key carry the owning user's role,
+    so RBAC applies identically. A revoked or deactivated-owner key fails
+    with 401 and can never break anything else (rule 6)."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # First characters of the raw key ("wk_ab12cd34"), for list display.
+    key_prefix: Mapped[str] = mapped_column(String(16))
+    label: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class RemediationHook(Base):
+    """§6 remediation_hooks: an outbound webhook fired when one of the
+    site's scans is flagged at/above trigger_threshold. Manual-confirm by
+    default (§9): the firing parks in the confirm queue until an operator
+    approves it; auto_execute is an explicit, clearly-labeled per-hook
+    opt-in. The webhook URL is Fernet-encrypted at rest — remediation
+    endpoints routinely embed tokens in their URLs."""
+
+    __tablename__ = "remediation_hooks"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    action_type: Mapped[RemediationActionType] = mapped_column(
+        _enum(RemediationActionType, "remediation_action_type")
+    )
+    # Fires when scan risk_score >= trigger_threshold (and the scan is
+    # flagged). Defaults to the site's own flag threshold semantics.
+    trigger_threshold: Mapped[float] = mapped_column(Float, default=0.5)
+    webhook_url_encrypted: Mapped[str] = mapped_column(Text)
+    requires_manual_confirm: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RemediationExecution(Base):
+    """One firing of one remediation hook for one flagged scan — the
+    §9 confirm queue's row. Unique per (hook, scan): acks_late scan
+    redelivery must never queue the same remediation twice."""
+
+    __tablename__ = "remediation_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    hook_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("remediation_hooks.id", ondelete="CASCADE"), index=True
+    )
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), index=True
+    )
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    status: Mapped[RemediationExecutionStatus] = mapped_column(
+        _enum(RemediationExecutionStatus, "remediation_execution_status"),
+        default=RemediationExecutionStatus.pending_confirm,
+    )
+    # Denormalized display fields so history survives hook edits/deletes.
+    hook_name: Mapped[str] = mapped_column(String(200))
+    action_type: Mapped[str] = mapped_column(String(32))
+    risk_score: Mapped[float | None] = mapped_column(Float, default=None)
+    # User-safe outcome ("HTTP 200", "connection refused"), never a
+    # traceback or the webhook URL (it may embed credentials).
+    detail: Mapped[str | None] = mapped_column(Text, default=None)
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("uq_remediation_executions_hook_scan", "hook_id", "scan_id", unique=True),
     )

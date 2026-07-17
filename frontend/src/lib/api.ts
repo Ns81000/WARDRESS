@@ -105,6 +105,134 @@ export interface UserOut {
   created_at: string
 }
 
+// --- Phase 5: users, API keys, audit, remediation, health, bulk import ---
+
+export type Role = "admin" | "analyst" | "viewer"
+
+export interface UserAdmin {
+  id: string
+  email: string
+  role: Role
+  is_active: boolean
+  created_at: string
+}
+
+export interface ApiKeyMeta {
+  id: string
+  label: string
+  key_prefix: string
+  created_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
+
+export interface ApiKeyCreated extends ApiKeyMeta {
+  key: string
+}
+
+export interface AuditLogEntry {
+  id: string
+  actor_id: string | null
+  actor_email: string | null
+  action: string
+  target_type: string
+  target_id: string | null
+  target_label: string | null
+  before_json: Record<string, unknown> | null
+  after_json: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface AuditLogPage {
+  items: AuditLogEntry[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export type RemediationActionType =
+  | "git_rollback"
+  | "docker_restart"
+  | "maintenance_page_swap"
+  | "custom_webhook"
+
+export type RemediationExecutionStatus =
+  | "pending_confirm"
+  | "queued"
+  | "succeeded"
+  | "failed"
+  | "dismissed"
+
+export interface RemediationHook {
+  id: string
+  site_id: string
+  name: string
+  action_type: RemediationActionType
+  trigger_threshold: number
+  requires_manual_confirm: boolean
+  is_active: boolean
+  url_hint: string
+  created_at: string
+}
+
+export interface RemediationExecution {
+  id: string
+  hook_id: string
+  site_id: string
+  scan_id: string
+  status: RemediationExecutionStatus
+  hook_name: string
+  action_type: string
+  risk_score: number | null
+  detail: string | null
+  confirmed_at: string | null
+  executed_at: string | null
+  created_at: string
+  site_name: string | null
+}
+
+export interface RemediationExecutionPage {
+  items: RemediationExecution[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export interface HealthComponent {
+  status: string
+  detail: string | null
+}
+
+export interface HealthDetails {
+  status: string
+  uptime_seconds: number
+  queue_depth: number | null
+  db_size_bytes: number | null
+  sites_total: number
+  scans_last_24h: number
+  avg_scan_seconds: number | null
+  last_scan_at: string | null
+  last_dispatch_tick_at: string | null
+  components: Record<string, HealthComponent>
+}
+
+export interface BulkImportRowResult {
+  row: number
+  url: string
+  name: string | null
+  status: "created" | "skipped" | "error"
+  detail: string | null
+  site_id: string | null
+}
+
+export interface BulkImportResult {
+  total_rows: number
+  created: number
+  skipped: number
+  errors: number
+  results: BulkImportRowResult[]
+}
+
 export type BaselineStatus = "pending" | "capturing" | "ready" | "failed"
 export type ScanStatus = "pending" | "running" | "completed" | "failed"
 export type ScanVerdict = "clean" | "changed" | "flagged" | "error" | null
@@ -446,3 +574,94 @@ export async function downloadReport(
     match?.[1] ?? `wardress-report.${format === "markdown" ? "md" : "pdf"}`
   return { url: URL.createObjectURL(await resp.blob()), filename }
 }
+
+// --- Phase 5 endpoints ---
+
+export const listUsers = () => api<UserAdmin[]>("/api/users")
+export const createUser = (body: { email: string; password: string; role: Role }) =>
+  api<UserAdmin>("/api/users", { method: "POST", body: JSON.stringify(body) })
+export const updateUser = (
+  id: string,
+  body: { role?: Role; is_active?: boolean; password?: string }
+) => api<UserAdmin>(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(body) })
+export const deleteUser = (id: string) =>
+  api<void>(`/api/users/${id}`, { method: "DELETE" })
+
+export const listApiKeys = () => api<ApiKeyMeta[]>("/api/api-keys")
+export const createApiKey = (label: string) =>
+  api<ApiKeyCreated>("/api/api-keys", { method: "POST", body: JSON.stringify({ label }) })
+export const revokeApiKey = (id: string) =>
+  api<ApiKeyMeta>(`/api/api-keys/${id}`, { method: "DELETE" })
+
+export const listAuditLog = (params: {
+  offset?: number
+  limit?: number
+  action?: string
+  target_type?: string
+  actor?: string
+}) => {
+  const q = new URLSearchParams()
+  if (params.offset) q.set("offset", String(params.offset))
+  if (params.limit) q.set("limit", String(params.limit))
+  if (params.action) q.set("action", params.action)
+  if (params.target_type) q.set("target_type", params.target_type)
+  if (params.actor) q.set("actor", params.actor)
+  return api<AuditLogPage>(`/api/audit-log?${q.toString()}`)
+}
+
+export const listRemediationHooks = (siteId: string) =>
+  api<RemediationHook[]>(`/api/sites/${siteId}/remediation-hooks`)
+export const createRemediationHook = (
+  siteId: string,
+  body: {
+    name: string
+    action_type: RemediationActionType
+    webhook_url: string
+    trigger_threshold: number
+    requires_manual_confirm: boolean
+  }
+) =>
+  api<RemediationHook>(`/api/sites/${siteId}/remediation-hooks`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+export const updateRemediationHook = (
+  siteId: string,
+  hookId: string,
+  body: Partial<{
+    name: string
+    webhook_url: string
+    trigger_threshold: number
+    requires_manual_confirm: boolean
+    is_active: boolean
+  }>
+) =>
+  api<RemediationHook>(`/api/sites/${siteId}/remediation-hooks/${hookId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+export const deleteRemediationHook = (siteId: string, hookId: string) =>
+  api<void>(`/api/sites/${siteId}/remediation-hooks/${hookId}`, { method: "DELETE" })
+
+export const listRemediationExecutions = (offset = 0, limit = 50, pendingOnly = false) =>
+  api<RemediationExecutionPage>(
+    `/api/remediation/executions?offset=${offset}&limit=${limit}&pending_only=${pendingOnly}`
+  )
+export const confirmRemediation = (id: string) =>
+  api<RemediationExecution>(`/api/remediation/executions/${id}/confirm`, { method: "POST" })
+export const dismissRemediation = (id: string) =>
+  api<RemediationExecution>(`/api/remediation/executions/${id}/dismiss`, { method: "POST" })
+
+export const getHealthDetails = () => api<HealthDetails>("/api/health/details")
+
+export const bulkImportSites = (body: {
+  csv_text?: string
+  sitemap_url?: string
+  allow_private_networks?: boolean
+  auto_scan_enabled?: boolean
+  scan_interval_minutes?: number
+}) =>
+  api<BulkImportResult>("/api/sites/bulk-import", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })

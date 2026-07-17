@@ -10,10 +10,22 @@ import { cn } from "@/lib/utils"
 /*
  * App shell — nav-bar spec from DESIGN-resend.md: canvas background,
  * 64px height, single hairline bottom border, wordmark left, nav centre,
- * actions right. Content constrained to ~1200px.
+ * actions right. Content constrained to ~1200px. Phase 5 adds
+ * Remediation/Health for everyone and Audit for admins (the API enforces
+ * roles server-side; hiding links is UX, not security).
  */
 export function AppShell() {
   const { user, logout } = useAuth()
+  const isAdmin = user?.role === "admin"
+
+  const items = [
+    { to: "/", label: "Sites", end: true },
+    { to: "/alerts", label: "Alerts" },
+    { to: "/remediation", label: "Remediation" },
+    { to: "/health", label: "Health" },
+    ...(isAdmin ? [{ to: "/audit", label: "Audit" }] : []),
+    { to: "/settings", label: "Settings" },
+  ]
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -24,47 +36,31 @@ export function AppShell() {
             <span className="text-heading-sm tracking-tight">Wardress</span>
           </NavLink>
 
-          <nav className="flex items-center gap-6">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                cn(
-                  "text-button-sm transition-colors",
-                  isActive ? "text-ink" : "text-charcoal hover:text-ink"
-                )
-              }
-            >
-              Sites
-            </NavLink>
-            <NavLink
-              to="/alerts"
-              className={({ isActive }) =>
-                cn(
-                  "text-button-sm transition-colors",
-                  isActive ? "text-ink" : "text-charcoal hover:text-ink"
-                )
-              }
-            >
-              Alerts
-            </NavLink>
-            <NavLink
-              to="/settings"
-              className={({ isActive }) =>
-                cn(
-                  "text-button-sm transition-colors",
-                  isActive ? "text-ink" : "text-charcoal hover:text-ink"
-                )
-              }
-            >
-              Settings
-            </NavLink>
+          <nav className="flex items-center gap-5">
+            {items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  cn(
+                    "text-button-sm transition-colors",
+                    isActive ? "text-ink" : "text-charcoal hover:text-ink"
+                  )
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
           </nav>
 
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-2 text-caption text-charcoal">
               <StatusDot state="clean" />
               {user?.email}
+              {user?.role && user.role !== "admin" && (
+                <span className="text-mute">· {user.role}</span>
+              )}
             </span>
             <Button variant="ghost" size="sm" onClick={() => void logout()}>
               <LogOut />

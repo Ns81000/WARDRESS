@@ -47,3 +47,7 @@ def enqueue_baseline_capture(baseline_id: uuid.UUID) -> None:
 
 def enqueue_scan(scan_id: uuid.UUID) -> None:
     _send("wardress.run_scan", [str(scan_id)])
+
+
+def enqueue_remediation(execution_id: uuid.UUID) -> None:
+    _send("wardress.fire_remediation", [str(execution_id)])

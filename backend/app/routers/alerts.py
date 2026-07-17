@@ -13,8 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit import record_audit
 from app.db import get_db
-from app.deps import CurrentUser
+from app.deps import AnalystUser, CurrentUser
 from app.models import Alert, Site, utcnow
 from app.schemas import AlertDeliveryOut, AlertDetailOut, AlertOut, AlertPage
 
@@ -76,7 +77,7 @@ async def get_alert(alert_id: uuid.UUID, user: CurrentUser, db: DB) -> AlertDeta
 
 
 @router.post("/{alert_id}/ack", response_model=AlertDetailOut)
-async def acknowledge_alert(alert_id: uuid.UUID, user: CurrentUser, db: DB) -> AlertDetailOut:
+async def acknowledge_alert(alert_id: uuid.UUID, user: AnalystUser, db: DB) -> AlertDetailOut:
     """Idempotent: acking an already-acked alert returns it unchanged
     (first ack wins — the bot and the dashboard may race)."""
     alert = await db.scalar(
@@ -88,6 +89,15 @@ async def acknowledge_alert(alert_id: uuid.UUID, user: CurrentUser, db: DB) -> A
         alert.acknowledged_at = utcnow()
         alert.acknowledged_by = user.id
         alert.acknowledged_via = "dashboard"
+        record_audit(
+            db,
+            actor=user,
+            action="alert.acknowledge",
+            target_type="alert",
+            target_id=alert.id,
+            target_label=f"Alert {str(alert.id)[:8]}",
+            after={"risk_score": alert.risk_score, "via": "dashboard"},
+        )
         await db.commit()
     site = await db.scalar(select(Site).where(Site.id == alert.site_id))
     return _detail(alert, site.name if site else None)

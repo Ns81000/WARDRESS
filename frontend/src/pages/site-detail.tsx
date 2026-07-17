@@ -11,6 +11,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router"
 import { toast } from "sonner"
 
+import { RemediationHooksPanel } from "@/components/remediation-hooks-panel"
 import { StatusDot, type DotState } from "@/components/status-dot"
 import { SuppressionPanel } from "@/components/suppression-panel"
 import { Badge } from "@/components/ui/badge"
@@ -448,6 +449,10 @@ export function SiteDetailPage() {
               : null
           }
         />
+      </div>
+
+      <div className="mb-8">
+        <RemediationHooksPanel siteId={s.id} />
       </div>
 
       <div className="mb-4 flex items-center justify-between">

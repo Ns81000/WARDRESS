@@ -39,6 +39,33 @@ DISPATCH_TICK_SECONDS = 60
 # ticks instead; workers are the bottleneck anyway).
 MAX_DISPATCH_PER_TICK = 50
 
+# Redis heartbeat key the health page reads (Phase 5 §7): proof that
+# Beat is scheduling AND a worker is executing (the tick runs on a
+# worker). Written best-effort — a Redis blip must not fail the tick.
+DISPATCH_HEARTBEAT_KEY = "wardress:heartbeat:dispatch"
+HEARTBEAT_TTL_SECONDS = DISPATCH_TICK_SECONDS * 10
+
+
+def _write_heartbeat() -> None:
+    try:
+        import os
+
+        import redis
+
+        client = redis.from_url(
+            os.environ.get("REDIS_URL", "redis://redis:6379/0"), socket_connect_timeout=2
+        )
+        try:
+            client.set(
+                DISPATCH_HEARTBEAT_KEY,
+                datetime.now(UTC).isoformat(),
+                ex=HEARTBEAT_TTL_SECONDS,
+            )
+        finally:
+            client.close()
+    except Exception:
+        logger.debug("Could not write dispatch heartbeat", exc_info=True)
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -126,6 +153,7 @@ def dispatch_due_scans() -> dict:
         stats = asyncio.run(_dispatch_due_scans())
         if stats["due"]:
             logger.info("Scan dispatch tick: %s", stats)
+        _write_heartbeat()
         return stats
     except Exception:
         # The dispatcher must survive DB outages — Beat keeps ticking and

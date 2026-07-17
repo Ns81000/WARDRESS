@@ -28,6 +28,7 @@ from telegram import Update
 from telegram.error import InvalidToken, TelegramError
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+from app.audit import record_audit
 from app.models import (
     Alert,
     Baseline,
@@ -328,6 +329,16 @@ async def cmd_ack(update, context, send) -> None:
         alert = matches[0]
         alert.acknowledged_at = datetime.now(UTC)
         alert.acknowledged_via = "telegram"
+        record_audit(
+            db,
+            actor=None,
+            actor_label="telegram-bot",
+            action="alert.acknowledge",
+            target_type="alert",
+            target_id=alert.id,
+            target_label=f"Alert {str(alert.id)[:8]}",
+            after={"risk_score": alert.risk_score, "via": "telegram"},
+        )
         await db.commit()
         site = await db.scalar(select(Site).where(Site.id == alert.site_id))
         site_name = site.name if site else "unknown site"
@@ -368,11 +379,31 @@ async def cmd_mute(update, context, send) -> None:
             return
         if duration == 0:
             site.muted_until = None
+            record_audit(
+                db,
+                actor=None,
+                actor_label="telegram-bot",
+                action="site.mute",
+                target_type="site",
+                target_id=site.id,
+                target_label=site.name,
+                after={"muted_until": None, "via": "telegram"},
+            )
             await db.commit()
             await send(f"Alerts for {site.name} are unmuted.")
             return
         site.muted_until = datetime.now(UTC) + timedelta(minutes=duration)
         until = site.muted_until.strftime("%Y-%m-%d %H:%M UTC")
+        record_audit(
+            db,
+            actor=None,
+            actor_label="telegram-bot",
+            action="site.mute",
+            target_type="site",
+            target_id=site.id,
+            target_label=site.name,
+            after={"muted_until": until, "via": "telegram"},
+        )
         await db.commit()
         await send(
             f"Alerts for {site.name} muted until {until}. "

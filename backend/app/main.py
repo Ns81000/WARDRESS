@@ -2,12 +2,28 @@
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
-from app.routers import alerts, artifacts, auth, reports, settings, sites
+from app.config import get_settings
+from app.ratelimit import enforce_ip_rate_limit
+from app.routers import (
+    alerts,
+    apikeys,
+    artifacts,
+    audit,
+    auth,
+    health,
+    imports,
+    remediation,
+    reports,
+    settings,
+    sites,
+    users,
+)
 
 app = FastAPI(
     title="Wardress",
@@ -15,16 +31,45 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# CORS locked to explicitly-configured origins (§9). The Phase 0 decision
+# serves the SPA same-origin, so the default list is empty and no cross-
+# origin request is permitted; set CORS_ALLOWED_ORIGINS only if the
+# frontend is ever hosted elsewhere.
+_cors_origins = get_settings().cors_origins()
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-@app.get("/api/health", tags=["operations"])
-async def health() -> dict[str, str]:
-    """Liveness probe. Extended in Phase 5 with queue depth, scan latency,
-    DB size, and uptime per the master prompt §7."""
-    return {"status": "ok", "service": "wardress-api"}
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Per-IP rate limit (§9), applied before authentication so
+    unauthenticated floods are capped too. Static asset routes are exempt
+    — only the API surface is metered. Per-user limiting runs later, in
+    the auth dependency."""
+    if request.url.path.startswith("/api/"):
+        try:
+            enforce_ip_rate_limit(request)
+        except StarletteHTTPException as exc:
+            return JSONResponse(
+                {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+            )
+    return await call_next(request)
 
 
+app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(apikeys.router)
+app.include_router(audit.router)
 app.include_router(sites.router)
+app.include_router(imports.router)
+app.include_router(remediation.router)
 app.include_router(artifacts.router)
 app.include_router(alerts.router)
 app.include_router(settings.router)

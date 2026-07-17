@@ -1253,3 +1253,234 @@ foreground; `alembic upgrade head` applied e9a2b7c15f04):
   Phase 0 sign-off decision — unchanged for this phase.
 
 ---
+
+## Phase 5 — Advanced Features & Hardening (2026-07-17)
+
+**Tests: 379 backend (was 313) + 25 frontend (was 19).** All green;
+ruff, tsc, oxlint clean; pip-audit and pnpm audit report zero findings
+(the Phase 0 "moderate, dev-only" pnpm deferral is now closed — nothing
+at any severity). Live compose verification: 22/22 checks.
+
+### What shipped
+
+1. **RBAC on every endpoint.** `require_roles` dependency factory in
+   `app/deps.py`; viewers read-only, analysts run monitoring and incident
+   response (sites, scans, suppression, acks, explains, bulk import,
+   remediation confirm/dismiss), admins everything (users, settings,
+   channels, hooks, audit). The frontend hides what a role cannot do,
+   but enforcement is entirely server-side. User management UI in
+   Settings (create, role change, deactivate) with lockout guards: no
+   self-demotion/self-deactivation, last-active-admin protected, and any
+   role/password/deactivation change revokes the user's refresh-token
+   families server-side.
+2. **Audit log.** `app/audit.py` stages an `AuditLog` row on the caller's
+   session so the audit commits atomically with the change it records.
+   Covered actions: site create/update/delete/mute/rebaseline,
+   suppression rules, settings (SMTP/Telegram/Gemini/Ollama), channels,
+   alert acks (dashboard and Telegram-bot, the latter attributed
+   "telegram-bot"), user management, API keys, remediation hooks and
+   confirm/dismiss decisions, bulk imports. Key-fragment redaction
+   (`password`, `token`, `secret`, `webhook_url`, `config`, ...) keeps
+   secret values out at write time; site URLs deliberately stay. Admin
+   UI at /audit with action-prefix, target-type, and actor filters.
+3. **API keys.** `wk_`-prefixed, SHA-256 at rest, raw value shown
+   exactly once at creation, revocable, honored by the same RBAC as the
+   owner. Keys cannot manage keys (credential changes require a real
+   session). `last_used_at` tracked (throttled to one write/minute).
+   Bearer routing in `app/deps.py` inspects the prefix, so JWTs and API
+   keys share one header.
+4. **Bulk import.** `/api/sites/bulk-import`: CSV text (`url` or
+   `url,name`) or sitemap crawl (urlset + one level of sitemapindex,
+   lxml `no_network` + `recover`), 500-row/512 KB caps, per-row results
+   (created/skipped/error, never all-or-nothing), per-row SSRF checks,
+   baselines enqueued only after commit. Sites-page dialog with per-row
+   result list.
+5. **Remediation webhooks.** Per-site hooks (git_rollback,
+   docker_restart, maintenance_page_swap, custom_webhook as payload
+   labels), URL Fernet-encrypted and only ever surfaced as a redacted
+   hint. `requires_manual_confirm=true` by default — flagged scans park
+   executions in a confirm queue (/remediation) and nothing fires
+   without an analyst decision; auto-execute is an explicit, warning-
+   labeled per-hook opt-in. Firing happens in a separate Celery task
+   (`worker/remediation_tasks.py`); a broken hook, dead endpoint, or
+   full queue can never affect a scan (rule 6). Unique (hook, scan)
+   index makes creation idempotent; a failed enqueue reverts the row to
+   pending_confirm instead of stranding it.
+6. **Security hardening.**
+   - **DNS rebinding closed for raw-httpx fetches**: new
+     `SSRFPinningTransport` (`app/ssrf_transport.py`) resolves,
+     validates, and connects to the SAME address on every hop
+     (redirects included), preserving Host + TLS SNI via httpcore's
+     `sni_hostname` extension — no second resolution to race. Used by
+     the probe layer and the sitemap crawler. Playwright still resolves
+     independently; its guard remains post-redirect final-URL
+     re-validation (documented in `app/ssrf.py`).
+   - **Rate limiting**: fixed-window per-IP (pre-auth middleware) and
+     per-user (post-auth dependency) limits, 429 + Retry-After,
+     configurable via env, X-Forwarded-For honored only behind
+     `TRUST_PROXY_HEADERS=true`.
+   - **CORS**: locked to same-origin by default (empty allow-list; the
+     SPA is served by the API container), env-configurable.
+   - **Secrets audit**: no hardcoded credentials, no secret values in
+     logs or audit rows, .env gitignored.
+7. **Health/status.** `/api/health/live` (unauthenticated, no DB — now
+   the compose healthcheck), `/api/health` readiness, and an authed
+   `/api/health/details` powering the /health dashboard page: queue
+   depth (Redis llen), worker liveness (broker-only Celery control ping
+   — the API still never imports worker code), Beat liveness via a
+   Redis heartbeat written by the dispatch tick, DB size
+   (`pg_database_size`), scan latency and 24h counts, uptime. Probes
+   run in threads with 2 s timeouts and every failure degrades to a
+   labeled component status instead of an error page.
+
+### Decisions
+
+- **Settings/channels are admin-scope** (not analyst): they carry
+  credentials and instance-wide delivery behavior. Analyst scope is
+  operational monitoring; the split follows the kickoff's role list.
+- **Audit rows are staged, not separately committed** — atomic with the
+  change, and `record_audit` never raises (a broken audit path must not
+  block the action it describes).
+- **The dispatch heartbeat doubles as Beat + worker proof** (the tick is
+  scheduled by Beat and executed by a worker), replacing the earlier
+  next_scan_at heuristic.
+- **API-key display prefix (`wk_` + 8 chars) is public by design** — it
+  identifies keys in lists and audit rows; only the SHA-256 of the full
+  key is stored.
+
+### Incidents & fixes during the phase
+
+1. **Confirm-queue stuck state**: a row confirmed while the queue was
+   down would have stayed `queued` forever. Fixed: failed enqueue
+   reverts to `pending_confirm` with a detail note, and stale `queued`
+   rows accept re-confirmation.
+2. **Enum-vs-string comparisons in the users router** (`User.role ==
+   "admin"` never matches a StrEnum column under SQLAlchemy) — caught
+   in review, converted to `UserRole` comparisons before any test ran.
+3. **Beat container kept running the old image** after the worker-image
+   rebuild — `docker compose up -d` does not recreate a running
+   container whose config didn't change; explicit `--force-recreate`
+   for beat is now part of the deploy notes.
+4. **Live-check false positive**: the "no secrets in audit rows"
+   heuristic flagged the public key display prefix; verified by
+   inspection that only `key_prefix` is stored, never the raw key.
+
+### Deliberate deferrals (not bugs)
+
+- **Playwright DNS pinning** stays open as documented: browser
+  navigation resolves DNS itself; the guard there remains post-redirect
+  final-URL re-validation. Full pinning would require a proxy layer —
+  out of proportion for Phase 5.
+- **Rate-limit state is per-process memory** (fine at single-API-
+  container scale; move to Redis only if the API is ever replicated).
+- **Telegram bot liveness heartbeat** not surfaced on the health page
+  (bot is optional and single-owner; worker/Beat/DB/Redis cover the
+  scan-critical path).
+- **Artifact-file janitor for deleted sites** still deferred from
+  Phase 1 (rows cascade; files are small and harmless).
+### Manual sign-off (completed 2026-07-17)
+
+The user ran the manual negative/malformed-input pass against the live
+stack (PowerShell, outside Claude Code): garbage JSON, missing fields,
+bad URL schemes, loopback targets, fake JWTs, fake API keys, malformed
+IDs, 40x wrong-password attempts, and an oversized bulk import. Every
+probe returned a clean 4xx; no 500s, no crashes, all containers healthy
+afterward. Two expectation notes (both correct behavior, wrong
+prediction in the checklist):
+
+- Loopback site targets reject with **422** (not 400) — the sites
+  router surfaces SSRF violations as unprocessable input.
+- An over-cap bulk import returns **200 with the first 500 rows
+  processed and per-row results** — truncate-at-cap is the designed
+  behavior (imports are never all-or-nothing), not a rejection. The
+  one site this created was deleted afterward.
+
+Phase 5 is signed off.
+
+---
+
+## Phase 6 Kickoff Prompt
+
+Paste this into a fresh Claude Code chat, in the WARDRESS repo root:
+
+---
+
+**Wardress — Phase 6 Kickoff: Installer, Docs, Polish (final phase)**
+
+Before writing any code, read these three files in full, in this order:
+1. `WARDRESS_MASTER_PROMPT.md` — the complete project specification.
+   §14 defines this phase; §13 (QA charter) and §15 (Definition of
+   Done) bind every phase.
+2. `DESIGN-resend.md` — the visual language. Nothing ships in default
+   shadcn/Tailwind styling.
+3. `PROGRESS.md` — everything already built through Phase 5, including
+   decisions and deliberate deferrals. Do not re-litigate closed
+   decisions; do honor the deferrals list when in scope.
+
+**Current state (verified end of Phase 5):** 379 backend + 25 frontend
+tests green; ruff/tsc/oxlint clean; pip-audit and pnpm audit zero
+findings; live compose stack verified 22/22 (RBAC, audit log, API keys,
+bulk import, remediation queue, rate limiting, health page); the user's
+manual negative-input sign-off is complete (all clean 4xx, no 500s).
+Alembic head: `f3c8d6a91b27`. Compose healthcheck now uses
+`/api/health/live`. Note: after rebuilding the worker image,
+`docker compose up -d --force-recreate beat` is required — a running
+beat container is not recreated automatically.
+
+**Phase 6 scope (§14 — the last phase):**
+
+1. **`scripts/install.ps1` finished and tested** — one-command install
+   on a clean Windows machine with Docker Desktop: generate `.env`
+   secrets from `.env.example` (every CHANGE_ME replaced with a
+   cryptographically random value), build images serially, run
+   migrations, seed the admin user, print the dashboard URL and admin
+   credentials exactly once. Idempotent re-runs must not clobber an
+   existing `.env`.
+2. **`scripts/update.ps1`** — pull/rebuild, migrate, restart (including
+   the beat force-recreate gotcha), preserving data and `.env`.
+3. **README.md** — the logo from `assets/`, screenshots of the real UI
+   (ask the user to capture them if you cannot), feature overview,
+   requirements, install/update/uninstall instructions, .env reference
+   (including the Phase 5 rate-limit/CORS settings), role model table,
+   API-key usage example, and the standing security notes (SSRF
+   policy, secrets-at-rest, fail-safe alerting).
+4. **Final full-system §13 QA pass** — every phase's functionality
+   together, not in isolation: cross-feature flows (e.g. bulk-imported
+   site → auto scan → flagged → alert + remediation confirm → audit
+   trail; RBAC across every surface incl. artifacts/reports; restart
+   resilience). Fix what you find, grow the suites.
+5. **Polish** — anything the QA pass surfaces in UI consistency
+   (design tokens, empty states, loading states) and OpenAPI
+   completeness. Check the deferrals list in PROGRESS.md; close any
+   that are cheap now (e.g. artifact-file janitor) or re-log them with
+   reasons as permanent.
+
+**Standing constraints (unchanged, binding):**
+- All QA and testing work — including how it is reasoned about and
+  described out loud — uses neutral engineering language: tests, edge
+  cases, failure modes, validation, invariants, regression coverage.
+  Do not frame or narrate QA as attacks, adversaries, or exploitation.
+- The §13 QA pass runs directly in the main session — never delegated
+  to a themed subagent persona.
+- Negative/malformed-input probing of the RUNNING system is not
+  performed by Claude Code — it is a manual user step in the sign-off
+  checklist, executed outside Claude Code. Claude Code still writes
+  unit/integration tests for malformed-input handling in application
+  code.
+- Never assume a library API — check `docs-cache/` or fetch docs
+  first. Never add a package version you have not verified.
+- uv and pnpm only (never pip/npm/yarn). No GPU deps. Secrets via
+  `.env` only — never printed, never committed.
+- New features fail safe: a broken hook, revoked key, or dead endpoint
+  must never break scanning.
+- No emoji anywhere in the product. Follow DESIGN-resend.md tokens.
+- Build Docker images serially in the foreground — never overlap
+  builds in background tasks.
+- Update `PROGRESS.md` at the end. This is the final phase: close it
+  with a "Project complete" summary instead of a Phase 7 prompt, plus
+  a maintenance checklist (how to update deps, re-run audits, rotate
+  secrets).
+- Remind the user of their manual negative-input QA sign-off step at
+  the end.
+
+---

@@ -12,7 +12,12 @@ celery_app = Celery(
     "wardress",
     broker=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
     backend=os.environ.get("REDIS_URL", "redis://redis:6379/0"),
-    include=["worker.scan_tasks", "worker.beat_tasks", "worker.alert_tasks"],
+    include=[
+        "worker.scan_tasks",
+        "worker.beat_tasks",
+        "worker.alert_tasks",
+        "worker.remediation_tasks",
+    ],
 )
 
 celery_app.conf.update(

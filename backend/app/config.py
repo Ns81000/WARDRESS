@@ -64,6 +64,27 @@ class Settings(BaseSettings):
     # self-hosted default is the local port from install.ps1.
     public_base_url: str = "http://localhost:8321"
 
+    # --- Phase 5 hardening (§9) ---
+    # Per-IP and per-user API rate limits (requests per window). Generous
+    # defaults: this is a self-hosted dashboard, not a public API; the
+    # limits exist to blunt floods/credential-stuffing, not to meter use.
+    # 0 disables a limit (unit tests do this; production keeps them on).
+    rate_limit_per_ip: int = 300
+    rate_limit_per_user: int = 240
+    rate_limit_window_seconds: int = 60
+    # Honor X-Forwarded-For for the per-IP limit only when explicitly
+    # fronted by a trusted reverse proxy. Default off: the socket peer is
+    # authoritative and unspoofable on the plain self-hosted setup.
+    trust_proxy_headers: bool = False
+    # CORS: same-origin serving (Phase 0 decision) needs no CORS at all,
+    # so the default list is empty and no CORS middleware permits anything.
+    # Set to the exact dashboard origin(s) only if the frontend is ever
+    # served from elsewhere. Comma-separated in the env.
+    cors_allowed_origins: str = ""
+
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

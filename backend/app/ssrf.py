@@ -12,8 +12,12 @@ Known limitation (logged in PROGRESS.md): validation resolves DNS at
 check time while Playwright resolves again at fetch time, so a
 fast-flipping DNS record (rebinding) could pass the check and then
 resolve privately. The fetch pipeline re-validates the final URL after
-redirects, which closes the redirect vector; full pin-the-IP transport
-is a Phase 5 hardening item.
+redirects, which closes the redirect vector. Phase 5 adds the
+`_address_blocked` helper and `SSRFPinningTransport`
+(app/ssrf_transport.py) so the raw-httpx probe path resolves, validates,
+and connects to the SAME address on every hop (no second resolution to
+race); Playwright navigation still resolves independently, so the
+redirect re-validation remains its primary guard.
 """
 
 import ipaddress
@@ -110,3 +114,17 @@ def assert_url_allowed(url: str, *, allow_private_networks: bool = False) -> Non
                 "'allow private networks' on this site if you intend to monitor "
                 "an internal host."
             )
+
+
+def _address_blocked(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_private_networks: bool
+) -> bool:
+    """Shared address-range policy, used by assert_url_allowed's inline
+    check and by the pinning transport (app/ssrf_transport.py)."""
+    if allow_private_networks:
+        return (
+            addr.is_multicast
+            or addr.is_unspecified
+            or (addr.is_reserved and not addr.is_loopback)
+        )
+    return _is_forbidden_address(addr)

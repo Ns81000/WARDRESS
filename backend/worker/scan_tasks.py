@@ -309,6 +309,11 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
             # notification channel must never block or crash a scan
             # (rule 6). Any failure here is logged and swallowed.
             await _create_alert(db, scan)
+            # Remediation (§9): create execution rows (pending_confirm by
+            # default; queued for explicit auto-execute hooks) and enqueue
+            # only the ready ones as a separate task. Best-effort — a
+            # broken hook never affects the scan.
+            await _create_remediations(db, scan)
 
         # Scheduling tightens on *material* change (risk-based), not on
         # any nonzero layer score — a dynamic page whose hash flips every
@@ -334,6 +339,23 @@ async def _create_alert(db, scan: Scan) -> None:
         celery_app.send_task("wardress.deliver_alert", args=[str(alert.id)])
     except Exception:
         logger.exception("Could not create/enqueue alert for scan %s", scan.id)
+
+
+async def _create_remediations(db, scan: Scan) -> None:
+    """Create remediation executions for a flagged scan and enqueue the
+    auto-execute ones. Best-effort: any failure is logged, never raised
+    (rule 6) — a misconfigured hook cannot affect scanning."""
+    try:
+        from app.remediation import create_executions_for_flagged_scan
+
+        ready = await create_executions_for_flagged_scan(db, scan)
+        for execution_id in ready:
+            try:
+                celery_app.send_task("wardress.fire_remediation", args=[str(execution_id)])
+            except Exception:
+                logger.exception("Could not enqueue remediation %s", execution_id)
+    except Exception:
+        logger.exception("Could not create remediations for scan %s", scan.id)
 
 
 async def _schedule_next(db, site: Site, *, changed: bool) -> None:

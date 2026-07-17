@@ -3,6 +3,7 @@
 import re
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
@@ -10,6 +11,8 @@ from app.models import (
     AlertDeliveryStatus,
     BaselineStatus,
     NotificationChannelType,
+    RemediationActionType,
+    RemediationExecutionStatus,
     ScanStatus,
     ScanVerdict,
     SuppressionRuleType,
@@ -480,3 +483,251 @@ class ExplainResponse(BaseModel):
     provider: str
     generated_at: datetime
     cached: bool
+
+
+# --- Phase 5: user management (§7 /api/users, admin-only) ---
+
+
+class UserCreate(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(min_length=12, max_length=1024)
+    role: UserRole = UserRole.viewer
+
+    @field_validator("email")
+    @classmethod
+    def email_shape(cls, v: str) -> str:
+        v = v.strip().lower()
+        if "@" not in v or len(v) < 3:
+            raise ValueError("a valid email address is required")
+        return v
+
+
+class UserUpdate(BaseModel):
+    """Admin patch: role, active flag, or a password reset. All optional."""
+
+    role: UserRole | None = None
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=1024)
+
+
+class UserAdminOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+
+
+# --- Phase 5: API keys (§6 api_keys) ---
+
+
+class ApiKeyCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+    @field_validator("label")
+    @classmethod
+    def strip_label(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("label must not be blank")
+        return v
+
+
+class ApiKeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    label: str
+    key_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class ApiKeyCreatedOut(ApiKeyOut):
+    """Creation response only: the single time the raw key is revealed."""
+
+    key: str
+
+
+# --- Phase 5: audit log (§6/§7) ---
+
+
+class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    actor_id: uuid.UUID | None
+    actor_email: str | None
+    action: str
+    target_type: str
+    target_id: str | None
+    target_label: str | None
+    before_json: dict | None
+    after_json: dict | None
+    created_at: datetime
+
+
+class AuditLogPage(BaseModel):
+    items: list[AuditLogOut]
+    total: int
+    offset: int
+    limit: int
+
+
+# --- Phase 5: bulk site import (§7 /api/sites/bulk-import) ---
+
+# The frontend reads the chosen CSV client-side and posts its text, so
+# the API needs no multipart parser (and no new dependency). Caps keep a
+# pathological upload from becoming a memory problem.
+BULK_IMPORT_MAX_CSV_BYTES = 512 * 1024
+BULK_IMPORT_MAX_ROWS = 500
+
+
+class BulkImportRequest(BaseModel):
+    """Exactly one source: inline CSV text, or a sitemap URL to crawl."""
+
+    csv_text: str | None = Field(default=None, max_length=BULK_IMPORT_MAX_CSV_BYTES)
+    sitemap_url: str | None = Field(default=None, max_length=2048)
+    # Applied to every created site (same defaults as single-site create).
+    allow_private_networks: bool = False
+    auto_scan_enabled: bool = True
+    scan_interval_minutes: int = Field(default=60, ge=5, le=24 * 60)
+
+    def validate_source(self) -> None:
+        if bool(self.csv_text) == bool(self.sitemap_url):
+            raise ValueError("provide either csv_text or sitemap_url (exactly one)")
+
+
+class BulkImportRowResult(BaseModel):
+    """Per-row outcome — imports are never all-or-nothing (§11)."""
+
+    row: int
+    url: str
+    name: str | None
+    status: str  # created | skipped | error
+    detail: str | None = None
+    site_id: uuid.UUID | None = None
+
+
+class BulkImportResult(BaseModel):
+    total_rows: int
+    created: int
+    skipped: int
+    errors: int
+    results: list[BulkImportRowResult]
+
+
+# --- Phase 5: remediation hooks (§6/§9) ---
+
+
+class RemediationHookCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    action_type: RemediationActionType
+    webhook_url: str = Field(min_length=1, max_length=2048)
+    trigger_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # §9: manual confirm is the default; auto-execute is an explicit,
+    # clearly-labeled opt-in surfaced as its own toggle in the UI.
+    requires_manual_confirm: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
+    @field_validator("webhook_url")
+    @classmethod
+    def url_shape(cls, v: str) -> str:
+        v = v.strip()
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("webhook_url must be an http(s) URL")
+        return v
+
+
+class RemediationHookUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    webhook_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    trigger_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    requires_manual_confirm: bool | None = None
+    is_active: bool | None = None
+
+    @field_validator("webhook_url")
+    @classmethod
+    def url_shape(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("webhook_url must be an http(s) URL")
+        return v
+
+
+class RemediationHookOut(BaseModel):
+    """Hook metadata. The stored webhook URL is encrypted and never
+    round-trips whole — `url_hint` is a redacted display form."""
+
+    id: uuid.UUID
+    site_id: uuid.UUID
+    name: str
+    action_type: RemediationActionType
+    trigger_threshold: float
+    requires_manual_confirm: bool
+    is_active: bool
+    url_hint: str
+    created_at: datetime
+
+
+class RemediationExecutionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    hook_id: uuid.UUID
+    site_id: uuid.UUID
+    scan_id: uuid.UUID
+    status: RemediationExecutionStatus
+    hook_name: str
+    action_type: str
+    risk_score: float | None
+    detail: str | None
+    confirmed_at: datetime | None
+    executed_at: datetime | None
+    created_at: datetime
+    site_name: str | None = None
+
+
+class RemediationExecutionPage(BaseModel):
+    items: list[RemediationExecutionOut]
+    total: int
+    offset: int
+    limit: int
+
+
+# --- Phase 5: operational health (§7 /api/health) ---
+
+
+class HealthComponent(BaseModel):
+    """One monitored component. status: ok | degraded | down | unknown;
+    detail is always user-safe."""
+
+    status: str
+    detail: str | None = None
+
+
+class HealthDetails(BaseModel):
+    status: str
+    uptime_seconds: int
+    queue_depth: int | None
+    db_size_bytes: int | None
+    sites_total: int
+    scans_last_24h: int
+    avg_scan_seconds: float | None
+    last_scan_at: datetime | None
+    last_dispatch_tick_at: datetime | None
+    components: dict[str, HealthComponent]
