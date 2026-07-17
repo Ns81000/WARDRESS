@@ -59,7 +59,36 @@ def _common_size(a: Image.Image, b: Image.Image) -> tuple[int, int]:
     return COMPARE_WIDTH, h
 
 
-def layer4_visual_diff(baseline: PageData, current: PageData) -> dict:
+def _mask_regions(
+    img: Image.Image,
+    bboxes: list[tuple[float, float, float, float]],
+    reference: Image.Image,
+) -> Image.Image:
+    """Fill suppressed regions with a uniform mid-gray on a copy. The
+    fractions are resolved against the REFERENCE (baseline) geometry —
+    the capture the user drew on — then scaled to this image through the
+    width ratio only. Widths match across captures of the same viewport;
+    heights vary with content, and scaling y by each image's own height
+    would drift the mask off the intended content on a taller page."""
+    if not bboxes:
+        return img
+    scale = img.width / reference.width if reference.width else 1.0
+    out = img.copy()
+    for x, y, w, h in bboxes:
+        left = round(x * reference.width * scale)
+        top = round(y * reference.height * scale)
+        right = min(img.width, round((x + w) * reference.width * scale))
+        bottom = min(img.height, round((y + h) * reference.height * scale))
+        if right > left and bottom > top:
+            out.paste(128, (left, top, right, bottom))
+    return out
+
+
+def layer4_visual_diff(
+    baseline: PageData,
+    current: PageData,
+    suppress_bboxes: list[tuple[float, float, float, float]] | None = None,
+) -> dict:
     b_img = _load_grayscale(baseline.screenshot)
     c_img = _load_grayscale(current.screenshot)
 
@@ -72,6 +101,16 @@ def layer4_visual_diff(baseline: PageData, current: PageData) -> dict:
                 "current_screenshot_ok": c_img is not None,
             },
         )
+
+    # Suppressed regions are masked identically on both sides BEFORE any
+    # comparison — SSIM and the perceptual hashes both see the mask. The
+    # baseline capture is the coordinate reference (it's what the user
+    # drew the region on).
+    suppress_bboxes = suppress_bboxes or []
+    if suppress_bboxes:
+        reference = b_img
+        b_img = _mask_regions(b_img, suppress_bboxes, reference)
+        c_img = _mask_regions(c_img, suppress_bboxes, reference)
 
     w, h = _common_size(b_img, c_img)
     b_small = b_img.resize((w, max(8, round(b_img.height * (w / b_img.width)))))
@@ -115,4 +154,6 @@ def layer4_visual_diff(baseline: PageData, current: PageData) -> dict:
         "current_size": [c_img.width, c_img.height],
         "compared_size": [w, h],
     }
+    if suppress_bboxes:
+        evidence["suppressed_regions"] = [list(b) for b in suppress_bboxes[:20]]
     return layer_result(score, evidence)

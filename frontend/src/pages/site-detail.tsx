@@ -1,10 +1,18 @@
-import { useState } from "react"
+import { Suspense, lazy, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, RefreshCcw, ScanSearch, Settings2 } from "lucide-react"
-import { Link, useParams } from "react-router"
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCcw,
+  ScanSearch,
+  Settings2,
+} from "lucide-react"
+import { Link, useNavigate, useParams } from "react-router"
 import { toast } from "sonner"
 
 import { StatusDot, type DotState } from "@/components/status-dot"
+import { SuppressionPanel } from "@/components/suppression-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -26,6 +34,17 @@ import {
 } from "@/components/ui/table"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Scan, type Site } from "@/lib/api"
+
+const IncidentTimeline = lazy(() =>
+  import("@/components/incident-timeline").then((m) => ({
+    default: m.IncidentTimeline,
+  }))
+)
+
+const SCANS_PAGE_SIZE = 20
+// The timeline reads a deeper slice than the table page so history is
+// visible at a glance; pagination covers the rest.
+const TIMELINE_WINDOW = 200
 
 function verdictBadge(scan: Scan) {
   if (scan.status === "failed" || scan.verdict === "error")
@@ -174,7 +193,9 @@ function SettingsCard({ site }: { site: Site }) {
 
 export function SiteDetailPage() {
   const { siteId } = useParams<{ siteId: string }>()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [page, setPage] = useState(0)
 
   const site = useQuery({
     queryKey: ["sites", siteId],
@@ -187,14 +208,27 @@ export function SiteDetailPage() {
   })
 
   const scans = useQuery({
-    queryKey: ["sites", siteId, "scans"],
-    queryFn: () => apiClient.listScans(siteId!),
+    queryKey: ["sites", siteId, "scans", { page }],
+    queryFn: () => apiClient.listScans(siteId!, page * SCANS_PAGE_SIZE, SCANS_PAGE_SIZE),
     enabled: !!siteId,
     refetchInterval: (query) =>
-      query.state.data?.some(
+      query.state.data?.items.some(
         (s) => s.status === "pending" || s.status === "running"
       )
         ? 2000
+        : false,
+  })
+
+  // Timeline slice: deeper than one table page, refreshed with the list.
+  const history = useQuery({
+    queryKey: ["sites", siteId, "scans", "timeline"],
+    queryFn: () => apiClient.listScans(siteId!, 0, TIMELINE_WINDOW),
+    enabled: !!siteId,
+    refetchInterval: (query) =>
+      query.state.data?.items.some(
+        (s) => s.status === "pending" || s.status === "running"
+      )
+        ? 5000
         : false,
   })
 
@@ -238,9 +272,11 @@ export function SiteDetailPage() {
 
   const s = site.data
   const baselineReady = s.baseline_status === "ready"
-  const scanInFlight = scans.data?.some(
+  const scanInFlight = scans.data?.items.some(
     (x) => x.status === "pending" || x.status === "running"
   )
+  const totalScans = scans.data?.total ?? 0
+  const pageCount = Math.max(1, Math.ceil(totalScans / SCANS_PAGE_SIZE))
 
   return (
     <div>
@@ -251,10 +287,10 @@ export function SiteDetailPage() {
         </Link>
       </Button>
 
-      <div className="mb-8 flex items-end justify-between">
-        <div>
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-display-lg text-ink">{s.name}</h1>
-          <p className="mt-2 text-code-md text-charcoal">{s.url}</p>
+          <p className="mt-2 truncate text-code-md text-charcoal">{s.url}</p>
         </div>
         <div className="flex items-center gap-3">
           <Button
@@ -322,7 +358,62 @@ export function SiteDetailPage() {
         <SettingsCard key={s.id + String(s.flag_threshold)} site={s} />
       </div>
 
-      <h2 className="mb-4 text-heading-md text-ink">Scans</h2>
+      <h2 className="mb-4 text-heading-md text-ink">Risk history</h2>
+      <div className="mb-8">
+        <Suspense
+          fallback={
+            <div className="flex h-[220px] items-center justify-center rounded-lg border border-hairline-strong bg-surface-card">
+              <p className="text-body-sm text-mute">Loading timeline…</p>
+            </div>
+          }
+        >
+          <IncidentTimeline
+            scans={history.data?.items ?? []}
+            threshold={s.flag_threshold}
+            onPointClick={(scanId) => void navigate(`/sites/${s.id}/scans/${scanId}`)}
+          />
+        </Suspense>
+      </div>
+
+      <div className="mb-8">
+        <SuppressionPanel
+          siteId={s.id}
+          baselineScreenshotPath={
+            baselineReady && s.baseline_id
+              ? apiClient.baselineScreenshotPath(s.baseline_id)
+              : null
+          }
+        />
+      </div>
+
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-heading-md text-ink">Scans</h2>
+        {pageCount > 1 && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Newer scans"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft />
+            </Button>
+            <span className="text-caption text-mute">
+              {page + 1} / {pageCount}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Older scans"
+              disabled={page >= pageCount - 1}
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            >
+              <ChevronRight />
+            </Button>
+          </div>
+        )}
+      </div>
       <div className="rounded-lg border border-hairline-strong bg-surface-card">
         {scans.isLoading ? (
           <p className="p-8 text-body-sm text-mute">Loading scans…</p>
@@ -330,7 +421,7 @@ export function SiteDetailPage() {
           <p className="p-8 text-body-sm text-accent-red">
             Could not load scans — is the API reachable?
           </p>
-        ) : scans.data && scans.data.length > 0 ? (
+        ) : scans.data && scans.data.items.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -339,12 +430,16 @@ export function SiteDetailPage() {
                 <TableHead>Risk</TableHead>
                 <TableHead>Layers</TableHead>
                 <TableHead>Started</TableHead>
-                <TableHead>Detail</TableHead>
+                <TableHead>Summary</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {scans.data.map((scan) => (
-                <TableRow key={scan.id}>
+              {scans.data.items.map((scan) => (
+                <TableRow
+                  key={scan.id}
+                  className="cursor-pointer"
+                  onClick={() => void navigate(`/sites/${s.id}/scans/${scan.id}`)}
+                >
                   <TableCell>
                     <span className="flex items-center gap-2">
                       <StatusDot state={scanDot(scan)} />
@@ -365,7 +460,7 @@ export function SiteDetailPage() {
                     {scan.error
                       ? scan.error
                       : scan.verdict === "flagged"
-                        ? "Risk above the site threshold — review the evidence"
+                        ? "Risk above the site threshold — open for evidence"
                         : scan.verdict === "changed"
                           ? "Changes detected below the flag threshold"
                           : scan.verdict === "clean"

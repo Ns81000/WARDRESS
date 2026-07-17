@@ -391,3 +391,76 @@ def test_task_wrapper_survives_unexpected_error(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(scan_tasks, "_mark_scan_failed", record_mark)
     assert scan_tasks.run_scan(str(uuid.uuid4())) == "error"
     assert len(marked) == 2
+
+
+async def test_scan_applies_stored_suppression_rules(
+    db_factory, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end through the task body: suppression rules stored for the
+    site are loaded and applied — a change confined to a suppressed
+    element yields zero content-layer scores, and the suppression is
+    recorded in the persisted findings."""
+    from app.models import SuppressionRule, SuppressionRuleType
+
+    baseline_html = '<html><body><h1>Site</h1><div id="counter">Visitor #1</div></body></html>'
+    current_html = '<html><body><h1>Site</h1><div id="counter">Visitor #2</div></body></html>'
+
+    async def fake_fetch(url: str, *, allow_private_networks: bool = False) -> FetchResult:
+        return _fetch_result(current_html)
+
+    monkeypatch.setattr(scan_tasks, "fetch_page", fake_fetch)
+
+    site, baseline = await _ready_site_and_baseline(db_factory, baseline_html=baseline_html)
+    # The content layers read the baseline HTML artifact from disk.
+    d = tmp_path / "baselines" / str(baseline.id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "page.html").write_text(baseline_html, encoding="utf-8")
+    async with db_factory() as db:
+        row = await db.get(Baseline, baseline.id)
+        row.html_path = f"baselines/{baseline.id}/page.html"
+        db.add(
+            SuppressionRule(
+                site_id=site.id,
+                type=SuppressionRuleType.css_selector,
+                value="#counter",
+            )
+        )
+        await db.commit()
+
+    scan = await _make_scan(db_factory, site.id, baseline.id)
+    verdict = await scan_tasks._run_scan(scan.id)
+    assert verdict in ("clean", "changed")  # never flagged
+
+    async with db_factory() as db:
+        findings = (
+            await db.execute(ScanFinding.__table__.select().where(ScanFinding.scan_id == scan.id))
+        ).all()
+    by_key = {f.layer_key: f for f in findings}
+    # Bytes changed (layer 1 fires) but every content layer sees the
+    # suppressed pair and scores zero.
+    assert by_key["layer1_hash"].score == 1.0
+    assert by_key["layer2_dom_structure"].score == 0.0
+    assert by_key["layer5_signatures"].score == 0.0
+    assert "suppression_applied" in by_key["layer2_dom_structure"].evidence
+    assert "suppression" in by_key["layer9_fusion"].evidence
+
+    row = await _get(db_factory, Scan, scan.id)
+    assert row.risk_score is not None and row.risk_score < 0.5
+
+
+async def test_scan_survives_broken_suppression_load(
+    db_factory, fetch_calls, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure while loading suppression rules must degrade to 'no
+    suppression', never fail the scan (rule 6)."""
+
+    # Patch one level down: build_suppression exploding inside the loader.
+    monkeypatch.setattr(
+        scan_tasks, "build_suppression", lambda rules: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    site, baseline = await _ready_site_and_baseline(db_factory)
+    scan = await _make_scan(db_factory, site.id, baseline.id)
+
+    assert await scan_tasks._run_scan(scan.id) == "clean"
+    row = await _get(db_factory, Scan, scan.id)
+    assert row.status is ScanStatus.completed

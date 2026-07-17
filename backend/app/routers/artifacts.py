@@ -54,3 +54,34 @@ async def scan_screenshot(
     if scan is None or not scan.screenshot_path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
     return FileResponse(_resolve_artifact(scan.screenshot_path), media_type="image/png")
+
+
+# HTML snapshots power the DOM diff tree viewer (Phase 3). Served as
+# text/plain, never text/html: a stored page is untrusted captured
+# content and must not be renderable/executable in the dashboard origin.
+# The frontend parses it with DOMParser (inert document) client-side.
+_HTML_AS_TEXT = "text/plain; charset=utf-8"
+
+
+@router.get("/baselines/{baseline_id}/html")
+async def baseline_html(
+    baseline_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> FileResponse:
+    baseline = await db.scalar(select(Baseline).where(Baseline.id == baseline_id))
+    if baseline is None or not baseline.html_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    return FileResponse(_resolve_artifact(baseline.html_path), media_type=_HTML_AS_TEXT)
+
+
+@router.get("/scans/{scan_id}/html")
+async def scan_html(
+    scan_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> FileResponse:
+    scan = await db.scalar(select(Scan).where(Scan.id == scan_id))
+    if scan is None or not scan.html_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    return FileResponse(_resolve_artifact(scan.html_path), media_type=_HTML_AS_TEXT)

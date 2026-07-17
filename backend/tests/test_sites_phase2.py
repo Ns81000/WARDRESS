@@ -217,7 +217,7 @@ async def test_scan_list_includes_risk_score(client, auth_headers, db_factory) -
     site, _ = await _site_with_completed_scan(client, auth_headers, db_factory)
     resp = await client.get(f"/api/sites/{site['id']}/scans", headers=auth_headers)
     assert resp.status_code == 200
-    scans = resp.json()
+    scans = resp.json()["items"]
     assert scans[0]["risk_score"] == 0.93
     assert scans[0]["layer_scores"]["layer1_hash"]["score"] == 1.0
 

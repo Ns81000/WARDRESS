@@ -71,8 +71,12 @@ def test_openapi_lists_all_endpoints() -> None:
         "/api/sites/{site_id}/scan-now",
         "/api/sites/{site_id}/scans",
         "/api/sites/{site_id}/scans/{scan_id}",
+        "/api/sites/{site_id}/suppression-rules",
+        "/api/sites/{site_id}/suppression-rules/{rule_id}",
         "/api/artifacts/baselines/{baseline_id}/screenshot",
         "/api/artifacts/scans/{scan_id}/screenshot",
+        "/api/artifacts/baselines/{baseline_id}/html",
+        "/api/artifacts/scans/{scan_id}/html",
     ):
         assert expected in paths, f"{expected} missing from OpenAPI schema"
     # PATCH settings endpoint present on the site path.

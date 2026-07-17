@@ -193,3 +193,36 @@ body {
   line-height: 1.6;
   font-feature-settings: "liga" 0;
 }
+
+/* Responsive behavior per the DESIGN-resend.md breakpoint table:
+ * display sizes clamp down the ladder (96 -> 76 -> 56 -> 44) instead of
+ * overflowing small viewports, and touch targets grow to WCAG AAA sizes
+ * on mobile (buttons 44px, inputs 48px) via min-height so desktop
+ * heights stay exactly on spec. */
+@media (max-width: 767px) {
+  .text-display-xxl {
+    font-size: 56px;
+    letter-spacing: -0.56px;
+  }
+  .text-display-xl {
+    font-size: 56px;
+    letter-spacing: -0.56px;
+  }
+  .text-display-lg {
+    font-size: 40px;
+    letter-spacing: -2px;
+  }
+  [data-slot="button"]:not([data-size="icon-xs"]):not([data-size="xs"]) {
+    min-height: 44px;
+  }
+  [data-slot="input"] {
+    min-height: 48px;
+  }
+}
+@media (max-width: 425px) {
+  .text-display-xxl,
+  .text-display-xl {
+    font-size: 44px;
+    letter-spacing: -0.44px;
+  }
+}

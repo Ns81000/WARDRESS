@@ -97,3 +97,55 @@ async def test_screenshot_null_path_404(
         f"/api/artifacts/baselines/{baseline.id}/screenshot", headers=auth_headers
     )
     assert resp.status_code == 404
+
+
+# --- HTML snapshot endpoints (Phase 3: DOM diff tree source) ---
+
+
+async def _site_with_html_baseline(db_factory, artifacts_dir, html: str) -> Baseline:
+    rel = "baselines/x/page.html"
+    p = artifacts_dir / "baselines" / "x"
+    p.mkdir(parents=True)
+    (p / "page.html").write_text(html, encoding="utf-8")
+    async with db_factory() as db:
+        site = Site(name="Example", url="https://example.com/")
+        db.add(site)
+        await db.flush()
+        baseline = Baseline(
+            site_id=site.id,
+            status=BaselineStatus.ready,
+            is_current=True,
+            content_hash="a" * 64,
+            html_path=rel,
+        )
+        db.add(baseline)
+        await db.commit()
+        await db.refresh(baseline)
+        return baseline
+
+
+async def test_html_requires_auth(client: httpx.AsyncClient) -> None:
+    resp = await client.get(f"/api/artifacts/baselines/{uuid.uuid4()}/html")
+    assert resp.status_code == 401
+
+
+async def test_html_served_as_text_plain(
+    client: httpx.AsyncClient, auth_headers: dict, db_factory, artifacts_dir
+) -> None:
+    """Captured pages are untrusted content: they must come back as
+    text/plain so the browser can never render/execute them in the
+    dashboard origin."""
+    baseline = await _site_with_html_baseline(
+        db_factory, artifacts_dir, "<html><script>alert(1)</script></html>"
+    )
+    resp = await client.get(f"/api/artifacts/baselines/{baseline.id}/html", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "alert(1)" in resp.text
+
+
+async def test_html_missing_row_404(
+    client: httpx.AsyncClient, auth_headers: dict, artifacts_dir
+) -> None:
+    resp = await client.get(f"/api/artifacts/scans/{uuid.uuid4()}/html", headers=auth_headers)
+    assert resp.status_code == 404

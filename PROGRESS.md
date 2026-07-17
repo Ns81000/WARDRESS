@@ -764,3 +764,259 @@ Live compose stack, rebuilt from final code, migration at head:
 
 ---
 
+## Phase 3 — SOC Dashboard UI (2026-07-17)
+
+### Architecture decisions
+
+**Suppression rules are per-site DB rows applied inside the detection
+pipeline, before the content layers — never a post-hoc score filter.**
+`suppression_rules` (Alembic `d7e3a1c40f88`: site_id FK CASCADE, type
+enum css_selector/regex/bbox, value, note, created_at) feed
+`worker/detection/suppress.py`, which builds one validated bundle per
+scan: css_selector rules strip matching subtrees from BOTH baseline and
+current documents before layers 2/3/5/8 see them; regex rules strip
+matching text spans from both sides' visible text; bbox rules mask
+screenshot regions on both images before layer 4. Filtering both sides
+symmetrically is the invariant — filtering only the current side would
+report the baseline's copy of the ignored element as "removed" on every
+scan. Layer 1 always hashes the ORIGINAL content: the hash is the
+tamper-evidence anchor, and a suppressed scan of identical bytes must
+still say "bytes identical", while a changed-but-suppressed scan says
+"bytes differ, content layers explain why it's fine". Every application
+of suppression is recorded in evidence (`suppression_applied` per
+content layer, `suppressed_regions` on layer 4, a `suppression` summary
+on fusion), so the drilldown UI can always show *why* a change didn't
+count. Rules that fail to parse (bad selector/regex/bbox) are skipped
+and surfaced in evidence as `unusable_rules` — a typo'd rule degrades to
+"not applied and visibly reported", never to a crashed scan (rule 6).
+
+**bbox coordinates are fractions of the BASELINE capture the user drew
+on.** Value format `"x,y,w,h"`, each 0-1, validated server-side (422 on
+out-of-range/malformed). The visual layer resolves the fractions against
+the baseline's pixel geometry and carries the mask onto the current
+capture scaled through the *width ratio only* — so when a later capture
+is taller or shorter (content added below), the mask stays anchored over
+the same page content instead of drifting proportionally down the page.
+This replaced an initial height-relative design after QA found the
+drift; the regression test pins the semantics (change below a
+full-width top-half mask on a 2x-taller capture must still register).
+The RegionPicker measures drag coordinates against the inner
+full-image-height content element, not the scrollable wrapper, so
+fractions stay correct when the screenshot is scrolled mid-drag.
+
+**HTML snapshots are served as `text/plain; charset=utf-8`, never
+text/html.** The DOM diff tree needs the raw captured HTML client-side,
+but captured pages are untrusted content — serving them as text/html
+from the dashboard origin would execute a defaced page's scripts inside
+the authenticated SPA. The frontend parses the text response with
+DOMParser, which produces an inert document (no script execution, no
+resource fetching). Same auth + artifact-root confinement as the
+screenshot endpoints.
+
+**All artifact fetches go through an authenticated blob helper, not
+`<img src>`.** Artifact endpoints require Bearer auth, and the token
+lives in module memory only (Phase 1 decision), so plain `src` URLs
+can't work. `artifactFetch` adds the Authorization header, retries once
+through the single-flight refresh on 401, and hands back object URLs
+(`useArtifact`) or text (`useTextArtifact`) with revocation on unmount.
+
+**DOM diff is a client-side custom renderer, no diff library.**
+`buildDomDiff` parses both snapshots with DOMParser and pairs children
+by a tag#id.class signature (first-unmatched-wins), marking nodes
+same/added/removed/modified; removed baseline nodes render in place in
+the tree. States render exactly per the design addendum: accent-green
+left border + low-opacity wash for added, accent-red for removed —
+washes, never solid fills. Changed paths auto-expand (depth-capped);
+child lists cap at 120 with an explicit "N more" line rather than
+silent truncation.
+
+**Visual diff slider computes altered regions client-side from the two
+screenshots** (24px luma-block grid, greedy rectangle merge) rather than
+shipping a server-side diff image — the two PNGs are already being
+fetched for display, and the overlay stays a translucent accent-red wash
+(rgba 0.28 fill / 0.55 border) per the design rules. Different-height
+captures are compared over the shared top region (crop, not squash —
+squashing misaligned every block row, found in QA). Suppressed bbox
+regions render as a distinct hatched overlay so "ignored" and "altered"
+can't be confused. The divider is keyboard-accessible (role=slider,
+arrow keys).
+
+**Recharts is code-split.** `lazy()`/`Suspense` around the gauge and
+timeline moved the ~254 kB chart chunk out of the main bundle; the
+drilldown and site pages load it on demand. Gauge is a 270-degree
+RadialBar arc on a hairline track, tone thresholds shared with the
+table (red >= site threshold, orange >= 0.15 material-change band,
+green below). Timeline is a time-scaled LineChart with per-scan verdict
+dots, a dashed threshold ReferenceLine, and point-click navigation into
+the drilldown.
+
+**Scan history got real pagination** (Phase 1 deferral closed):
+`GET /api/sites/{id}/scans?offset=&limit=` returns
+`{items, total, offset, limit}` (limit <= 200, default 50, newest
+first). The site page keeps a 20-row paged table and feeds the timeline
+from a separate 200-scan window query, so paging the table doesn't
+reshape the chart.
+
+**Scan drilldown page renders evidence generically as a floor.** Each
+of the nine layers has a purpose-built evidence renderer (hash pair, DOM
+deltas, link/domain diffs, SSIM/pHash, signature matches with strength
+badges, TLS/header diffs, per-UA similarity rows, semantics, fusion
+per-layer bars) — but unknown evidence keys always fall through to a
+key/value renderer, so a future layer change can't silently hide
+evidence. Cards auto-expand when the layer scored >= 0.15.
+
+### Version verification log
+
+No new packages. Recharts 3.9.2, lucide-react, radix-ui — all already
+pinned and locked since Phase 0/1; the chart work consumed the existing
+lock. Docs consulted from docs-cache (Recharts RadialBar/LineChart,
+Tailwind v4 @utility) plus the React 19 lazy/Suspense semantics already
+cached. Lockfiles unchanged this phase (backend 150 packages, zero
+nvidia entries; frontend lock untouched).
+
+### What was built
+
+**Schema (Alembic `d7e3a1c40f88`):** `suppression_rules` as above;
+downgrade drops the table and the Postgres enum type.
+
+**Backend:** suppression CRUD under `/api/sites/{site_id}/
+suppression-rules` (list/create/delete; create validates selector
+syntax via lxml.cssselect — imported lazily so the API image never
+imports worker code — regex compilability, and bbox bounds, 422 with
+actionable detail); scans pagination endpoint reshaped to `ScanPage`;
+`SiteDetailOut.baseline_id` exposed (the drilldown needs the scan's
+own comparison anchor); HTML artifact endpoints
+(`/api/artifacts/baselines/{id}/html`, `/scans/{id}/html`) with the
+text/plain rule; `worker/detection/suppress.py` + pipeline wiring +
+`_mask_regions` baseline-anchored masking in visual.py; scan task loads
+rules once per scan and passes the bundle through (a broken rule-load
+degrades to an unsuppressed scan that still completes — tested).
+
+**Frontend:** scan drilldown page (`/sites/:siteId/scans/:scanId`) —
+verdict header explaining risk vs threshold, lazy risk gauge, in-flight
+polling banner, visual diff slider + DOM diff tree side by side on xl,
+nine finding cards; site page rewritten — paged scan table, lazy
+incident timeline, suppression panel (rules list with human-readable
+bbox descriptions, point-and-click RegionPicker over the baseline
+screenshot with normalized-drag drafting and hatched existing rules,
+CSS-selector and regex add forms, delete, "applies from the next scan"
+toasts); `api.ts` grew the suppression/pagination/artifact surface;
+`use-artifact.ts` hooks; `bbox.ts` shared parse/serialize;
+responsive pass (mobile display-size clamps, 44px touch targets,
+tightened shell padding at sm); token-purity fixes (dialog overlay
+bg-canvas/70, no default-shadcn remnants; no emoji anywhere).
+
+**Tests: 249 backend (was 216) + 17 frontend (was 8).** New backend:
+suppression rule validation/CRUD/cross-site 404, builder semantics
+(both-sides stripping, unusable-rule reporting), bbox baseline-anchor
+regression, pipeline integration (stored rules end-to-end through
+`_run_scan`, broken-loader fail-safe), HTML artifact auth/content-type/
+404, pagination shape, OpenAPI completeness extended. New frontend:
+DOM diff builder (identical/added/removed/modified/sibling pairing/
+malformed input) and bbox round-trip/bounds/clamping.
+
+### Verified working (not just "should work")
+
+Live compose stack (images rebuilt, migration upgraded on Postgres):
+- Local QA page baselined through the worker (`host.docker.internal`
+  + per-site private-network opt-in). Identical-content scan: clean,
+  risk 0.035, layers 2/3/4/5/8 gate-skipped.
+- Page replaced with defacement-style content: **flagged, risk 0.9999**
+  — L5 1.0 (five phrase matches incl. strong "HACKED BY"), L3 0.835
+  (new external script+iframe domains listed), L2 0.878 (0 to 1
+  script/iframe/hidden each), L4 0.832 (SSIM 0.12, pHash 166 bits),
+  L8 0.953.
+- All four drilldown artifact endpoints live: both screenshots
+  image/png 200 with auth, 401 without; both HTML snapshots
+  `text/plain; charset=utf-8` (script content present but inert).
+- Pagination live: `?offset=0&limit=1` returns 1 item, correct total.
+- Suppression end-to-end: page restored with only the visitor counter
+  changed -> `changed`, risk 0.041; css_selector `#visitor-counter` +
+  bbox rule created via the API the panel calls; heavy churn injected
+  INSIDE the suppressed subtree (new script, iframe, link, external
+  domain) -> **not flagged** (risk 0.052), layers 2/3/5 all 0.0,
+  `suppression_applied` in layer evidence, bboxes+selectors echoed in
+  fusion's `suppression` summary, `suppressed_regions` on layer 4.
+- Negative control: real defacement replacing the page while rules
+  were active -> still **flagged, risk 0.999** — suppression cannot
+  blind the engine to changes outside the ignored region.
+- Malformed rules rejected live with 422 (unclosed regex group,
+  out-of-range bbox, invalid selector); rule delete works.
+- Dashboard UI driven headlessly against the live stack (Playwright,
+  19/19 checks): login -> site page (timeline chart drawn, suppression
+  panel listing the selector rule, 5-row scan table) -> point-and-click
+  bbox rule drawn on the baseline screenshot (drag -> toast -> appears
+  in list) -> flagged-scan drilldown (Flagged badge, gauge, visual
+  slider with a highlighted altered region, DOM tree showing
+  added/removed nodes, all nine finding cards, matched "HACKED BY"
+  phrase and evil.example.net domain visible in evidence). Full-page
+  screenshot reviewed against DESIGN-resend.md: true-black canvas,
+  hairline-bordered cards, wash-only accents, correct type lanes.
+- QA site deleted afterwards (cascade removed scans/findings/rules);
+  QA fixtures removed from the working tree.
+
+Automated (final state): backend 249/249, frontend 17/17, ruff
+check+format clean, tsc clean, `pnpm build` clean, oxlint 0 errors
+(5 fast-refresh warnings in shadcn-pattern files, same accepted class
+as Phase 1), all sources LF.
+
+### Incidents & resolutions (found during this phase's QA pass)
+
+1. **bbox masks drifted on captures of different heights.** The first
+   implementation resolved y/h fractions against each image's own
+   height, so a taller current capture pushed the mask down over
+   different content — the mask no longer covered the element the user
+   drew around. Redefined bbox as baseline-anchored (decisions above);
+   `_mask_regions` takes the baseline as reference geometry; regression
+   test with a 2x-taller capture added; frontend overlay rescales by
+   the aspect ratio to match.
+2. **RegionPicker coordinates were measured against the scrollable
+   wrapper**, whose bounding rect moves as the user scrolls a tall
+   screenshot — a drag after scrolling produced wrong fractions. Fixed
+   by measuring against the inner content element (full image height).
+3. **Visual-diff sampling squashed both screenshots to a fixed compare
+   height**, misaligning every block row when heights differed and
+   producing phantom "altered" regions. Fixed to aspect-preserving
+   draw + shared-top-region compare, matching the worker's layer-4
+   crop semantics; overlay regions rescale back onto the displayed
+   capture.
+4. **Docker Desktop daemon wedge during image rebuilds** (Windows):
+   overlapping background `docker compose build` invocations produced
+   zero output and even `docker ps` hung; resolved by stopping the
+   hung builds and restarting Docker Desktop (user restarted the
+   machine). Builds then completed normally. Process rule going
+   forward: build images serially in the foreground, never overlap
+   Docker builds in background tasks.
+5. **Access token expired mid-verification** (15-min TTL, by design)
+   — live-QA scripts now re-login instead of reusing a cached token.
+   No product change; the SPA already handles this via the
+   single-flight refresh.
+6. Minor: `ruff format` re-run after heredoc-appended test code; a
+   conditional assertion in a new scheduler-era test tightened to an
+   unconditional one; two stale-file Edit misfires re-read and
+   re-applied.
+
+### Deliberate deferrals (not bugs)
+
+- **Suppression rules apply from the next scan** — no retroactive
+  re-evaluation of historical findings. Re-scoring old scans against
+  new rules is a possible Phase 5+ nicety; the panel's toast states
+  the semantics explicitly.
+- **Regex rules operate on visible text**, not raw HTML — attribute
+  churn (e.g. rotating CSRF tokens in hidden inputs) is covered by
+  css_selector rules instead; documented in the panel's helper text.
+- **Client-side altered-region detection is a viewer aid**, not the
+  detection verdict — layer 4's SSIM/pHash in the worker remains the
+  scored signal; the slider overlay is best-effort visualization.
+- **Timeline windows the most recent 200 scans**; a date-range picker
+  belongs to a future analytics pass if history depth demands it.
+- **RBAC on suppression endpoints** — any authenticated user can
+  manage rules until the Phase 5 role-enforcement pass (same standing
+  deferral as all other mutating endpoints).
+- The 5 oxlint fast-refresh warnings remain the accepted shadcn-layout
+  class from Phase 1 (2 new files follow the same pattern).
+- **Manual negative/malformed-traffic QA** against the running stack
+  remains the user's sign-off step outside Claude Code, per the
+  Phase 0 sign-off decision — unchanged for this phase.
+
+---

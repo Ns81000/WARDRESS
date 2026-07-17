@@ -5,23 +5,35 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import CurrentUser
-from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, ScanVerdict, Site
+from app.models import (
+    Baseline,
+    BaselineStatus,
+    Scan,
+    ScanFinding,
+    ScanStatus,
+    ScanVerdict,
+    Site,
+    SuppressionRule,
+)
 from app.scanning import clamp_interval, is_stale
 from app.schemas import (
     BaselineOut,
     ScanDetailOut,
     ScanFindingOut,
     ScanOut,
+    ScanPage,
     SiteCreate,
     SiteDetailOut,
     SiteOut,
     SiteUpdate,
+    SuppressionRuleCreate,
+    SuppressionRuleOut,
 )
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from app.tasks import enqueue_baseline_capture, enqueue_scan
@@ -88,6 +100,7 @@ async def create_site(
 
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
+        baseline_id=baseline.id,
         baseline_status=baseline.status,
     )
 
@@ -113,6 +126,7 @@ async def list_sites(
         out.append(
             SiteDetailOut(
                 **SiteOut.model_validate(site).model_dump(),
+                baseline_id=baseline.id if baseline else None,
                 baseline_status=baseline.status if baseline else None,
                 baseline_captured_at=baseline.captured_at if baseline else None,
                 baseline_error=baseline.error if baseline else None,
@@ -138,6 +152,7 @@ async def get_site(
         )
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
+        baseline_id=baseline.id if baseline else None,
         baseline_status=baseline.status if baseline else None,
         baseline_captured_at=baseline.captured_at if baseline else None,
         baseline_error=baseline.error if baseline else None,
@@ -184,6 +199,7 @@ async def update_site(
         )
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
+        baseline_id=baseline.id if baseline else None,
         baseline_status=baseline.status if baseline else None,
         baseline_captured_at=baseline.captured_at if baseline else None,
         baseline_error=baseline.error if baseline else None,
@@ -275,19 +291,33 @@ async def scan_now(
     return ScanOut.model_validate(scan)
 
 
-@router.get("/{site_id}/scans", response_model=list[ScanOut])
+@router.get("/{site_id}/scans", response_model=ScanPage)
 async def list_scans(
     site_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[ScanOut]:
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ScanPage:
+    """Scan history, newest first, offset/limit paginated (deferred from
+    Phase 1) — the incident timeline reads deep history through this."""
     await _get_site_or_404(db, site_id)
+    total = await db.scalar(select(func.count()).select_from(Scan).where(Scan.site_id == site_id))
     scans = (
         await db.scalars(
-            select(Scan).where(Scan.site_id == site_id).order_by(Scan.created_at.desc()).limit(50)
+            select(Scan)
+            .where(Scan.site_id == site_id)
+            .order_by(Scan.created_at.desc())
+            .offset(offset)
+            .limit(limit)
         )
     ).all()
-    return [ScanOut.model_validate(s) for s in scans]
+    return ScanPage(
+        items=[ScanOut.model_validate(s) for s in scans],
+        total=int(total or 0),
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.get("/{site_id}/scans/{scan_id}", response_model=ScanDetailOut)
@@ -312,3 +342,77 @@ async def get_scan(
         **ScanOut.model_validate(scan).model_dump(),
         findings=[ScanFindingOut.model_validate(f) for f in findings],
     )
+
+
+# --- Suppression rules (§5 false-positive suppression, §7 CRUD) ---
+
+
+@router.get("/{site_id}/suppression-rules", response_model=list[SuppressionRuleOut])
+async def list_suppression_rules(
+    site_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[SuppressionRuleOut]:
+    await _get_site_or_404(db, site_id)
+    rules = (
+        await db.scalars(
+            select(SuppressionRule)
+            .where(SuppressionRule.site_id == site_id)
+            .order_by(SuppressionRule.created_at)
+        )
+    ).all()
+    return [SuppressionRuleOut.model_validate(r) for r in rules]
+
+
+@router.post(
+    "/{site_id}/suppression-rules",
+    response_model=SuppressionRuleOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_suppression_rule(
+    site_id: uuid.UUID,
+    body: SuppressionRuleCreate,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SuppressionRuleOut:
+    """A new exclusion applies from the next scan onward — already-stored
+    findings are historical evidence and are never rewritten."""
+    site = await _get_site_or_404(db, site_id)
+    try:
+        # Per-type validation (regex compiles, bbox in range, selector
+        # parseable by the same translator the worker uses).
+        body.validate_for_type()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
+    rule = SuppressionRule(
+        site_id=site.id,
+        type=body.type,
+        value=body.value,
+        note=body.note,
+        created_by=user.id,
+    )
+    db.add(rule)
+    await db.commit()
+    return SuppressionRuleOut.model_validate(rule)
+
+
+@router.delete(
+    "/{site_id}/suppression-rules/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_suppression_rule(
+    site_id: uuid.UUID,
+    rule_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await _get_site_or_404(db, site_id)
+    rule = await db.scalar(
+        select(SuppressionRule).where(
+            SuppressionRule.id == rule_id, SuppressionRule.site_id == site_id
+        )
+    )
+    if rule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Suppression rule not found")
+    await db.delete(rule)
+    await db.commit()

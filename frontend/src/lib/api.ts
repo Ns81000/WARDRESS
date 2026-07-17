@@ -121,6 +121,7 @@ export interface Site {
   current_interval_minutes: number | null
   next_scan_at: string | null
   created_at: string
+  baseline_id: string | null
   baseline_status: BaselineStatus | null
   baseline_captured_at: string | null
   baseline_error: string | null
@@ -154,6 +155,24 @@ export interface ScanDetail extends Scan {
   findings: ScanFinding[]
 }
 
+export interface ScanPage {
+  items: Scan[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export type SuppressionRuleType = "css_selector" | "regex" | "bbox"
+
+export interface SuppressionRule {
+  id: string
+  site_id: string
+  type: SuppressionRuleType
+  value: string
+  note: string | null
+  created_at: string
+}
+
 export interface SiteSettingsPatch {
   flag_threshold?: number
   auto_scan_enabled?: boolean
@@ -185,6 +204,61 @@ export const rebaseline = (id: string) =>
   api<unknown>(`/api/sites/${id}/rebaseline`, { method: "POST" })
 export const scanNow = (id: string) =>
   api<Scan>(`/api/sites/${id}/scan-now`, { method: "POST" })
-export const listScans = (id: string) => api<Scan[]>(`/api/sites/${id}/scans`)
+export const listScans = (id: string, offset = 0, limit = 50) =>
+  api<ScanPage>(`/api/sites/${id}/scans?offset=${offset}&limit=${limit}`)
 export const getScan = (siteId: string, scanId: string) =>
   api<ScanDetail>(`/api/sites/${siteId}/scans/${scanId}`)
+
+export const listSuppressionRules = (siteId: string) =>
+  api<SuppressionRule[]>(`/api/sites/${siteId}/suppression-rules`)
+export const createSuppressionRule = (
+  siteId: string,
+  payload: { type: SuppressionRuleType; value: string; note?: string | null }
+) =>
+  api<SuppressionRule>(`/api/sites/${siteId}/suppression-rules`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+export const deleteSuppressionRule = (siteId: string, ruleId: string) =>
+  api<void>(`/api/sites/${siteId}/suppression-rules/${ruleId}`, {
+    method: "DELETE",
+  })
+
+// Screenshot artifact URLs (auth-required endpoints; fetched as blobs by
+// useArtifact so the Authorization header rides along).
+export const baselineScreenshotPath = (baselineId: string) =>
+  `/api/artifacts/baselines/${baselineId}/screenshot`
+export const scanScreenshotPath = (scanId: string) =>
+  `/api/artifacts/scans/${scanId}/screenshot`
+export const baselineHtmlPath = (baselineId: string) =>
+  `/api/artifacts/baselines/${baselineId}/html`
+export const scanHtmlPath = (scanId: string) =>
+  `/api/artifacts/scans/${scanId}/html`
+
+/**
+ * Fetch an auth-protected artifact as an object URL (plain <img src>
+ * can't carry the Authorization header). Caller owns revocation.
+ */
+export async function fetchArtifactObjectURL(path: string): Promise<string> {
+  const resp = await artifactFetch(path)
+  return URL.createObjectURL(await resp.blob())
+}
+
+/** Fetch an auth-protected text artifact (HTML snapshot) as a string. */
+export async function fetchArtifactText(path: string): Promise<string> {
+  return (await artifactFetch(path)).text()
+}
+
+async function artifactFetch(path: string): Promise<Response> {
+  const doFetch = () =>
+    fetch(path, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    })
+  let resp = await doFetch()
+  if (resp.status === 401) {
+    if (await refreshSession()) resp = await doFetch()
+    else throw new ApiError(401, "Session expired")
+  }
+  if (!resp.ok) throw new ApiError(resp.status, `Artifact unavailable (${resp.status})`)
+  return resp
+}

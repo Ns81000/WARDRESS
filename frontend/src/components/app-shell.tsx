@@ -18,7 +18,7 @@ export function AppShell() {
   return (
     <div className="min-h-screen bg-canvas">
       <header className="h-16 border-b border-hairline">
-        <div className="mx-auto flex h-full max-w-[1200px] items-center justify-between px-8">
+        <div className="mx-auto flex h-full max-w-[1200px] items-center justify-between px-4 sm:px-6 lg:px-8">
           <NavLink to="/" className="flex items-center gap-3 text-ink">
             <WardressMark size={22} />
             <span className="text-heading-sm tracking-tight">Wardress</span>
@@ -52,7 +52,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1200px] px-8 py-12">
+      <main className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 sm:py-12 lg:px-8">
         <Outlet />
       </main>
     </div>

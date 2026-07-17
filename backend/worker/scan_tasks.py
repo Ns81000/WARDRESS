@@ -22,6 +22,7 @@ from app.models import (
     ScanStatus,
     ScanVerdict,
     Site,
+    SuppressionRule,
 )
 from app.scanning import MATERIAL_CHANGE_RISK, next_interval_after_scan
 from app.ssrf import SSRFBlockedError
@@ -29,6 +30,7 @@ from worker.artifacts import read_artifact_bytes, read_artifact_text, store_arti
 from worker.celery_app import celery_app
 from worker.db import task_session
 from worker.detection.pipeline import LAYERS, run_detection
+from worker.detection.suppress import Suppression, build_suppression
 from worker.detection.types import PageData, ScanPageData
 from worker.fetcher import FetchError, fetch_page
 from worker.hashing import content_sha256
@@ -161,6 +163,20 @@ async def _persist_findings(db, scan: Scan, results: dict[str, dict]) -> None:
         )
 
 
+async def _load_suppression(db, site_id: uuid.UUID) -> Suppression:
+    """Site's §5 suppression rules as pipeline plain-data. Never raises —
+    a failure to load rules degrades to 'no suppression' (the scan must
+    run; the worst outcome is a suppressible false positive)."""
+    try:
+        rows = (
+            await db.scalars(select(SuppressionRule).where(SuppressionRule.site_id == site_id))
+        ).all()
+        return build_suppression([(r.type.value, r.value) for r in rows])
+    except Exception:
+        logger.exception("Could not load suppression rules for site %s", site_id)
+        return Suppression()
+
+
 async def _run_scan(scan_id: uuid.UUID) -> str:
     async with task_session() as db:
         scan = await db.scalar(select(Scan).where(Scan.id == scan_id))
@@ -220,7 +236,8 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         # The nine layers run in a worker thread: they are CPU-bound
         # (lxml/SSIM/MiniLM) and must not stall the event loop's DB
         # heartbeats under asyncio.run.
-        results = await asyncio.to_thread(run_detection, baseline_page, current_page)
+        suppression = await _load_suppression(db, site.id)
+        results = await asyncio.to_thread(run_detection, baseline_page, current_page, suppression)
 
         fusion = results["layer9_fusion"]
         risk = float(fusion["score"] or 0.0)

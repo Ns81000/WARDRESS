@@ -76,6 +76,12 @@ class BaselineStatus(enum.StrEnum):
     failed = "failed"
 
 
+class SuppressionRuleType(enum.StrEnum):
+    css_selector = "css_selector"
+    regex = "regex"
+    bbox = "bbox"
+
+
 def _enum(e: type[enum.StrEnum], name: str) -> Enum:
     """Store enum *values* (lowercase strings), not Python member names."""
     return Enum(e, name=name, values_callable=lambda x: [m.value for m in x])
@@ -151,8 +157,43 @@ class Site(Base):
         back_populates="site", cascade="all, delete-orphan"
     )
     scans: Mapped[list["Scan"]] = relationship(back_populates="site", cascade="all, delete-orphan")
+    suppression_rules: Mapped[list["SuppressionRule"]] = relationship(
+        back_populates="site", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (Index("ix_sites_url", "url"),)
+
+
+class SuppressionRule(Base):
+    """§5/§6 false-positive suppression: a per-site exclusion the detection
+    pipeline honors. Three kinds (`type`):
+    - css_selector — DOM subtrees the text/structure layers ignore
+    - regex — dynamic text patterns excluded from text comparison
+    - bbox — a screenshot region the visual layer masks, stored as
+      normalized fractions "x,y,w,h" of the full-page capture (resolution-
+      independent: the same rule applies to any later capture size)
+    `value` is validated at the API boundary (parseable regex, sane
+    selector, in-range bbox) — the worker treats stored rules as trusted
+    but still fails safe per rule if one turns out unusable."""
+
+    __tablename__ = "suppression_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), index=True
+    )
+    type: Mapped[SuppressionRuleType] = mapped_column(
+        _enum(SuppressionRuleType, "suppression_rule_type")
+    )
+    value: Mapped[str] = mapped_column(String(1024))
+    # Optional human label ("cookie banner", "visitor counter").
+    note: Mapped[str | None] = mapped_column(String(200), default=None)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    site: Mapped[Site] = relationship(back_populates="suppression_rules")
 
 
 class Baseline(Base):

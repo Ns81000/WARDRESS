@@ -141,7 +141,7 @@ async def test_scan_now_with_ready_baseline(
     resp2 = await client.post(f"/api/sites/{site_id}/scan-now", headers=auth_headers)
     assert resp2.status_code == 409
 
-    scans = (await client.get(f"/api/sites/{site_id}/scans", headers=auth_headers)).json()
+    scans = (await client.get(f"/api/sites/{site_id}/scans", headers=auth_headers)).json()["items"]
     assert len(scans) == 1
 
 
@@ -213,7 +213,7 @@ async def test_scan_now_recovers_stale_inflight(
     assert resp.status_code == 202
     assert len(stub_enqueue["scan"]) == 1
 
-    scans = (await client.get(f"/api/sites/{site_id}/scans", headers=auth_headers)).json()
+    scans = (await client.get(f"/api/sites/{site_id}/scans", headers=auth_headers)).json()["items"]
     statuses = sorted(s["status"] for s in scans)
     assert statuses == ["failed", "pending"]
 
