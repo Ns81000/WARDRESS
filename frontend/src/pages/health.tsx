@@ -17,6 +17,62 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 
+function getServiceLogo(key: string, className?: string) {
+  const classStr = cn("size-4 shrink-0", className)
+  switch (key) {
+    case "database":
+      return (
+        <svg className={classStr} xmlSpace="preserve" viewBox="0 0 432.071 445.383">
+          <path stroke="none" d="M402.395 271.23c-50.302 10.376-53.76-6.655-53.76-6.655 53.111-78.808 75.313-178.843 56.153-203.326-52.27-66.785-142.752-35.2-144.262-34.38l-.486.087c-9.938-2.063-21.06-3.292-33.56-3.496-22.761-.373-40.026 5.967-53.127 15.902 0 0-161.411-66.495-153.904 83.63 1.597 31.938 45.776 241.657 98.471 178.312 19.26-23.163 37.869-42.748 37.869-42.748 9.243 6.14 20.308 9.272 31.908 8.147l.901-.765c-.28 2.876-.152 5.689.361 9.019-13.575 15.167-9.586 17.83-36.723 23.416-27.459 5.659-11.328 15.734-.796 18.367 12.768 3.193 42.307 7.716 62.266-20.224l-.796 3.188c5.319 4.26 9.054 27.711 8.428 48.969-.626 21.259-1.044 35.854 3.147 47.254 4.191 11.4 8.368 37.05 44.042 29.406 29.809-6.388 45.256-22.942 47.405-50.555 1.525-19.631 4.976-16.729 5.194-34.28l2.768-8.309c3.192-26.611.507-35.196 18.872-31.203l4.463.392c13.517.615 31.208-2.174 41.591-7 22.358-10.376 35.618-27.7 13.573-23.148z" fill="#336791" />
+        </svg>
+      )
+    case "redis":
+      return (
+        <svg className={classStr} viewBox="0 0 256 220" xmlns="http://www.w3.org/2000/svg">
+          <path d="M246 169c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 209.4 24 179 10.3 172.5 3.6 169.3 0 166.5 0 164v-26s98-21.3 113.9-27c15.8-5.6 21.3-5.8 34.8-.9 13.4 5 94 19.5 107.3 24.3V160c0 2.5-3 5.3-10 9" fill="#912626" />
+          <path d="M246 143.2c-13.7 7.1-84.5 36.2-99.5 44-15.1 8-23.5 7.9-35.4 2.2-11.9-5.7-87.2-36.1-100.8-42.6-13.5-6.5-13.8-11-.5-16.2 13.4-5.2 88.2-34.6 104-40.3 16-5.6 21.4-5.8 34.9-1 13.4 5 83.8 33 97.1 37.9 13.3 4.9 13.8 8.9.2 16" fill="#C6302B" />
+          <path d="M246 127c-13.7 7.2-84.5 36.3-99.5 44.2-15.1 7.8-23.5 7.7-35.4 2-11.9-5.6-87.2-36-100.8-42.6-6.7-3.2-10.3-6-10.3-8.5V96.2s98-21.3 113.9-27c15.8-5.7 21.3-5.9 34.8-1 13.4 5 94 19.5 107.3 24.4V118c0 2.5-3 5.4-10 9" fill="#912626" />
+          <path d="M246 101.4c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 141.8 24 111.4 10.3 105c-13.5-6.5-13.8-11-.5-16.1C23.2 83.5 98 54 113.8 48.5c16-5.7 21.4-6 34.9-1 13.4 5 83.8 33 97.1 37.8 13.3 5 13.8 9 .2 16" fill="#C6302B" />
+          <path d="M246 83.7c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 124.1 24 93.7 10.3 87.2 3.6 84 0 81.2 0 78.7v-26s98-21.3 113.9-27c15.8-5.6 21.3-5.8 34.8-.9 13.4 5 94 19.5 107.3 24.4v25.5c0 2.5-3 5.3-10 9" fill="#912626" />
+          <path d="M246 58c-13.7 7-84.5 36.1-99.5 44-15.1 7.9-23.5 7.8-35.4 2C99.2 98.5 24 68 10.3 61.6c-13.5-6.5-13.8-11-.5-16.2C23.2 40.1 98 10.7 113.8 5c16-5.6 21.4-5.8 34.9-.9 13.4 5 83.8 33 97.1 37.8 13.3 4.9 13.8 9 .2 16" fill="#C6302B" />
+          <path d="m159.3 32.8-22 2.2-5 11.9-8-13.2L99 31.4l19-6.9-5.8-10.5 17.8 7 16.7-5.5-4.5 10.9 17 6.4M131 90.3l-41-17 58.8-9.1-17.8 26M74 39.3c17.5 0 31.5 5.5 31.5 12.2 0 6.8-14 12.2-31.4 12.2s-31.5-5.4-31.5-12.2c0-6.7 14.1-12.2 31.5-12.2" fill="#FFF" />
+        </svg>
+      )
+    case "worker":
+      return (
+        <svg className={classStr} fill="#37814A" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <title>Celery</title>
+          <path d="M2.303 0A2.298 2.298 0 0 0 0 2.303v19.394A2.298 2.298 0 0 0 2.303 24h19.394A2.298 2.298 0 0 0 24 21.697V2.303A2.298 2.298 0 0 0 21.697 0zm8.177 3.072c4.098 0 7.028 1.438 7.68 1.764l-1.194 2.55c-2.442-1.057-4.993-1.41-5.672-1.41-1.574 0-2.17.922-2.17 1.763v8.494c0 .869.596 1.791 2.17 1.791.679 0 3.23-.38 5.672-1.41l1.194 2.496c-.435.271-3.637 1.818-7.68 1.818-1.112 0-4.64-.244-4.64-4.64V7.713c0-4.397 3.528-4.64 4.64-4.64z" />
+        </svg>
+      )
+    case "scheduler":
+      return (
+        <svg className={classStr} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="16 16 32 32">
+          <path fill="url(#py-a)" d="M31.885 16c-8.124 0-7.617 3.523-7.617 3.523l.01 3.65h7.752v1.095H21.197S16 23.678 16 31.876c0 8.196 4.537 7.906 4.537 7.906h2.708v-3.804s-.146-4.537 4.465-4.537h7.688s4.32.07 4.32-4.175v-7.019S40.374 16 31.885 16zm-4.275 2.454a1.394 1.394 0 1 1 0 2.79 1.393 1.393 0 0 1-1.395-1.395c0-.771.624-1.395 1.395-1.395z" />
+          <path fill="url(#py-b)" d="M32.115 47.833c8.124 0 7.617-3.523 7.617-3.523l-.01-3.65H31.97v-1.095h10.832S48 40.155 48 31.958c0-8.197-4.537-7.906-4.537-7.906h-2.708v3.803s.146 4.537-4.465 4.537h-7.688s-4.32-.07-4.32 4.175v7.019s-.656 4.247 7.833 4.247zm4.275-2.454a1.393 1.393 0 0 1-1.395-1.395 1.394 1.394 0 1 1 1.395 1.395z" />
+          <defs>
+            <linearGradient id="py-a" x1="19.075" x2="34.898" y1="18.782" y2="34.658" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#387EB8" />
+              <stop offset="1" stopColor="#366994" />
+            </linearGradient>
+            <linearGradient id="py-b" x1="28.809" x2="45.803" y1="28.882" y2="45.163" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#FFE052" />
+              <stop offset="1" stopColor="#FFC331" />
+            </linearGradient>
+          </defs>
+        </svg>
+      )
+    case "gateway":
+      return (
+        <svg className={classStr} viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid">
+          <path d="M128 0C57.33 0 0 57.33 0 128s57.33 128 128 128 128-57.33 128-128S198.67 0 128 0Zm-6.67 230.605v-80.288H76.699l64.128-124.922v80.288h42.966L121.33 230.605Z" fill="#009688" />
+        </svg>
+      )
+    default:
+      return null
+  }
+}
+
 function fmtUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400)
   const h = Math.floor((seconds % 86400) / 3600)
@@ -46,8 +102,8 @@ function fmtAgo(iso: string | null): string {
 const COMPONENT_LABELS: Record<string, string> = {
   database: "PostgreSQL Database",
   redis: "Redis Message Queue",
-  worker: "Scan Worker Pool",
-  scheduler: "Beat Scheduler"
+  worker: "Celery Task Workers",
+  scheduler: "Celery Beat Scheduler"
 }
 
 // Sparkline SVG component to represent scan/activity visually
@@ -57,6 +113,65 @@ function Sparkline({ colorClass = "text-accent-green" }: { colorClass?: string }
       <path d="M0,15 L10,12 L20,17 L30,10 L40,14 L50,6 L60,11 L70,8 L80,13 L90,4 L100,7" />
     </svg>
   )
+}
+
+function getTopologyNodeIcon(id: string, size: number, x: number, y: number) {
+  const offset = size / 2
+  const px = x - offset
+  const py = y - offset
+  
+  switch (id) {
+    case "database":
+      return (
+        <svg x={px} y={py} width={size} height={size} xmlSpace="preserve" viewBox="0 0 432.071 445.383">
+          <path stroke="none" d="M402.395 271.23c-50.302 10.376-53.76-6.655-53.76-6.655 53.111-78.808 75.313-178.843 56.153-203.326-52.27-66.785-142.752-35.2-144.262-34.38l-.486.087c-9.938-2.063-21.06-3.292-33.56-3.496-22.761-.373-40.026 5.967-53.127 15.902 0 0-161.411-66.495-153.904 83.63 1.597 31.938 45.776 241.657 98.471 178.312 19.26-23.163 37.869-42.748 37.869-42.748 9.243 6.14 20.308 9.272 31.908 8.147l.901-.765c-.28 2.876-.152 5.689.361 9.019-13.575 15.167-9.586 17.83-36.723 23.416-27.459 5.659-11.328 15.734-.796 18.367 12.768 3.193 42.307 7.716 62.266-20.224l-.796 3.188c5.319 4.26 9.054 27.711 8.428 48.969-.626 21.259-1.044 35.854 3.147 47.254 4.191 11.4 8.368 37.05 44.042 29.406 29.809-6.388 45.256-22.942 47.405-50.555 1.525-19.631 4.976-16.729 5.194-34.28l2.768-8.309c3.192-26.611.507-35.196 18.872-31.203l4.463.392c13.517.615 31.208-2.174 41.591-7 22.358-10.376 35.618-27.7 13.573-23.148z" fill="#336791" />
+        </svg>
+      )
+    case "redis":
+      return (
+        <svg x={px} y={py} width={size} height={size} viewBox="0 0 256 220" xmlns="http://www.w3.org/2000/svg">
+          <path d="M246 169c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 209.4 24 179 10.3 172.5 3.6 169.3 0 166.5 0 164v-26s98-21.3 113.9-27c15.8-5.6 21.3-5.8 34.8-.9 13.4 5 94 19.5 107.3 24.3V160c0 2.5-3 5.3-10 9" fill="#912626" />
+          <path d="M246 143.2c-13.7 7.1-84.5 36.2-99.5 44-15.1 8-23.5 7.9-35.4 2.2-11.9-5.7-87.2-36.1-100.8-42.6-13.5-6.5-13.8-11-.5-16.2 13.4-5.2 88.2-34.6 104-40.3 16-5.6 21.4-5.8 34.9-1 13.4 5 83.8 33 97.1 37.9 13.3 4.9 13.8 8.9.2 16" fill="#C6302B" />
+          <path d="M246 127c-13.7 7.2-84.5 36.3-99.5 44.2-15.1 7.8-23.5 7.7-35.4 2-11.9-5.6-87.2-36-100.8-42.6-6.7-3.2-10.3-6-10.3-8.5V96.2s98-21.3 113.9-27c15.8-5.7 21.3-5.9 34.8-1 13.4 5 94 19.5 107.3 24.4V118c0 2.5-3 5.4-10 9" fill="#912626" />
+          <path d="M246 101.4c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 141.8 24 111.4 10.3 105c-13.5-6.5-13.8-11-.5-16.1C23.2 83.5 98 54 113.8 48.5c16-5.7 21.4-6 34.9-1 13.4 5 83.8 33 97.1 37.8 13.3 5 13.8 9 .2 16" fill="#C6302B" />
+          <path d="M246 83.7c-13.7 7-84.5 36.2-99.5 44-15.1 7.9-23.5 7.8-35.4 2.1C99.2 124.1 24 93.7 10.3 87.2 3.6 84 0 81.2 0 78.7v-26s98-21.3 113.9-27c15.8-5.6 21.3-5.8 34.8-.9 13.4 5 94 19.5 107.3 24.4v25.5c0 2.5-3 5.3-10 9" fill="#912626" />
+          <path d="M246 58c-13.7 7-84.5 36.1-99.5 44-15.1 7.9-23.5 7.8-35.4 2C99.2 98.5 24 68 10.3 61.6c-13.5-6.5-13.8-11-.5-16.2C23.2 40.1 98 10.7 113.8 5c16-5.6 21.4-5.8 34.9-.9 13.4 5 83.8 33 97.1 37.8 13.3 4.9 13.8 9 .2 16" fill="#C6302B" />
+          <path d="m159.3 32.8-22 2.2-5 11.9-8-13.2L99 31.4l19-6.9-5.8-10.5 17.8 7 16.7-5.5-4.5 10.9 17 6.4M131 90.3l-41-17 58.8-9.1-17.8 26M74 39.3c17.5 0 31.5 5.5 31.5 12.2 0 6.8-14 12.2-31.4 12.2s-31.5-5.4-31.5-12.2c0-6.7 14.1-12.2 31.5-12.2" fill="#FFF" />
+        </svg>
+      )
+    case "worker":
+      return (
+        <svg x={px} y={py} width={size} height={size} fill="#37814A" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <title>Celery</title>
+          <path d="M2.303 0A2.298 2.298 0 0 0 0 2.303v19.394A2.298 2.298 0 0 0 2.303 24h19.394A2.298 2.298 0 0 0 24 21.697V2.303A2.298 2.298 0 0 0 21.697 0zm8.177 3.072c4.098 0 7.028 1.438 7.68 1.764l-1.194 2.55c-2.442-1.057-4.993-1.41-5.672-1.41-1.574 0-2.17.922-2.17 1.763v8.494c0 .869.596 1.791 2.17 1.791.679 0 3.23-.38 5.672-1.41l1.194 2.496c-.435.271-3.637 1.818-7.68 1.818-1.112 0-4.64-.244-4.64-4.64V7.713c0-4.397 3.528-4.64 4.64-4.64z" />
+        </svg>
+      )
+    case "scheduler":
+      return (
+        <svg x={px} y={py} width={size} height={size} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="16 16 32 32">
+          <path fill="url(#py-topo-a)" d="M31.885 16c-8.124 0-7.617 3.523-7.617 3.523l.01 3.65h7.752v1.095H21.197S16 23.678 16 31.876c0 8.196 4.537 7.906 4.537 7.906h2.708v-3.804s-.146-4.537 4.465-4.537h7.688s4.32.07 4.32-4.175v-7.019S40.374 16 31.885 16zm-4.275 2.454a1.394 1.394 0 1 1 0 2.79 1.393 0 0 1-1.395-1.395c0-.771.624-1.395 1.395-1.395z" />
+          <path fill="url(#py-topo-b)" d="M32.115 47.833c8.124 0 7.617-3.523 7.617-3.523l-.01-3.65H31.97v-1.095h10.832S48 40.155 48 31.958c0-8.197-4.537-7.906-4.537-7.906h-2.708v3.803s.146 4.537-4.465 4.537h-7.688s-4.32-.07-4.32 4.175v7.019s-.656 4.247 7.833 4.247zm4.275-2.454a1.393 1.393 0 0 1-1.395-1.395 1.394 1.394 0 1 1 1.395 1.395z" />
+          <defs>
+            <linearGradient id="py-topo-a" x1="19.075" x2="34.898" y1="18.782" y2="34.658" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#387EB8" />
+              <stop offset="1" stopColor="#366994" />
+            </linearGradient>
+            <linearGradient id="py-topo-b" x1="28.809" x2="45.803" y1="28.882" y2="45.163" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#FFE052" />
+              <stop offset="1" stopColor="#FFC331" />
+            </linearGradient>
+          </defs>
+        </svg>
+      )
+    case "gateway":
+      return (
+        <svg x={px} y={py} width={size} height={size} viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid">
+          <path d="M128 0C57.33 0 0 57.33 0 128s57.33 128 128 128 128-57.33 128-128S198.67 0 128 0Zm-6.67 230.605v-80.288H76.699l64.128-124.922v80.288h42.966L121.33 230.605Z" fill="#009688" />
+        </svg>
+      )
+    default:
+      return null
+  }
 }
 interface ServiceTopologyMapProps {
   isLoading: boolean
@@ -334,17 +449,13 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
             const isGateway = node.id === "gateway"
             const r1 = isGateway ? 21 : 16
             const r2 = isGateway ? 15 : 11
-            const r3 = isGateway ? 6 : 4
 
             let strokeColor = "stroke-accent-green"
-            let fillColor = "fill-accent-green"
             
             if (node.status === "degraded") {
               strokeColor = "stroke-accent-orange"
-              fillColor = "fill-accent-orange"
             } else if (node.status === "down") {
               strokeColor = "stroke-accent-red"
-              fillColor = "fill-accent-red"
             }
 
             return (
@@ -391,16 +502,8 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
                   className="fill-surface-deep stroke-hairline-strong stroke-[1px]"
                 />
 
-                {/* Center status dot */}
-                <circle
-                  cx={node.x}
-                  cy={node.y}
-                  r={r3}
-                  className={cn(
-                    fillColor,
-                    node.status === "degraded" && "animate-pulse"
-                  )}
-                />
+                {/* Brand Logo inside Node */}
+                {getTopologyNodeIcon(node.id, isGateway ? 18 : 14, node.x, node.y)}
 
                 {/* Micro Label */}
                 <text
@@ -427,7 +530,8 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
             <span className="size-1.5 rounded-full bg-accent-red/80" />
             <span className="size-1.5 rounded-full bg-accent-yellow/80" />
             <span className="size-1.5 rounded-full bg-accent-green/80" />
-            <span className="ml-1.5 font-bold uppercase tracking-wider text-accent-blue">
+            {getServiceLogo(activeNode, "size-3.5 ml-1 text-accent-blue")}
+            <span className="ml-1 font-bold uppercase tracking-wider text-accent-blue">
               {nodes[activeNode as keyof typeof nodes]?.label.replace(" ", "_") ?? "SYSTEM"}_TELEMETRY // INSPECTING
             </span>
           </div>
@@ -726,7 +830,10 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink">PostgreSQL</h3>
+                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        {getServiceLogo("database", "size-4 text-[#336791]")}
+                        <span>PostgreSQL</span>
+                      </h3>
                       <p className="text-[11px] text-mute">{COMPONENT_LABELS.database}</p>
                     </div>
                   </div>
@@ -769,7 +876,10 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink">Redis Broker</h3>
+                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        {getServiceLogo("redis", "size-4")}
+                        <span>Redis Broker</span>
+                      </h3>
                       <p className="text-[11px] text-mute">{COMPONENT_LABELS.redis}</p>
                     </div>
                   </div>
@@ -812,7 +922,10 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink">Scan Worker Pool</h3>
+                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        {getServiceLogo("worker", "size-4")}
+                        <span>Scan Worker Pool</span>
+                      </h3>
                       <p className="text-[11px] text-mute">{COMPONENT_LABELS.worker}</p>
                     </div>
                   </div>
@@ -867,7 +980,10 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink">Beat Scheduler</h3>
+                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        {getServiceLogo("scheduler", "size-4")}
+                        <span>Beat Scheduler</span>
+                      </h3>
                       <p className="text-[11px] text-mute">{COMPONENT_LABELS.scheduler}</p>
                     </div>
                   </div>

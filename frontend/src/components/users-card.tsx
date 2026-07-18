@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, Users } from "lucide-react"
+import { Plus } from "lucide-react"
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/status-dot"
@@ -148,8 +148,13 @@ export function UsersCard() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <Users className="size-4 text-charcoal" />
-              Users and roles
+              <svg className="size-4 shrink-0 text-accent-green" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Users
             </CardTitle>
             <CardDescription>
               Admins manage everything; analysts run monitoring and respond to
