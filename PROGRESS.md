@@ -1661,3 +1661,40 @@ documented; all deferrals closed or logged permanent with reasons.
   request bodies, oversized payloads, boundary values on the API, and
   hostile page content on scan targets — remains the user's manual QA
   step before each release-grade milestone.
+
+---
+
+## Post-completion: live key configuration + Gemini model fix (2026-07-18)
+
+First real API keys added by the user (`GEMINI_API_KEY` and
+`TELEGRAM_BOT_TOKEN` in `.env`, values never printed or committed) and
+live-verified through the product's own Settings test endpoints. Both
+keys were also seeded into the dashboard Settings store (encrypted at
+rest, the source of truth; `.env` remains only the bootstrap default).
+
+**Bug found and fixed by the live test (`727e877`):** Google retired
+`gemini-2.5-flash` — the model the master prompt pinned "everywhere" —
+for newly created API keys; `generateContent` returns 404 NOT_FOUND
+while ListModels still advertises the name. Diagnosis was done against
+the API itself from inside the app container (ListModels + a live
+`generateContent` probe, key read from the environment only). Default
+switched to `gemini-flash-latest`, Google's stable alias for the
+current flash model, so the default cannot rot when a pinned version is
+retired again. Changed in `app/llm.py` (constant + docstrings),
+`app/config.py`, `app/schemas.py`, `app/routers/settings.py` docstring,
+`docker-compose.yml` fallbacks, `.env.example`, the user's `.env`, and
+the `test_gemini_settings_flow` pin. App/worker/beat images rebuilt
+serially, beat force-recreated per the standing gotcha. 383 tests pass.
+
+**Verified end state:** `POST /api/settings/gemini/test` -> "Key works
+— gemini-flash-latest answered"; `POST /api/settings/telegram/test` ->
+"Test message sent" (the bot container is polling, the owner chat was
+captured via /start, and the test message arrived in Telegram). Alert
+delivery to Telegram and LLM incident explanations/escalation are now
+active on this install.
+
+**Maintenance note for future model retirements:** if Gemini calls
+start failing with 404 again, list the models available to the key
+(`GET /v1beta/models` with the `x-goog-api-key` header) and update
+`GEMINI_MODEL` in `.env` — the code default already tracks the alias,
+so this should only matter if Google retires the alias scheme itself.
