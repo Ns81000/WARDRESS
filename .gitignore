@@ -12,6 +12,7 @@ __pycache__/
 dist/
 build/
 Audit
+react-bits-main
 
 # --- Node / pnpm ---
 node_modules/

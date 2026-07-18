@@ -227,3 +227,77 @@ body {
     letter-spacing: -0.44px;
   }
 }
+
+/* Tactile button lift on hover and scale on press */
+[data-slot="button"] {
+  transition: transform 150ms cubic-bezier(0.25, 1, 0.5, 1), background-color 150ms, border-color 150ms !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-slot="button"]:hover {
+    transform: translateY(-1px) scale(1.01) !important;
+  }
+}
+
+[data-slot="button"]:active {
+  transform: translateY(0) scale(0.96) !important;
+}
+
+.status-dot-clean {
+  background-color: var(--color-accent-green);
+  box-shadow: 0 0 8px var(--color-glow-green);
+}
+
+.status-dot-pending {
+  background-color: var(--color-accent-orange);
+  box-shadow: 0 0 8px var(--color-glow-orange);
+  animation: status-dot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.status-dot-threat {
+  background-color: var(--color-accent-red);
+  box-shadow: 0 0 8px var(--color-glow-red);
+}
+
+.status-dot-idle {
+  background-color: var(--color-stone);
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.9);
+  }
+}
+
+/* Custom premium scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  transition: background 150ms ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Firefox scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+

@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react"
+import { useState, useEffect, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, Trash2 } from "lucide-react"
-import { Link } from "react-router"
+import { useNavigate } from "react-router"
 import { toast } from "sonner"
 
 import { StatusDot, type DotState } from "@/components/status-dot"
@@ -30,8 +30,12 @@ import { BulkImportDialog } from "@/components/bulk-import-dialog"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Site } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
+import { activeRebaselines } from "./site-detail"
 
 function baselineDot(site: Site): DotState {
+  if (activeRebaselines.has(site.id)) {
+    return "pending"
+  }
   switch (site.baseline_status) {
     case "ready":
       return "clean"
@@ -46,6 +50,9 @@ function baselineDot(site: Site): DotState {
 }
 
 function baselineLabel(site: Site): string {
+  if (activeRebaselines.has(site.id)) {
+    return "Baseline queued"
+  }
   switch (site.baseline_status) {
     case "ready":
       return "Baseline ready"
@@ -60,8 +67,18 @@ function baselineLabel(site: Site): string {
   }
 }
 
+function getFaviconUrl(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname
+    return `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`
+  } catch {
+    return null
+  }
+}
+
 export function SitesPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   // Viewers are read-only; mutating controls are hidden (the API enforces
   // the role server-side regardless).
   const canManage = user?.role === "admin" || user?.role === "analyst"
@@ -71,18 +88,31 @@ export function SitesPage() {
   const [url, setUrl] = useState("")
   const [allowPrivate, setAllowPrivate] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [siteToDelete, setSiteToDelete] = useState<Site | null>(null)
 
   const sites = useQuery({
     queryKey: ["sites"],
     queryFn: apiClient.listSites,
     // Keep capture progress fresh while any baseline is in flight
-    refetchInterval: (query) =>
-      query.state.data?.some(
+    refetchInterval: (query) => {
+      const data = query.state.data
+      const hasActiveLocal = data?.some((s) => activeRebaselines.has(s.id))
+      const hasActiveServer = data?.some(
         (s) => s.baseline_status === "pending" || s.baseline_status === "capturing"
       )
-        ? 3000
-        : false,
+      return hasActiveLocal || hasActiveServer ? 3000 : false
+    },
   })
+
+  useEffect(() => {
+    if (sites.data) {
+      for (const site of sites.data) {
+        if (site.baseline_status !== "pending" && site.baseline_status !== "capturing") {
+          activeRebaselines.delete(site.id)
+        }
+      }
+    }
+  }, [sites.data])
 
   const createMutation = useMutation({
     mutationFn: apiClient.createSite,
@@ -123,10 +153,10 @@ export function SitesPage() {
 
   return (
     <div>
-      <div className="mb-8 flex items-end justify-between">
+      <div className="mb-12 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-display-lg text-ink">Sites</h1>
-          <p className="mt-2 text-body-md text-charcoal">
+          <p className="mt-3 text-body-md text-charcoal">
             Every site under watch, with its trusted baseline.
           </p>
         </div>
@@ -191,9 +221,9 @@ export function SitesPage() {
                 </p>
               )}
 
-              <DialogFooter>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? "Adding" : "Add site"}
+              <DialogFooter className="w-full sm:justify-stretch">
+                <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? "Adding..." : "Add site"}
                 </Button>
               </DialogFooter>
             </form>
@@ -223,14 +253,27 @@ export function SitesPage() {
             </TableHeader>
             <TableBody>
               {sites.data.map((site) => (
-                <TableRow key={site.id}>
-                  <TableCell>
-                    <Link
-                      to={`/sites/${site.id}`}
-                      className="text-ink hover:underline"
-                    >
-                      {site.name}
-                    </Link>
+                <TableRow
+                  key={site.id}
+                  className="cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
+                  onClick={() => navigate(`/sites/${site.id}`)}
+                >
+                  <TableCell className="max-w-[240px] md:max-w-[360px]">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {getFaviconUrl(site.url) && (
+                        <img
+                          src={getFaviconUrl(site.url)!}
+                          alt=""
+                          className="size-4.5 shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none"
+                          }}
+                        />
+                      )}
+                      <span className="truncate text-ink hover:underline font-medium">
+                        {site.name}
+                      </span>
+                    </div>
                   </TableCell>
                   <TableCell className="max-w-md truncate text-code-md text-charcoal">
                     {site.url}
@@ -252,14 +295,9 @@ export function SitesPage() {
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Delete ${site.name}`}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Remove ${site.name} and all its scan history?`
-                            )
-                          ) {
-                            deleteMutation.mutate(site.id)
-                          }
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSiteToDelete(site)
                         }}
                       >
                         <Trash2 />
@@ -283,6 +321,34 @@ export function SitesPage() {
           </div>
         )}
       </div>
+
+      <Dialog open={siteToDelete !== null} onOpenChange={(open) => !open && setSiteToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-accent-red">Remove Site?</DialogTitle>
+            <DialogDescription>
+              This will permanently remove <span className="text-ink font-semibold">{siteToDelete?.name}</span> and all of its associated scan history. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSiteToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                if (siteToDelete) {
+                  deleteMutation.mutate(siteToDelete.id)
+                  setSiteToDelete(null)
+                }
+              }}
+            >
+              {deleteMutation.isPending ? "Removing..." : "Remove"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

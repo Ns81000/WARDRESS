@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react"
+import { Suspense, lazy, useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -7,9 +7,15 @@ import {
   RefreshCcw,
   ScanSearch,
   Settings2,
+  Shield,
+  ShieldAlert,
+  Bell,
+  BellOff,
 } from "lucide-react"
 import { Link, useNavigate, useParams } from "react-router"
 import { toast } from "sonner"
+
+import { cn } from "@/lib/utils"
 
 import { RemediationHooksPanel } from "@/components/remediation-hooks-panel"
 import { StatusDot, type DotState } from "@/components/status-dot"
@@ -36,6 +42,18 @@ import {
 import * as apiClient from "@/lib/api"
 import { ApiError, type Scan, type Site } from "@/lib/api"
 
+import { useArtifact } from "@/lib/use-artifact"
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog"
+
+function getFaviconUrl(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname
+    return `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`
+  } catch {
+    return null
+  }
+}
+
 const IncidentTimeline = lazy(() =>
   import("@/components/incident-timeline").then((m) => ({
     default: m.IncidentTimeline,
@@ -46,6 +64,8 @@ const SCANS_PAGE_SIZE = 20
 // The timeline reads a deeper slice than the table page so history is
 // visible at a glance; pagination covers the rest.
 const TIMELINE_WINDOW = 200
+
+export const activeRebaselines = new Set<string>()
 
 function verdictBadge(scan: Scan) {
   if (scan.status === "failed" || scan.verdict === "error")
@@ -154,8 +174,12 @@ function SettingsCard({ site }: { site: Site }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex items-center gap-2 text-body-sm text-body">
-          <StatusDot state={site.allow_private_networks ? "pending" : "clean"} />
+        <div className="flex items-center gap-2.5 text-body-sm text-body">
+          {site.allow_private_networks ? (
+            <ShieldAlert className="size-4 text-accent-orange shrink-0 animate-pulse" />
+          ) : (
+            <Shield className="size-4 text-accent-green shrink-0" />
+          )}
           {site.allow_private_networks
             ? "Private-network target allowed (explicit opt-in)"
             : "Public targets only (SSRF guard active)"}
@@ -180,17 +204,26 @@ function SettingsCard({ site }: { site: Site }) {
             />
           </div>
         </div>
-        <label className="flex cursor-pointer items-center gap-2 text-body-sm text-body">
-          <span className="flex min-h-11 min-w-11 items-center justify-center md:min-h-0 md:min-w-0">
-            <input
-              type="checkbox"
-              checked={autoScan}
-              onChange={(e) => setAutoScan(e.target.checked)}
-              className="size-4 accent-ink"
+        <div className="flex items-center justify-between py-1">
+          <span className="text-body-sm text-body">Scheduled scans enabled</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoScan}
+            onClick={() => setAutoScan(!autoScan)}
+            className={cn(
+              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden",
+              autoScan ? "bg-accent-green" : "bg-stone"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block size-5 transform rounded-full bg-canvas shadow-lg ring-0 transition duration-200 ease-in-out",
+                autoScan ? "translate-x-5" : "translate-x-0"
+              )}
             />
-          </span>
-          Scheduled scans enabled
-        </label>
+          </button>
+        </div>
         {site.next_scan_at && site.auto_scan_enabled && (
           <p className="text-caption text-mute">
             Next scheduled scan {new Date(site.next_scan_at).toLocaleString()}
@@ -200,8 +233,12 @@ function SettingsCard({ site }: { site: Site }) {
           </p>
         )}
         <div className="flex items-center justify-between border-t border-hairline pt-4">
-          <div className="flex items-center gap-2 text-body-sm text-body">
-            <StatusDot state={muted ? "pending" : "clean"} />
+          <div className="flex items-center gap-2.5 text-body-sm text-body">
+            {muted ? (
+              <BellOff className="size-4 text-mute shrink-0 animate-pulse" />
+            ) : (
+              <Bell className="size-4 text-accent-green shrink-0" />
+            )}
             {muted
               ? `Alerts muted until ${new Date(site.muted_until!).toLocaleString()}`
               : "Alert delivery active"}
@@ -263,6 +300,10 @@ export function SiteDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [page, setPage] = useState(0)
+  const [localRebaseline, setLocalRebaseline] = useState(() =>
+    siteId ? activeRebaselines.has(siteId) : false
+  )
+  const [activeTab, setActiveTab] = useState<"overview" | "scans" | "suppression" | "hooks">("overview")
 
   const site = useQuery({
     queryKey: ["sites", siteId],
@@ -312,16 +353,36 @@ export function SiteDetailPage() {
 
   const rebaselineMutation = useMutation({
     mutationFn: () => apiClient.rebaseline(siteId!),
+    onMutate: () => {
+      if (siteId) activeRebaselines.add(siteId)
+      setLocalRebaseline(true)
+    },
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sites"] })
       void queryClient.invalidateQueries({ queryKey: ["sites", siteId] })
       toast.success("Baseline capture queued")
     },
     onError: (err) => {
+      if (siteId) activeRebaselines.delete(siteId)
+      setLocalRebaseline(false)
       toast.error(
         err instanceof ApiError ? err.message : "Could not start capture"
       )
     },
   })
+
+  const sData = site.data
+
+  useEffect(() => {
+    if (sData && sData.baseline_status !== "pending" && sData.baseline_status !== "capturing") {
+      if (siteId) activeRebaselines.delete(siteId)
+      setLocalRebaseline(false)
+    }
+  }, [sData?.baseline_status, siteId])
+
+  const { url: screenshotUrl, loading: screenshotLoading } = useArtifact(
+    sData?.baseline_id ? apiClient.baselineScreenshotPath(sData.baseline_id) : null
+  )
 
   if (site.isLoading) {
     return <p className="text-body-sm text-mute">Loading…</p>
@@ -338,12 +399,30 @@ export function SiteDetailPage() {
   }
 
   const s = site.data
+
+  const isRebaselining =
+    localRebaseline ||
+    rebaselineMutation.isPending ||
+    s.baseline_status === "pending" ||
+    s.baseline_status === "capturing"
+
+  const currentStatus = isRebaselining
+    ? s.baseline_status === "capturing"
+      ? "capturing"
+      : "pending"
+    : s.baseline_status
+
   const baselineReady = s.baseline_status === "ready"
   const scanInFlight = scans.data?.items.some(
     (x) => x.status === "pending" || x.status === "running"
   )
   const totalScans = scans.data?.total ?? 0
   const pageCount = Math.max(1, Math.ceil(totalScans / SCANS_PAGE_SIZE))
+  const titleClassName = s.name.length > 40
+    ? "text-3xl font-semibold text-ink tracking-tight break-all"
+    : s.name.length > 20
+      ? "text-4xl font-semibold text-ink tracking-tight break-all"
+      : "text-display-lg text-ink break-all"
 
   return (
     <div>
@@ -356,201 +435,366 @@ export function SiteDetailPage() {
 
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-display-lg text-ink">{s.name}</h1>
+          <div className="flex items-start gap-3.5">
+            {getFaviconUrl(s.url) && (
+              <img
+                src={getFaviconUrl(s.url)!}
+                alt=""
+                className="size-10 shrink-0 mt-1.5"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none"
+                }}
+              />
+            )}
+            <h1 className={titleClassName}>{s.name}</h1>
+          </div>
           <p className="mt-2 truncate text-code-md text-charcoal">{s.url}</p>
         </div>
         <div className="flex items-center gap-3">
           <Button
             variant="outline"
             disabled={
+              localRebaseline ||
               rebaselineMutation.isPending ||
               s.baseline_status === "pending" ||
               s.baseline_status === "capturing"
             }
             onClick={() => rebaselineMutation.mutate()}
           >
-            <RefreshCcw />
-            Rebaseline
+            <RefreshCcw
+              className={cn(
+                "size-4",
+                (localRebaseline || rebaselineMutation.isPending || s.baseline_status === "pending" || s.baseline_status === "capturing") && "animate-spin"
+              )}
+            />
+            {localRebaseline || rebaselineMutation.isPending
+              ? "Queuing..."
+              : s.baseline_status === "pending"
+                ? "Queued..."
+                : s.baseline_status === "capturing"
+                  ? "Capturing..."
+                  : "Rebaseline"}
           </Button>
           <Button
             disabled={!baselineReady || scanInFlight || scanMutation.isPending}
             onClick={() => scanMutation.mutate()}
           >
-            <ScanSearch />
-            Scan now
+            <ScanSearch className={cn(scanMutation.isPending && "animate-pulse")} />
+            {scanMutation.isPending ? "Queuing..." : "Scan now"}
           </Button>
         </div>
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Baseline</CardTitle>
-            <CardDescription>
-              The trusted capture every scan is compared against.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <StatusDot
-                state={
-                  baselineReady
-                    ? "clean"
-                    : s.baseline_status === "failed"
-                      ? "threat"
-                      : "pending"
-                }
-              />
-              <span className="text-body-sm text-body">
-                {s.baseline_status === "ready" && "Ready"}
-                {s.baseline_status === "pending" && "Queued for capture"}
-                {s.baseline_status === "capturing" && "Capturing now"}
-                {s.baseline_status === "failed" && "Capture failed"}
-                {!s.baseline_status && "None"}
-              </span>
-            </div>
-            {s.baseline_captured_at && (
-              <p className="mt-2 text-caption text-mute">
-                Captured {new Date(s.baseline_captured_at).toLocaleString()}
-              </p>
-            )}
-            {s.baseline_error && (
-              <p className="mt-2 text-body-sm text-accent-red">
-                {s.baseline_error}
-              </p>
-            )}
-          </CardContent>
-        </Card>
 
-        <SettingsCard key={s.id + String(s.flag_threshold)} site={s} />
-      </div>
 
-      <h2 className="mb-4 text-heading-md text-ink">Risk history</h2>
-      <div className="mb-8">
-        <Suspense
-          fallback={
-            <div className="flex h-[220px] items-center justify-center rounded-lg border border-hairline-strong bg-surface-card">
-              <p className="text-body-sm text-mute">Loading timeline…</p>
-            </div>
-          }
+      <div className="mb-6 flex border-b border-hairline-strong pb-px gap-6">
+        <button
+          onClick={() => setActiveTab("overview")}
+          className={cn(
+            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
+            activeTab === "overview"
+              ? "text-ink font-semibold"
+              : "text-mute hover:text-ink"
+          )}
         >
-          <IncidentTimeline
-            scans={history.data?.items ?? []}
-            threshold={s.flag_threshold}
-            onPointClick={(scanId) => void navigate(`/sites/${s.id}/scans/${scanId}`)}
-          />
-        </Suspense>
+          Overview
+          {activeTab === "overview" && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("scans")}
+          className={cn(
+            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
+            activeTab === "scans"
+              ? "text-ink font-semibold"
+              : "text-mute hover:text-ink"
+          )}
+        >
+          Scans
+          {activeTab === "scans" && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("suppression")}
+          className={cn(
+            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
+            activeTab === "suppression"
+              ? "text-ink font-semibold"
+              : "text-mute hover:text-ink"
+          )}
+        >
+          Suppression Rules
+          {activeTab === "suppression" && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab("hooks")}
+          className={cn(
+            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
+            activeTab === "hooks"
+              ? "text-ink font-semibold"
+              : "text-mute hover:text-ink"
+          )}
+        >
+          Remediation Hooks
+          {activeTab === "hooks" && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
+          )}
+        </button>
       </div>
 
-      <div className="mb-8">
-        <SuppressionPanel
-          siteId={s.id}
-          baselineScreenshotPath={
-            baselineReady && s.baseline_id
-              ? apiClient.baselineScreenshotPath(s.baseline_id)
-              : null
-          }
-        />
-      </div>
+      {activeTab === "overview" && (
+        <div className="animate-fade-in duration-200">
+          <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Baseline</CardTitle>
+                <CardDescription>
+                  The trusted capture every scan is compared against.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <StatusDot
+                    state={
+                      currentStatus === "ready"
+                        ? "clean"
+                        : currentStatus === "failed"
+                          ? "threat"
+                          : currentStatus === "pending" || currentStatus === "capturing"
+                            ? "pending"
+                            : "idle"
+                    }
+                    className={cn(
+                      isRebaselining && "animate-pulse"
+                    )}
+                  />
+                  <span className="text-body-sm text-body font-medium">
+                    {currentStatus === "ready" && "Ready"}
+                    {currentStatus === "pending" && "Queued for capture..."}
+                    {currentStatus === "capturing" && "Capturing now..."}
+                    {currentStatus === "failed" && "Capture failed"}
+                    {!currentStatus && "None"}
+                  </span>
+                </div>
 
-      <div className="mb-8">
-        <RemediationHooksPanel siteId={s.id} />
-      </div>
+                {/* Real captured baseline screenshot preview with dialog lightbox */}
+                {baselineReady && s.baseline_id && (
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <div className="mt-4 relative overflow-hidden rounded-md border border-hairline bg-surface-deep group cursor-zoom-in">
+                        {screenshotLoading ? (
+                          <div className="h-44 w-full animate-pulse bg-hairline-strong/20" />
+                        ) : screenshotUrl ? (
+                          <div className="relative h-44 w-full overflow-hidden">
+                            <img
+                              src={screenshotUrl}
+                              alt="Baseline viewport screenshot"
+                              className="w-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                              style={{ height: "100%" }}
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-surface-card via-transparent to-transparent pointer-events-none" />
+                          </div>
+                        ) : (
+                          <div className="p-4 text-center text-caption text-mute">
+                            Screenshot unavailable
+                          </div>
+                        )}
+                      </div>
+                    </DialogTrigger>
+                    {screenshotUrl && (
+                      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto p-1 bg-canvas border border-hairline-strong">
+                        <img
+                          src={screenshotUrl}
+                          alt="Full baseline screenshot"
+                          className="w-full h-auto rounded"
+                        />
+                      </DialogContent>
+                    )}
+                  </Dialog>
+                )}
 
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-heading-md text-ink">Scans</h2>
-        {pageCount > 1 && (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Newer scans"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              <ChevronLeft />
-            </Button>
-            <span className="text-caption text-mute">
-              {page + 1} / {pageCount}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Older scans"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              <ChevronRight />
-            </Button>
+                {s.baseline_captured_at && (
+                  <p className="mt-2 text-caption text-mute">
+                    Captured {new Date(s.baseline_captured_at).toLocaleString()}
+                  </p>
+                )}
+
+                {s.baseline_error && (
+                  <p className="mt-2 text-body-sm text-accent-red">
+                    {s.baseline_error}
+                  </p>
+                )}
+
+                {/* Metadata summary list to fill empty card space */}
+                {baselineReady && (
+                  <div className="mt-4 border-t border-hairline-strong pt-4 text-caption text-mute space-y-2.5 font-mono">
+                    <div className="flex justify-between gap-4">
+                      <span className="shrink-0 text-mute">Target URL</span>
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="truncate text-ink hover:underline text-right"
+                      >
+                        {s.url}
+                      </a>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="shrink-0 text-mute">Active Anchor ID</span>
+                      <span className="truncate text-ink text-right">{s.baseline_id || "None"}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="shrink-0 text-mute">Monitored Since</span>
+                      <span className="text-ink">{new Date(s.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <SettingsCard key={s.id + String(s.flag_threshold)} site={s} />
           </div>
-        )}
-      </div>
-      <div className="rounded-lg border border-hairline-strong bg-surface-card">
-        {scans.isLoading ? (
-          <p className="p-8 text-body-sm text-mute">Loading scans…</p>
-        ) : scans.isError ? (
-          <p className="p-8 text-body-sm text-accent-red">
-            Could not load scans — is the API reachable?
-          </p>
-        ) : scans.data && scans.data.items.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Verdict</TableHead>
-                <TableHead>Risk</TableHead>
-                <TableHead>Layers</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Summary</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {scans.data.items.map((scan) => (
-                <TableRow
-                  key={scan.id}
-                  className="cursor-pointer"
-                  onClick={() => void navigate(`/sites/${s.id}/scans/${scan.id}`)}
+
+          <h2 className="mb-4 text-heading-md text-ink">Risk history</h2>
+          <div className="mb-8">
+            <Suspense
+              fallback={
+                <div className="flex h-[220px] items-center justify-center rounded-lg border border-hairline-strong bg-surface-card">
+                  <p className="text-body-sm text-mute">Loading timeline…</p>
+                </div>
+              }
+            >
+              <IncidentTimeline
+                scans={history.data?.items ?? []}
+                threshold={s.flag_threshold}
+                onPointClick={(scanId) => void navigate(`/sites/${s.id}/scans/${scanId}`)}
+              />
+            </Suspense>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "scans" && (
+        <div className="animate-fade-in duration-200">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-heading-md text-ink">Scans</h2>
+            {pageCount > 1 && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Newer scans"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
                 >
-                  <TableCell>
-                    <span className="flex items-center gap-2">
-                      <StatusDot state={scanDot(scan)} />
-                      <span className="text-body-sm capitalize">{scan.status}</span>
-                    </span>
-                  </TableCell>
-                  <TableCell>{verdictBadge(scan)}</TableCell>
-                  <TableCell>{riskCell(scan)}</TableCell>
-                  <TableCell className="text-caption text-mute">
-                    {layerSummary(scan)}
-                  </TableCell>
-                  <TableCell className="text-body-sm text-mute">
-                    {scan.started_at
-                      ? new Date(scan.started_at).toLocaleString()
-                      : new Date(scan.created_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="max-w-md truncate text-body-sm text-charcoal">
-                    {scan.error
-                      ? scan.error
-                      : scan.verdict === "flagged"
-                        ? "Risk above the site threshold — open for evidence"
-                        : scan.verdict === "changed"
-                          ? "Changes detected below the flag threshold"
-                          : scan.verdict === "clean"
-                            ? "No change against baseline"
-                            : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <p className="p-8 text-body-sm text-charcoal">
-            No scans yet.{" "}
-            {baselineReady
-              ? "Run the first scan with the button above."
-              : "Waiting for the baseline capture to finish."}
-          </p>
-        )}
-      </div>
+                  <ChevronLeft />
+                </Button>
+                <span className="text-caption text-mute">
+                  {page + 1} / {pageCount}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Older scans"
+                  disabled={page >= pageCount - 1}
+                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                >
+                  <ChevronRight />
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="rounded-lg border border-hairline-strong bg-surface-card">
+            {scans.isLoading ? (
+              <p className="p-8 text-body-sm text-mute">Loading scans…</p>
+            ) : scans.isError ? (
+              <p className="p-8 text-body-sm text-accent-red">
+                Could not load scans — is the API reachable?
+              </p>
+            ) : scans.data && scans.data.items.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Verdict</TableHead>
+                    <TableHead>Risk</TableHead>
+                    <TableHead>Layers</TableHead>
+                    <TableHead>Started</TableHead>
+                    <TableHead>Summary</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {scans.data.items.map((scan) => (
+                    <TableRow
+                      key={scan.id}
+                      className="cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
+                      onClick={() => void navigate(`/sites/${s.id}/scans/${scan.id}`)}
+                    >
+                      <TableCell>
+                        <span className="flex items-center gap-2">
+                          <StatusDot state={scanDot(scan)} />
+                          <span className="text-body-sm capitalize">{scan.status}</span>
+                        </span>
+                      </TableCell>
+                      <TableCell>{verdictBadge(scan)}</TableCell>
+                      <TableCell>{riskCell(scan)}</TableCell>
+                      <TableCell className="text-caption text-mute">
+                        {layerSummary(scan)}
+                      </TableCell>
+                      <TableCell className="text-body-sm text-mute">
+                        {scan.started_at
+                          ? new Date(scan.started_at).toLocaleString()
+                          : new Date(scan.created_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="max-w-md truncate text-body-sm text-charcoal">
+                        {scan.error
+                          ? scan.error
+                          : scan.verdict === "flagged"
+                            ? "Risk above the site threshold — open for evidence"
+                            : scan.verdict === "changed"
+                              ? "Changes detected below the flag threshold"
+                              : scan.verdict === "clean"
+                                ? "No change against baseline"
+                                : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="p-8 text-body-sm text-charcoal">
+                No scans yet.{" "}
+                {baselineReady
+                  ? "Run the first scan with the button above."
+                  : "Waiting for the baseline capture to finish."}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "suppression" && (
+        <div className="animate-fade-in duration-200">
+          <SuppressionPanel
+            siteId={s.id}
+            baselineScreenshotPath={
+              baselineReady && s.baseline_id
+                ? apiClient.baselineScreenshotPath(s.baseline_id)
+                : null
+            }
+          />
+        </div>
+      )}
+
+      {activeTab === "hooks" && (
+        <div className="animate-fade-in duration-200">
+          <RemediationHooksPanel siteId={s.id} />
+        </div>
+      )}
     </div>
   )
 }

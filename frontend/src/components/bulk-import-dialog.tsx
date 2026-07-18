@@ -4,6 +4,7 @@ import { Upload } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -43,6 +44,25 @@ export function BulkImportDialog() {
   const [sitemapUrl, setSitemapUrl] = useState("")
   const [result, setResult] = useState<BulkImportResult | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = () => {
+    setIsDragging(false)
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) {
+      await onFile(file)
+    }
+  }
 
   const importSites = useMutation({
     mutationFn: () =>
@@ -93,7 +113,7 @@ export function BulkImportDialog() {
           Bulk import
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Bulk import sites</DialogTitle>
           <DialogDescription>
@@ -106,47 +126,74 @@ export function BulkImportDialog() {
 
         {result === null ? (
           <div className="flex flex-col gap-5">
-            <div className="flex gap-2">
+            <div className="relative flex rounded-lg bg-surface-deep p-1 border border-hairline-strong max-w-[240px]">
+              <div
+                className="absolute top-1 bottom-1 rounded-md bg-surface-elevated transition-all duration-200 ease-out border border-hairline-strong"
+                style={{
+                  left: mode === "csv" ? "4px" : "120px",
+                  width: "116px",
+                }}
+              />
               <button
                 type="button"
                 onClick={() => setMode("csv")}
-                className={`rounded-md border px-3 py-1.5 text-button-sm transition-colors ${
-                  mode === "csv"
-                    ? "border-white/40 text-ink"
-                    : "border-hairline-strong text-charcoal hover:text-ink"
-                }`}
+                className={cn(
+                  "relative z-10 w-[116px] py-1.5 text-center text-button-sm transition-colors duration-200 cursor-pointer",
+                  mode === "csv" ? "text-ink" : "text-charcoal hover:text-ink"
+                )}
               >
                 CSV file
               </button>
               <button
                 type="button"
                 onClick={() => setMode("sitemap")}
-                className={`rounded-md border px-3 py-1.5 text-button-sm transition-colors ${
-                  mode === "sitemap"
-                    ? "border-white/40 text-ink"
-                    : "border-hairline-strong text-charcoal hover:text-ink"
-                }`}
+                className={cn(
+                  "relative z-10 w-[116px] py-1.5 text-center text-button-sm transition-colors duration-200 cursor-pointer",
+                  mode === "sitemap" ? "text-ink" : "text-charcoal hover:text-ink"
+                )}
               >
-                Sitemap crawl
+                Sitemap
               </button>
             </div>
 
             {mode === "csv" ? (
               <div className="flex flex-col gap-2">
-                <Label htmlFor="bulk-csv">CSV file</Label>
-                <input
-                  id="bulk-csv"
-                  ref={fileRef}
-                  type="file"
-                  accept=".csv,text/csv,text/plain"
-                  onChange={(e) => void onFile(e.target.files?.[0])}
-                  className="text-body-sm text-charcoal file:mr-3 file:rounded-md file:border file:border-hairline-strong file:bg-transparent file:px-3 file:py-1.5 file:text-button-sm file:text-ink"
-                />
-                {fileName && (
-                  <p className="text-caption text-mute">
-                    {fileName} — {csvText.split("\n").filter((l) => l.trim()).length} lines
-                  </p>
-                )}
+                <Label>CSV file</Label>
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => fileRef.current?.click()}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8 text-center cursor-pointer transition-all duration-200 bg-surface-deep",
+                    isDragging
+                      ? "border-accent-blue bg-glow-blue/10"
+                      : "border-hairline-strong hover:border-white/20 hover:bg-surface-card"
+                  )}
+                >
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept=".csv,text/csv,text/plain"
+                    className="hidden"
+                    onChange={(e) => void onFile(e.target.files?.[0])}
+                  />
+                  <Upload className={cn("size-6 transition-colors duration-200", isDragging ? "text-accent-blue" : "text-charcoal")} />
+                  <div>
+                    <p className="text-body-sm text-body">
+                      {fileName ? (
+                        <span className="text-accent-green font-medium">{fileName}</span>
+                      ) : (
+                        <span>Click to upload or drag & drop</span>
+                      )}
+                    </p>
+                    <p className="mt-1 text-caption text-mute">
+                      {fileName
+                        ? `${csvText.split("\n").filter((l) => l.trim()).length} rows detected`
+                        : "CSV up to 512 KB"}
+                    </p>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
@@ -187,15 +234,15 @@ export function BulkImportDialog() {
                 {result.errors} {result.errors === 1 ? "error" : "errors"}
               </Badge>
             </div>
-            <ul className="max-h-72 divide-y divide-hairline overflow-y-auto rounded-md border border-hairline">
+            <ul className="max-h-72 divide-y divide-hairline overflow-y-auto overflow-x-hidden rounded-md border border-hairline">
               {result.results.map((r) => (
                 <li key={`${r.row}-${r.url}`} className="flex items-start gap-3 px-3 py-2">
                   <span className="mt-0.5 w-8 shrink-0 text-code-md text-mute">{r.row}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-body-sm text-body">{r.name ?? r.url}</p>
-                    <p className="truncate text-caption text-mute">{r.url}</p>
+                  <div className="min-w-0 flex-1 break-words">
+                    <p className="text-body-sm text-body font-medium whitespace-normal">{r.name ?? r.url}</p>
+                    <p className="text-caption text-mute whitespace-normal break-all mt-0.5">{r.url}</p>
                     {r.detail && (
-                      <p className="text-caption text-charcoal">{r.detail}</p>
+                      <p className="text-caption text-charcoal whitespace-normal break-words mt-1">{r.detail}</p>
                     )}
                   </div>
                   <div className="shrink-0">{rowBadge(r.status)}</div>

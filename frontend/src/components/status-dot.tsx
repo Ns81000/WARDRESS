@@ -7,11 +7,11 @@ import { cn } from "@/lib/utils"
  */
 export type DotState = "clean" | "pending" | "threat" | "idle"
 
-const stateColor: Record<DotState, string> = {
-  clean: "bg-accent-green",
-  pending: "bg-accent-orange",
-  threat: "bg-accent-red",
-  idle: "bg-stone",
+const stateClass: Record<DotState, string> = {
+  clean: "status-dot-clean",
+  pending: "status-dot-pending",
+  threat: "status-dot-threat",
+  idle: "status-dot-idle",
 }
 
 export function StatusDot({
@@ -24,7 +24,7 @@ export function StatusDot({
   return (
     <span
       aria-hidden
-      className={cn("inline-block size-2 rounded-full", stateColor[state], className)}
+      className={cn("inline-block size-2 rounded-full", stateClass[state], className)}
     />
   )
 }

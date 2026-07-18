@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, Trash2, Webhook } from "lucide-react"
 import { toast } from "sonner"
 
+import { cn } from "@/lib/utils"
+
 import { StatusDot } from "@/components/status-dot"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -77,6 +79,8 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
   const [threshold, setThreshold] = useState("0.5")
   const [autoExecute, setAutoExecute] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [hookToDelete, setHookToDelete] = useState<RemediationHook | null>(null)
+  const [selectOpen, setSelectOpen] = useState(false)
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["remediation-hooks", siteId] })
@@ -176,19 +180,43 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="hook-action">Action type</Label>
-                    <select
-                      id="hook-action"
-                      data-slot="select"
-                      value={actionType}
-                      onChange={(e) => setActionType(e.target.value as RemediationActionType)}
-                      className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"
-                    >
-                      {ACTION_TYPES.map((a) => (
-                        <option key={a.value} value={a.value}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <button
+                        id="hook-action"
+                        type="button"
+                        onClick={() => setSelectOpen((o) => !o)}
+                        className="flex h-9 w-full items-center justify-between rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none transition-colors hover:bg-surface-card focus:border-white/25 cursor-pointer"
+                      >
+                        <span>{ACTION_TYPES.find((a) => a.value === actionType)?.label}</span>
+                        <span className="text-mute text-xs">▼</span>
+                      </button>
+
+                      {selectOpen && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setSelectOpen(false)} />
+                          <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-md border border-hairline-strong bg-surface-elevated p-1 shadow-2xl animate-in fade-in-0 zoom-in-95 duration-100">
+                            {ACTION_TYPES.map((a) => (
+                              <button
+                                key={a.value}
+                                type="button"
+                                onClick={() => {
+                                  setActionType(a.value)
+                                  setSelectOpen(false)
+                                }}
+                                className={cn(
+                                  "flex w-full items-center rounded-sm px-2 py-1.5 text-left text-body-sm transition-colors cursor-pointer outline-none",
+                                  a.value === actionType
+                                    ? "bg-primary text-primary-foreground font-medium"
+                                    : "text-body hover:bg-surface-card hover:text-ink"
+                                )}
+                              >
+                                {a.label}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                     <p className="text-caption text-mute">
                       {ACTION_TYPES.find((a) => a.value === actionType)?.hint}
                     </p>
@@ -241,9 +269,9 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                       {formError}
                     </p>
                   )}
-                  <DialogFooter>
-                    <Button type="submit" disabled={create.isPending}>
-                      {create.isPending ? "Adding" : "Add hook"}
+                  <DialogFooter className="w-full sm:justify-stretch">
+                    <Button type="submit" className="w-full" disabled={create.isPending}>
+                      {create.isPending ? "Adding..." : "Add hook"}
                     </Button>
                   </DialogFooter>
                 </form>
@@ -299,11 +327,7 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                       variant="ghost"
                       size="icon-sm"
                       aria-label={`Delete ${h.name}`}
-                      onClick={() => {
-                        if (window.confirm(`Remove the hook "${h.name}"?`)) {
-                          remove.mutate(h.id)
-                        }
-                      }}
+                      onClick={() => setHookToDelete(h)}
                     >
                       <Trash2 />
                     </Button>
@@ -323,6 +347,35 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
           </p>
         )}
       </CardContent>
+
+      <Dialog open={hookToDelete !== null} onOpenChange={(open) => !open && setHookToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-accent-red">Remove Hook?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to remove the remediation hook <span className="text-ink font-semibold">"{hookToDelete?.name}"</span>?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setHookToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() => {
+                if (hookToDelete) {
+                  remove.mutate(hookToDelete.id, {
+                    onSuccess: () => setHookToDelete(null)
+                  })
+                }
+              }}
+            >
+              {remove.isPending ? "Removing..." : "Remove"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
