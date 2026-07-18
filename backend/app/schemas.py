@@ -417,7 +417,7 @@ class GeminiSettingsOut(BaseModel):
     configured: bool
     enabled: bool = False
     key_hint: str | None = None
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-flash-latest"
 
 
 class OllamaSettingsIn(BaseModel):

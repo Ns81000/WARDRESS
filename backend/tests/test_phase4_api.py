@@ -286,7 +286,7 @@ async def test_telegram_test_requires_capture(client, auth_headers):
 async def test_gemini_settings_flow(client, auth_headers):
     resp = await client.get("/api/settings/gemini", headers=auth_headers)
     body = resp.json()
-    assert body["configured"] is False and body["model"] == "gemini-2.5-flash"
+    assert body["configured"] is False and body["model"] == "gemini-flash-latest"
 
     resp = await client.put(
         "/api/settings/gemini", json={"api_key": "AIzaFakeKey123456"}, headers=auth_headers

@@ -268,7 +268,7 @@ async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiS
 
 @router.post("/gemini/test", response_model=SettingsTestResult)
 async def test_gemini(user: AdminUser, db: DB) -> SettingsTestResult:
-    """One cheap gemini-2.5-flash call to confirm the stored key works
+    """One cheap gemini-flash-latest call to confirm the stored key works
     (§7). Uses the same client module the worker's escalation uses."""
     g = await load_setting(db, GEMINI_KEY)
     if not g or not g.get("api_key"):

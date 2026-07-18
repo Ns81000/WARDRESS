@@ -1,5 +1,5 @@
-"""Optional LLM intelligence layer (§8): Gemini (`gemini-2.5-flash`) and
-Ollama (OpenAI-compatible local endpoint).
+"""Optional LLM intelligence layer (§8): Gemini (`gemini-flash-latest`)
+and Ollama (OpenAI-compatible local endpoint).
 
 Used for exactly two things:
 (a) semantic classification of scans whose fused risk lands in the
@@ -7,7 +7,9 @@ Used for exactly two things:
 (b) the "Explain this incident" button (API + Telegram bot).
 
 Hard rules (master prompt §8):
-- The model string is exactly ``gemini-2.5-flash`` everywhere.
+- One model string (``GEMINI_MODEL``) everywhere: ``gemini-flash-latest``,
+  Google's stable alias for the current flash model (the previously
+  pinned ``gemini-2.5-flash`` was retired for new API keys in 2026).
 - Rate limiting via aiolimiter, tuned conservatively under the free
   tier (~8 requests/minute), plus a per-process daily budget and
   exponential backoff on HTTP 429.
@@ -30,7 +32,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-flash-latest"
 
 # Conservative token bucket: the published free-tier ceilings shift, so
 # stay well below them (§8 assumes ~8 req/min, ~200/day). Both limits are
@@ -67,7 +69,7 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 async def gemini_generate(api_key: str, prompt: str) -> str:
-    """One gemini-2.5-flash call. Raises LLMUnavailable on any failure."""
+    """One gemini-flash-latest call. Raises LLMUnavailable on any failure."""
     if not api_key:
         raise LLMUnavailable("no API key configured")
     if _budget_exhausted():

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     # screen) are the source of truth; these env values act only as
     # bootstrap defaults for a fresh install that pre-set them in .env.
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-flash-latest"
     enable_ollama: bool = False
     ollama_base_url: str = "http://ollama:11434/v1"
 
