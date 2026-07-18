@@ -59,9 +59,7 @@ async def create_api_key(body: ApiKeyCreate, ctx: SessionAuthContext, db: DB) ->
 async def revoke_api_key(key_id: uuid.UUID, ctx: SessionAuthContext, db: DB) -> ApiKeyOut:
     """Revoke (don't delete): the row stays so the audit trail and
     last-used history remain, and the hash can never be re-issued."""
-    key = await db.scalar(
-        select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == ctx.user.id)
-    )
+    key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == ctx.user.id))
     if key is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
     if key.revoked_at is None:

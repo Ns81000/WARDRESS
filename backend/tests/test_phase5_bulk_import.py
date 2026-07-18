@@ -63,7 +63,9 @@ class TestCsvImport:
 
     async def test_existing_url_skipped(self, client, auth_headers):
         await client.post(
-            "/api/sites", headers=auth_headers, json={"name": "Existing", "url": "https://example.com/exists"}
+            "/api/sites",
+            headers=auth_headers,
+            json={"name": "Existing", "url": "https://example.com/exists"},
         )
         resp = await client.post(
             "/api/sites/bulk-import",
@@ -84,7 +86,10 @@ class TestCsvImport:
         resp = await client.post(
             "/api/sites/bulk-import",
             headers=auth_headers,
-            json={"csv_text": "https://a.example.com", "sitemap_url": "https://a.example.com/sitemap.xml"},
+            json={
+                "csv_text": "https://a.example.com",
+                "sitemap_url": "https://a.example.com/sitemap.xml",
+            },
         )
         assert resp.status_code == 422
 

@@ -36,9 +36,7 @@ class TestRateLimitMiddleware:
         monkeypatch.setenv("RATE_LIMIT_PER_IP", "3")
         ratelimit.reset_limiters()
         try:
-            statuses = [
-                (await client.get("/api/health/live")).status_code for _ in range(6)
-            ]
+            statuses = [(await client.get("/api/health/live")).status_code for _ in range(6)]
             assert 429 in statuses
         finally:
             get_settings.cache_clear()

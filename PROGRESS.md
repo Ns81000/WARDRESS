@@ -1484,3 +1484,180 @@ beat container is not recreated automatically.
   the end.
 
 ---
+
+## Phase 6 — Installer, Docs, Polish (2026-07-18, FINAL)
+
+**Shipped.** One-command installer, updater, README with real-UI
+screenshots, the full-system §13 QA pass, and the last polish items.
+Backend 383 tests, frontend 25 tests, tsc clean, ruff clean, oxlint at
+the 2 accepted fast-refresh warnings.
+
+### scripts/install.ps1 (tested three ways)
+
+Flow: Docker checks (actionable errors + docker.com link) -> `.env`
+generation from `.env.example` on first run only (every CHANGE_ME
+assignment replaced with a crypto-random value; the DB password is kept
+identical in `POSTGRES_PASSWORD` and inside `DATABASE_URL`; existing
+`.env` never touched, and a leftover CHANGE_ME in an existing `.env`
+fails loudly) -> serial foreground image builds (app, worker, beat) ->
+db/redis up -> `alembic upgrade head` -> stack up -> health poll ->
+idempotent admin seed -> Desktop shortcut (`Wardress.lnk`, brand icon,
+non-fatal on failure) -> summary that prints the generated admin
+credentials exactly once on first install and never again.
+
+Verified by: (1) isolated `.env`-generation harness (password sync,
+distinct 43-char secrets, LF endings, byte-identical on re-run); (2) a
+full clean-machine simulation under a renamed compose project on port
+8322 — fresh install, login with the printed credentials, update run,
+data survival, `down -v` teardown; (3) idempotent re-run against the
+real stack (`.env` untouched, no credentials printed, admin seed
+"already exists").
+
+PowerShell 5.1 portability rules learned and encoded: keep the scripts
+pure ASCII (BOM-less UTF-8 is read as ANSI by 5.1 and em-dash bytes
+break string parsing); `RandomNumberGenerator::Fill()` does not exist
+on .NET Framework (use `Create()`/`GetBytes()` + rejection sampling);
+under `$ErrorActionPreference = "Stop"` redirected native stderr
+becomes a terminating error (probe commands via an Invoke-Quiet
+helper).
+
+### scripts/update.ps1
+
+`git pull --ff-only` (skippable with `-NoGitPull`, only when a git repo
+with an origin exists) -> prints CHANGELOG.md head if present -> pull
+db/redis, rebuild app/worker/beat serially -> migrate -> restart app +
+worker -> **always** `up -d --no-build --force-recreate beat` (the
+standing gotcha: compose will not recreate a running beat whose own
+config did not change after a worker-image rebuild) -> telegram-bot
+force-recreate only if it is running -> health poll. Data, artifacts,
+and `.env` preserved (verified live in the clean-machine simulation).
+
+### Final §13 QA pass (main session, neutral engineering framing)
+
+**Cross-feature incident flow — 26/26 checks green** against the live
+stack with a local demo page and a local webhook receiver: CSV bulk
+import -> automatic baselines; demo site baseline; Apprise channel +
+manual-confirm remediation hook; page content swap -> flagged scan at
+risk 1.0; alert row with delivery `sent` and the webhook actually
+received; execution `pending_confirm` -> confirm -> `succeeded` with
+the remediation webhook received; audit trail rows for site/channel/
+hook/remediation with no webhook URL leaked; PDF (`%PDF` magic) and
+Markdown exports; ack; page restored.
+
+**RBAC matrix over every surface class** (throwaway analyst/viewer
+accounts, deactivated afterwards): viewer read-everywhere (incl.
+artifact screenshots and report exports) and denied on every mutation;
+analyst operational (sites, scan-now, suppression, threshold PATCH)
+and denied on admin surfaces (users, settings, channels, hooks,
+audit); anonymous artifact access 401. API keys: created once with
+`wk_` raw value shown once, key auth works at owner role, keys cannot
+manage keys, revoked key rejected immediately.
+
+**Restart resilience**: full `docker compose restart` -> all services
+healthy, data intact, health details all ok, post-restart scan clean,
+Beat ticking and dispatching due scans (adaptive cadence picked a due
+site up on the first tick after restart).
+
+**Failure mode**: baseline against a genuinely closed port fails
+cleanly to `baseline_status=failed` with a user-safe fetch error.
+
+**Findings fixed this pass:**
+
+1. **Settings reads were not admin-scoped** — `GET /api/settings/*`
+   and `GET /api/notification-channels` used `CurrentUser` while every
+   mutation was admin-only. The Phase 5 decision ("settings/channels
+   are admin-scope") now holds end to end: all five reads are
+   `AdminUser`, with a regression test sweeping them for analyst and
+   viewer. No frontend change needed — only admin-gated cards consumed
+   them.
+2. **Phase 5 env knobs never reached the container** — `RATE_LIMIT_*`,
+   `TRUST_PROXY_HEADERS`, `CORS_ALLOWED_ORIGINS` were documented in
+   `.env.example` but absent from the compose `environment:` block, so
+   edits silently did nothing (defaults happened to match). Now passed
+   through on the app service, along with the new `COOKIE_SECURE`.
+3. **11 Phase 5 files had drifted from ruff format** — reformatted, no
+   behavior change.
+
+**Non-findings worth recording:** analyst API-key creation is by
+design (self-service keys at the owner's role, pinned by
+`test_api_key_authenticates_with_owner_role`); an initial
+"unreachable-target" failure was a fixture collision with a live
+listener on the chosen port, not a product issue.
+
+### Polish and deferral disposition
+
+- **Artifact-file janitor (Phase 1 deferral) — CLOSED.** Daily Beat
+  task `wardress.cleanup_orphan_artifacts`: removes only well-formed
+  UUID directories under `baselines/` and `scans/` whose owning row is
+  gone; per-run removal cap; never touches anything else on the
+  volume; best-effort by contract (an error can never affect
+  scanning). Three unit tests; live run removed 23 orphan directories
+  from earlier phases and kept all live ones.
+- **`cookie_secure` / HTTPS fronting (Phase 1 deferral) — CLOSED.**
+  `COOKIE_SECURE` added to `.env.example` (with the reverse-proxy
+  guidance) and compose; README documents the HTTPS fronting recipe
+  (PUBLIC_BASE_URL + TRUST_PROXY_HEADERS + COOKIE_SECURE).
+- **OpenAPI completeness — verified**: 62 routes, every one tagged and
+  described.
+- **README.md** — logo, eight real-UI screenshots (`docs/screenshots/`,
+  captured from the live dashboard populated by the QA flow), feature
+  overview, nine-layer table, requirements, install/update/uninstall,
+  full `.env` reference, role table, API-key example, security notes
+  (SSRF policy, secrets at rest, fail-safe alerting, rate limiting).
+
+**Permanent deferrals (by design, with reasons):**
+
+- LLM daily budget is per-process/in-memory — a cost guardrail, not an
+  entitlement system.
+- Telegram bot is single-owner — one captured chat by design.
+- LLM escalation band stays [0.35, 0.75) on changed scans — tuning
+  belongs to real-world feedback.
+- The 2 oxlint fast-refresh warnings — upstream shadcn file layout.
+- No live Gemini/Ollama key verification — no real keys in this
+  environment; Settings test buttons cover it the moment keys exist.
+
+---
+
+## Project complete
+
+Wardress is finished per the master prompt: a self-hosted,
+Docker-Compose-deployed defacement monitor with a nine-layer detection
+engine and fused risk scoring, adaptive Beat scheduling, a SOC-style
+React dashboard (drilldowns, visual/DOM diffs, suppression), alerting
+across SMTP/Telegram/Apprise with per-delivery tracking, guarded
+manual-confirm remediation hooks, optional Gemini/Ollama incident
+explanations, bulk import, server-side RBAC (admin/analyst/viewer),
+per-user API keys, an audited configuration surface with secrets
+encrypted at rest, PDF/Markdown reports, a health page, a one-command
+Windows installer/updater, and a documented README. Final state:
+383 backend + 25 frontend tests green; ruff/tsc clean; OpenAPI fully
+documented; all deferrals closed or logged permanent with reasons.
+
+### Maintenance checklist
+
+- **Update dependencies** (occasionally, deliberately):
+  `cd backend && uv lock --upgrade && uv sync && uv run pytest`;
+  `cd frontend && pnpm update --latest && pnpm test && pnpm exec tsc
+  --noEmit`. Rebuild images afterwards via `scripts/update.ps1`. Never
+  add a package version without checking its changelog.
+- **Re-run audits**: `uv run pip-audit` (backend) and `pnpm audit`
+  (frontend) after every dependency refresh; re-run the full suites
+  and a live scan-flag-alert smoke check after any upgrade.
+- **Rotate secrets**: generate a new value into `.env` and restart the
+  stack. `JWT_SECRET` rotation signs everyone out (harmless).
+  `POSTGRES_PASSWORD` must be changed in Postgres itself (`ALTER
+  USER`) and in both `.env` lines (`POSTGRES_PASSWORD`, inside
+  `DATABASE_URL`) together. `CREDENTIALS_ENCRYPTION_KEY` cannot be
+  swapped blindly — stored channel/SMTP credentials are encrypted with
+  it; re-enter those credentials in Settings after rotating. Admin
+  password changes happen in the UI (`ADMIN_PASSWORD` in `.env` is
+  only the first-boot seed).
+- **Data hygiene**: Postgres lives in the `db-data` volume — back it
+  up with `docker compose exec db pg_dump -U wardress wardress`. The
+  artifact janitor prunes orphaned baseline/scan files daily; alert
+  and audit rows are kept indefinitely by design.
+- **Standing sign-off step (manual, outside Claude Code)**:
+  negative/malformed-input probing of the running system — malformed
+  request bodies, oversized payloads, boundary values on the API, and
+  hostile page content on scan targets — remains the user's manual QA
+  step before each release-grade milestone.

@@ -278,3 +278,64 @@ async def test_material_change_tightens_schedule(db_factory, monkeypatch) -> Non
         await scan_tasks._schedule_next(db, row, changed=True)
         assert row.current_interval_minutes == 15  # 60/4
         assert row.next_scan_at is not None
+
+
+# --- artifact janitor (Phase 6: closes the Phase 1 deferral) ---
+
+
+@pytest.fixture
+def artifacts_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "artifacts_dir", str(tmp_path))
+    return tmp_path
+
+
+def _make_artifact_dir(root, kind: str, name: str) -> None:
+    d = root / kind / name
+    d.mkdir(parents=True)
+    (d / "page.html").write_text("<html></html>", encoding="utf-8")
+    (d / "screenshot.png").write_bytes(b"\x89PNG")
+
+
+async def test_janitor_removes_orphans_keeps_live_rows(db_factory, artifacts_dir) -> None:
+    site = await _make_site(db_factory, due=False)
+    baseline = await _add_ready_baseline(db_factory, site.id)
+    async with db_factory() as db:
+        scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.completed)
+        db.add(scan)
+        await db.commit()
+        await db.refresh(scan)
+
+    _make_artifact_dir(artifacts_dir, "baselines", str(baseline.id))  # live
+    _make_artifact_dir(artifacts_dir, "scans", str(scan.id))  # live
+    orphan_b, orphan_s = str(uuid.uuid4()), str(uuid.uuid4())
+    _make_artifact_dir(artifacts_dir, "baselines", orphan_b)  # orphan
+    _make_artifact_dir(artifacts_dir, "scans", orphan_s)  # orphan
+
+    stats = await beat_tasks._cleanup_orphan_artifacts()
+
+    assert stats["removed"] == 2
+    assert (artifacts_dir / "baselines" / str(baseline.id)).is_dir()
+    assert (artifacts_dir / "scans" / str(scan.id)).is_dir()
+    assert not (artifacts_dir / "baselines" / orphan_b).exists()
+    assert not (artifacts_dir / "scans" / orphan_s).exists()
+
+
+async def test_janitor_never_touches_non_uuid_entries(db_factory, artifacts_dir) -> None:
+    # Anything that is not a UUID-named directory of ours stays put.
+    _make_artifact_dir(artifacts_dir, "baselines", "not-a-uuid")
+    stray = artifacts_dir / "scans" / "README.txt"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("keep me", encoding="utf-8")
+
+    stats = await beat_tasks._cleanup_orphan_artifacts()
+
+    assert stats["removed"] == 0
+    assert (artifacts_dir / "baselines" / "not-a-uuid").is_dir()
+    assert stray.exists()
+
+
+async def test_janitor_empty_volume_is_a_noop(db_factory, artifacts_dir) -> None:
+    stats = await beat_tasks._cleanup_orphan_artifacts()
+    assert stats == {"checked": 0, "removed": 0, "errors": 0}

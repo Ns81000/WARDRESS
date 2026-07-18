@@ -178,9 +178,7 @@ async def update_hook(
 @router.delete(
     "/sites/{site_id}/remediation-hooks/{hook_id}", status_code=status.HTTP_204_NO_CONTENT
 )
-async def delete_hook(
-    site_id: uuid.UUID, hook_id: uuid.UUID, admin: AdminUser, db: DB
-) -> None:
+async def delete_hook(site_id: uuid.UUID, hook_id: uuid.UUID, admin: AdminUser, db: DB) -> None:
     site = await _get_site_or_404(db, site_id)
     hook = await db.scalar(
         select(RemediationHook).where(

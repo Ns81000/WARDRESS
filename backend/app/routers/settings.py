@@ -25,7 +25,7 @@ from app.audit import record_audit
 from app.config import get_settings
 from app.crypto import DecryptionError, decrypt_json, encrypt_json
 from app.db import get_db
-from app.deps import AdminUser, CurrentUser
+from app.deps import AdminUser
 from app.models import NotificationChannel, NotificationChannelType
 from app.schemas import (
     GeminiSettingsIn,
@@ -68,7 +68,7 @@ def _hint(secret: str, keep: int = 6) -> str:
 
 
 @router.get("/smtp", response_model=SmtpSettingsOut)
-async def get_smtp(user: CurrentUser, db: DB) -> SmtpSettingsOut:
+async def get_smtp(user: AdminUser, db: DB) -> SmtpSettingsOut:
     smtp = await load_setting(db, SMTP_KEY)
     if not smtp:
         return SmtpSettingsOut(configured=False)
@@ -155,7 +155,7 @@ async def test_smtp(body: SmtpTestRequest, user: AdminUser, db: DB) -> SettingsT
 
 
 @router.get("/telegram", response_model=TelegramSettingsOut)
-async def get_telegram(user: CurrentUser, db: DB) -> TelegramSettingsOut:
+async def get_telegram(user: AdminUser, db: DB) -> TelegramSettingsOut:
     tg = await load_setting(db, TELEGRAM_KEY)
     if not tg or not tg.get("bot_token"):
         return TelegramSettingsOut(configured=False)
@@ -225,7 +225,7 @@ async def test_telegram(user: AdminUser, db: DB) -> SettingsTestResult:
 
 
 @router.get("/gemini", response_model=GeminiSettingsOut)
-async def get_gemini(user: CurrentUser, db: DB) -> GeminiSettingsOut:
+async def get_gemini(user: AdminUser, db: DB) -> GeminiSettingsOut:
     g = await load_setting(db, GEMINI_KEY)
     if not g or not g.get("api_key"):
         return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
@@ -283,7 +283,7 @@ async def test_gemini(user: AdminUser, db: DB) -> SettingsTestResult:
 
 
 @router.get("/ollama", response_model=OllamaSettingsOut)
-async def get_ollama(user: CurrentUser, db: DB) -> OllamaSettingsOut:
+async def get_ollama(user: AdminUser, db: DB) -> OllamaSettingsOut:
     o = await load_setting(db, OLLAMA_KEY)
     if not o:
         return OllamaSettingsOut(configured=False, base_url=get_settings().ollama_base_url)
@@ -361,7 +361,7 @@ def _channel_out(channel: NotificationChannel) -> NotificationChannelOut:
 
 
 @channels_router.get("", response_model=list[NotificationChannelOut])
-async def list_channels(user: CurrentUser, db: DB) -> list[NotificationChannelOut]:
+async def list_channels(user: AdminUser, db: DB) -> list[NotificationChannelOut]:
     channels = (
         await db.scalars(select(NotificationChannel).order_by(NotificationChannel.created_at))
     ).all()

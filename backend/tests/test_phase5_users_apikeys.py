@@ -115,9 +115,7 @@ class TestUserManagement:
 
 class TestApiKeys:
     async def test_create_shows_key_once_then_hashed(self, client, auth_headers, db_factory):
-        resp = await client.post(
-            "/api/api-keys", headers=auth_headers, json={"label": "ci-script"}
-        )
+        resp = await client.post("/api/api-keys", headers=auth_headers, json={"label": "ci-script"})
         assert resp.status_code == 201, resp.text
         body = resp.json()
         raw = body["key"]
@@ -143,9 +141,7 @@ class TestApiKeys:
             json={"email": analyst_user.email, "password": "correct horse battery staple"},
         )
         analyst_hdr = {"Authorization": f"Bearer {analyst_login.json()['access_token']}"}
-        key = await client.post(
-            "/api/api-keys", headers=analyst_hdr, json={"label": "analyst-key"}
-        )
+        key = await client.post("/api/api-keys", headers=analyst_hdr, json={"label": "analyst-key"})
         raw = key.json()["key"]
         key_hdr = {"Authorization": f"Bearer {raw}"}
 
@@ -158,9 +154,7 @@ class TestApiKeys:
         assert denied.status_code == 403
 
     async def test_revoked_key_is_rejected(self, client, auth_headers):
-        created = await client.post(
-            "/api/api-keys", headers=auth_headers, json={"label": "temp"}
-        )
+        created = await client.post("/api/api-keys", headers=auth_headers, json={"label": "temp"})
         raw = created.json()["key"]
         key_id = created.json()["id"]
         # Works before revocation.
@@ -173,9 +167,7 @@ class TestApiKeys:
         assert after.status_code == 401
 
     async def test_api_key_cannot_manage_api_keys(self, client, auth_headers):
-        created = await client.post(
-            "/api/api-keys", headers=auth_headers, json={"label": "self"}
-        )
+        created = await client.post("/api/api-keys", headers=auth_headers, json={"label": "self"})
         raw = created.json()["key"]
         key_hdr = {"Authorization": f"Bearer {raw}"}
         # A key must not mint or list keys (credentials management needs a

@@ -139,9 +139,7 @@ async def _db_size_bytes(db: AsyncSession) -> int | None:
     """Total database size in bytes (Postgres only; None on SQLite)."""
     try:
         if db.bind is not None and db.bind.dialect.name == "postgresql":
-            return int(
-                await db.scalar(text("SELECT pg_database_size(current_database())")) or 0
-            )
+            return int(await db.scalar(text("SELECT pg_database_size(current_database())")) or 0)
     except Exception:
         logger.debug("Could not read DB size", exc_info=True)
     return None
@@ -163,9 +161,7 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
         sites_total = int(await db.scalar(select(func.count()).select_from(Site)) or 0)
         scans_last_24h = int(
             await db.scalar(
-                select(func.count())
-                .select_from(Scan)
-                .where(Scan.created_at >= day_ago)
+                select(func.count()).select_from(Scan).where(Scan.created_at >= day_ago)
             )
             or 0
         )
@@ -187,9 +183,7 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
         ]
         if spans:
             avg_scan_seconds = round(sum(spans) / len(spans), 2)
-        last_scan_at = ensure_utc(
-            await db.scalar(select(func.max(Scan.finished_at)))
-        )
+        last_scan_at = ensure_utc(await db.scalar(select(func.max(Scan.finished_at))))
 
     last_dispatch_tick_at = await asyncio.to_thread(_dispatch_heartbeat)
 

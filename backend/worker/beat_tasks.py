@@ -23,12 +23,15 @@ only scheduler-side requirement (per the Celery docs).
 
 import asyncio
 import logging
+import shutil
+import uuid as uuid_mod
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from app.models import Baseline, BaselineStatus, Scan, ScanStatus, ScanVerdict, Site
 from app.scanning import clamp_interval, is_stale
+from worker.artifacts import artifacts_root
 from worker.celery_app import celery_app
 from worker.db import task_session
 
@@ -38,6 +41,12 @@ DISPATCH_TICK_SECONDS = 60
 # Never let one tick flood the queue (huge site counts drain over a few
 # ticks instead; workers are the bottleneck anyway).
 MAX_DISPATCH_PER_TICK = 50
+
+# Artifact janitor (closes the Phase 1 deferral): deleted sites cascade
+# their DB rows but leave page.html/screenshot.png dirs on the volume.
+# A daily sweep removes directories whose owning row no longer exists.
+JANITOR_INTERVAL_SECONDS = 24 * 60 * 60
+JANITOR_MAX_REMOVALS_PER_RUN = 500
 
 # Redis heartbeat key the health page reads (Phase 5 §7): proof that
 # Beat is scheduling AND a worker is executing (the tick runs on a
@@ -162,6 +171,74 @@ def dispatch_due_scans() -> dict:
         return {"error": True}
 
 
+async def _cleanup_orphan_artifacts() -> dict:
+    """Remove artifact directories whose baseline/scan row is gone.
+
+    Only well-formed UUID directory names directly under <root>/baselines
+    and <root>/scans are considered — anything else on the volume is left
+    untouched. Removals are capped per run; a large backlog drains over
+    successive daily runs.
+    """
+    stats = {"checked": 0, "removed": 0, "errors": 0}
+    root = artifacts_root()
+    for kind, model in (("baselines", Baseline), ("scans", Scan)):
+        kind_dir = root / kind
+        if not kind_dir.is_dir():
+            continue
+        ids: dict[uuid_mod.UUID, str] = {}
+        try:
+            for entry in kind_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    ids[uuid_mod.UUID(entry.name)] = entry.name
+                except ValueError:
+                    continue  # not ours — never touch it
+        except OSError:
+            logger.exception("Janitor could not list %s", kind_dir)
+            stats["errors"] += 1
+            continue
+        if not ids:
+            continue
+        stats["checked"] += len(ids)
+
+        existing: set[uuid_mod.UUID] = set()
+        async with task_session() as db:
+            id_list = list(ids)
+            for i in range(0, len(id_list), 500):
+                chunk = id_list[i : i + 500]
+                rows = (await db.scalars(select(model.id).where(model.id.in_(chunk)))).all()
+                existing.update(rows)
+
+        for orphan_id in ids:
+            if orphan_id in existing:
+                continue
+            if stats["removed"] >= JANITOR_MAX_REMOVALS_PER_RUN:
+                logger.info("Janitor removal cap reached; remainder next run")
+                return stats
+            try:
+                shutil.rmtree(kind_dir / ids[orphan_id])
+                stats["removed"] += 1
+            except OSError:
+                logger.exception("Janitor could not remove %s/%s", kind, ids[orphan_id])
+                stats["errors"] += 1
+    return stats
+
+
+@celery_app.task(name="wardress.cleanup_orphan_artifacts")
+def cleanup_orphan_artifacts() -> dict:
+    try:
+        stats = asyncio.run(_cleanup_orphan_artifacts())
+        if stats["removed"] or stats["errors"]:
+            logger.info("Artifact janitor: %s", stats)
+        return stats
+    except Exception:
+        # Cleanup is best-effort housekeeping — it must never crash the
+        # worker or affect scanning (rule 6).
+        logger.exception("Artifact janitor run failed")
+        return {"error": True}
+
+
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs) -> None:
     sender.add_periodic_task(
@@ -171,4 +248,10 @@ def setup_periodic_tasks(sender, **kwargs) -> None:
         # A tick that can't be delivered promptly is worthless — drop it
         # rather than letting a Redis backlog burst-fire stale ticks.
         expires=DISPATCH_TICK_SECONDS * 2,
+    )
+    sender.add_periodic_task(
+        JANITOR_INTERVAL_SECONDS,
+        cleanup_orphan_artifacts.s(),
+        name="cleanup orphan artifacts",
+        expires=JANITOR_INTERVAL_SECONDS,
     )

@@ -35,8 +35,9 @@ async def _make_site(db_factory, admin_user) -> Site:
 
 async def _make_flagged_scan(db_factory, site_id, risk=0.9) -> uuid.UUID:
     async with db_factory() as db:
-        baseline = Baseline(site_id=site_id, status=BaselineStatus.ready, is_current=True,
-                            content_hash="x")
+        baseline = Baseline(
+            site_id=site_id, status=BaselineStatus.ready, is_current=True, content_hash="x"
+        )
         db.add(baseline)
         await db.flush()
         scan = Scan(

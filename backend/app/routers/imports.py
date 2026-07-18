@@ -146,9 +146,7 @@ async def _crawl_sitemap_impl(
             transport=SSRFPinningTransport(allow_private_networks=allow_private_networks),
             event_hooks={"response": [redirect_guard]},
         ) as client:
-            pages, children = _extract_sitemap_urls(
-                await _fetch_sitemap_bytes(client, sitemap_url)
-            )
+            pages, children = _extract_sitemap_urls(await _fetch_sitemap_bytes(client, sitemap_url))
             for child in children[:SITEMAP_MAX_CHILD_SITEMAPS]:
                 try:
                     await asyncio.to_thread(
@@ -204,9 +202,7 @@ async def bulk_import(
     if len(rows) > BULK_IMPORT_MAX_ROWS:
         rows = rows[:BULK_IMPORT_MAX_ROWS]
 
-    existing_urls = {
-        u for (u,) in (await db.execute(select(Site.url))).all()
-    }
+    existing_urls = {u for (u,) in (await db.execute(select(Site.url))).all()}
     seen_in_batch: set[str] = set()
     results: list[BulkImportRowResult] = []
     created_baselines: list[uuid.UUID] = []

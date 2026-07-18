@@ -123,8 +123,6 @@ def _address_blocked(
     check and by the pinning transport (app/ssrf_transport.py)."""
     if allow_private_networks:
         return (
-            addr.is_multicast
-            or addr.is_unspecified
-            or (addr.is_reserved and not addr.is_loopback)
+            addr.is_multicast or addr.is_unspecified or (addr.is_reserved and not addr.is_loopback)
         )
     return _is_forbidden_address(addr)

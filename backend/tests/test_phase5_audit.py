@@ -39,7 +39,9 @@ class TestRedaction:
 class TestAuditWrites:
     async def test_site_create_writes_audit(self, client, auth_headers):
         await client.post(
-            "/api/sites", headers=auth_headers, json={"name": "Audited", "url": "https://example.com"}
+            "/api/sites",
+            headers=auth_headers,
+            json={"name": "Audited", "url": "https://example.com"},
         )
         log = await client.get("/api/audit-log", headers=auth_headers)
         assert log.status_code == 200
@@ -66,9 +68,7 @@ class TestAuditWrites:
         await client.post(
             "/api/sites", headers=auth_headers, json={"name": "F1", "url": "https://example.com/a"}
         )
-        await client.put(
-            "/api/settings/ollama", headers=auth_headers, json={"enabled": False}
-        )
+        await client.put("/api/settings/ollama", headers=auth_headers, json={"enabled": False})
         site_only = await client.get("/api/audit-log?action=site", headers=auth_headers)
         actions = {r["action"] for r in site_only.json()["items"]}
         assert actions and all(a.startswith("site") for a in actions)

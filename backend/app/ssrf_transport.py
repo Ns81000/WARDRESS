@@ -71,9 +71,7 @@ class SSRFPinningTransport(httpx.AsyncBaseTransport):
         pinned: str | None = None
         for addr in resolve_host(host):
             if _address_blocked(addr, self._allow_private):
-                raise SSRFBlockedError(
-                    f"Host {host!r} resolves to a blocked address ({addr})"
-                )
+                raise SSRFBlockedError(f"Host {host!r} resolves to a blocked address ({addr})")
             if pinned is None:
                 pinned = str(addr)
         if pinned is None:  # pragma: no cover — resolve_host raises if empty

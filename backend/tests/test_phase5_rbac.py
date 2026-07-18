@@ -87,6 +87,21 @@ class TestAnalystScope:
         )
         assert resp.status_code == 403
 
+    async def test_settings_reads_are_admin_only(self, client, analyst_headers, viewer_headers):
+        # Settings GETs return configuration hints (SMTP host/username,
+        # token prefixes, channel inventory) that only admins need — the
+        # settings surface is admin scope end to end (Phase 6 QA fix).
+        for path in (
+            "/api/settings/smtp",
+            "/api/settings/telegram",
+            "/api/settings/gemini",
+            "/api/settings/ollama",
+            "/api/notification-channels",
+        ):
+            for headers in (analyst_headers, viewer_headers):
+                resp = await client.get(path, headers=headers)
+                assert resp.status_code == 403, f"{path} returned {resp.status_code}"
+
     async def test_analyst_cannot_read_audit_log(self, client, analyst_headers):
         resp = await client.get("/api/audit-log", headers=analyst_headers)
         assert resp.status_code == 403
