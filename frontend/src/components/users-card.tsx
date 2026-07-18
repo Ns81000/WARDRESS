@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus } from "lucide-react"
+import { ChevronDown, Plus } from "lucide-react"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 import { StatusDot } from "@/components/status-dot"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +38,71 @@ const ROLE_DESCRIPTIONS: Record<Role, string> = {
   admin: "Everything, including users, settings, and remediation hooks",
   analyst: "Sites, scans, suppression rules, alerts, and confirmations",
   viewer: "Read-only access to every page",
+}
+
+function RoleSelect({
+  value,
+  onChange,
+  disabled
+}: {
+  value: string
+  onChange: (val: Role) => void
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const options = [
+    { value: "admin", label: "Admin" },
+    { value: "analyst", label: "Analyst" },
+    { value: "viewer", label: "Viewer" }
+  ]
+  const currentOption = options.find((opt) => opt.value === value) || options[0]
+
+  if (disabled) {
+    return (
+      <div className="h-8 w-28 rounded-md border border-hairline bg-surface-deep px-2.5 text-body-sm text-mute flex items-center justify-between opacity-50 select-none">
+        <span className="truncate">{currentOption.label}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative w-28">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="w-full h-8 rounded-md border border-hairline-strong bg-surface-elevated px-2.5 text-left text-body-sm text-ink outline-none focus:border-white/25 transition-colors flex items-center justify-between cursor-pointer select-none"
+      >
+        <span className="truncate">{currentOption.label}</span>
+        <ChevronDown className={cn("size-3.5 text-charcoal transition-transform duration-200 shrink-0 ml-1.5", isOpen && "rotate-180")} />
+      </button>
+
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+          <div className="absolute right-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 shadow-2xl z-50 animate-detail-in font-mono text-code-md">
+            {options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  onChange(opt.value as Role)
+                  setIsOpen(false)
+                }}
+                className={cn(
+                  "w-full text-left px-2.5 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",
+                  opt.value === value && "text-ink bg-white/[0.02] font-semibold"
+                )}
+              >
+                <span className="truncate">{opt.label}</span>
+                {opt.value === value && <span className="size-1.5 rounded-full bg-accent-blue shrink-0 ml-1.5" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function errMessage(err: unknown, fallback: string): string {
@@ -77,18 +143,11 @@ function UserRow({ user, isSelf }: { user: UserAdmin; isSelf: boolean }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <select
-          data-slot="select"
+        <RoleSelect
           value={user.role}
           disabled={isSelf || update.isPending}
-          onChange={(e) => update.mutate({ role: e.target.value as Role })}
-          className="h-8 rounded-md border border-hairline-strong bg-surface-elevated px-2 text-body-sm text-ink outline-none focus:border-white/25 disabled:opacity-50"
-          aria-label={`Role for ${user.email}`}
-        >
-          <option value="admin">Admin</option>
-          <option value="analyst">Analyst</option>
-          <option value="viewer">Viewer</option>
-        </select>
+          onChange={(role) => update.mutate({ role })}
+        />
         <Button
           variant="ghost"
           size="sm"
