@@ -245,9 +245,7 @@ async def test_refresh_logout_reuse_does_not_escalate(
 
     # Confirm the revoked token has no replaced_by (so no family escalation).
     async with db_factory() as db:
-        token = await db.scalar(
-            select(RefreshToken).where(RefreshToken.user_id == admin_user.id)
-        )
+        token = await db.scalar(select(RefreshToken).where(RefreshToken.user_id == admin_user.id))
         assert token.revoked_at is not None
         assert token.replaced_by is None
 
@@ -276,9 +274,7 @@ async def test_absolute_session_lifetime_caps_successor_expiry(
 
     # Age the token's session_started_at to 2 days - 10 minutes ago.
     async with db_factory() as db:
-        token = await db.scalar(
-            select(RefreshToken).where(RefreshToken.user_id == admin_user.id)
-        )
+        token = await db.scalar(select(RefreshToken).where(RefreshToken.user_id == admin_user.id))
         original_start = datetime.now(UTC) - timedelta(days=2, minutes=-10)
         token.session_started_at = original_start
         await db.commit()
@@ -304,8 +300,9 @@ async def test_absolute_session_lifetime_caps_successor_expiry(
     # If we age the session past the absolute ceiling, the next refresh 401s.
     async with db_factory() as db:
         token = await db.scalar(
-            select(RefreshToken)
-            .where(RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None))
+            select(RefreshToken).where(
+                RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None)
+            )
         )
         token.session_started_at = datetime.now(UTC) - timedelta(days=2, seconds=10)
         await db.commit()

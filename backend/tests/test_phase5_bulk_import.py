@@ -1,7 +1,7 @@
 """Bulk site import — CSV + sitemap, per-row results (Phase 5, §7)."""
 
-import pytest
 import httpx
+import pytest
 from sqlalchemy import func, select
 
 from app.models import Site

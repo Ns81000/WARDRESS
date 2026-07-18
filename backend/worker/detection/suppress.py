@@ -26,7 +26,6 @@ import re
 from dataclasses import dataclass, field, replace
 
 import regex
-
 from lxml import html as lxml_html
 from lxml.cssselect import CSSSelector, SelectorError
 

@@ -152,12 +152,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_index("uq_remediation_executions_hook_scan", table_name="remediation_executions")
-    op.drop_index(
-        op.f("ix_remediation_executions_site_id"), table_name="remediation_executions"
-    )
-    op.drop_index(
-        op.f("ix_remediation_executions_hook_id"), table_name="remediation_executions"
-    )
+    op.drop_index(op.f("ix_remediation_executions_site_id"), table_name="remediation_executions")
+    op.drop_index(op.f("ix_remediation_executions_hook_id"), table_name="remediation_executions")
     op.drop_table("remediation_executions")
     op.drop_index(op.f("ix_remediation_hooks_site_id"), table_name="remediation_hooks")
     op.drop_table("remediation_hooks")

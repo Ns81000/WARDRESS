@@ -165,7 +165,7 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
                 "error": str(exc)[:200],
                 # zip without strict: features may be empty if the vector
                 # build itself failed — the fallback must still return.
-                "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features)},
+                "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=False)},
                 "layers_ran": ran,
             },
         )
