@@ -84,11 +84,15 @@ function RegionPicker({
     <div>
       <p className="mb-2 text-caption text-charcoal">
         Drag a rectangle over the area to ignore (ads, counters, rotating
-        content). Hatched areas are already ignored.
+        content). Colored areas are already ignored.
       </p>
       <div
-        className="relative max-h-[420px] cursor-crosshair touch-none overflow-y-auto rounded-lg border border-hairline-strong select-none"
+        className="relative max-h-[420px] touch-none overflow-y-auto rounded-lg border border-hairline-strong select-none"
+        style={{
+          cursor: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23ffffff'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23171717'/%3E%3C/svg%3E") 8 8, cell`
+        }}
         onPointerDown={(e) => {
+          e.preventDefault()
           start.current = point(e)
           setDraft(null)
           e.currentTarget.setPointerCapture(e.pointerId)
@@ -118,14 +122,17 @@ function RegionPicker({
             <div
               key={i}
               aria-hidden
-              className="pointer-events-none absolute rounded-xs border border-hairline-strong"
+              className="pointer-events-none absolute rounded-xs"
               style={{
                 left: `${r.x * 100}%`,
                 top: `${r.y * 100}%`,
                 width: `${r.w * 100}%`,
                 height: `${r.h * 100}%`,
+                border: "1.5px solid rgba(245, 158, 11, 0.95)",
+                outline: "1px solid rgba(255, 255, 255, 0.85)",
+                backgroundColor: "rgba(245, 158, 11, 0.12)",
                 backgroundImage:
-                  "repeating-linear-gradient(45deg, rgba(255,255,255,0.10) 0 6px, transparent 6px 12px)",
+                  "repeating-linear-gradient(45deg, rgba(245, 158, 11, 0.15) 0 4px, transparent 4px 8px)",
               }}
             />
           ))}
@@ -138,8 +145,9 @@ function RegionPicker({
                 top: `${draft.y * 100}%`,
                 width: `${draft.w * 100}%`,
                 height: `${draft.h * 100}%`,
-                backgroundColor: "rgba(59,158,255,0.18)",
-                border: "1px dashed rgba(59,158,255,0.7)",
+                border: "1.5px dashed rgba(59, 130, 246, 0.95)",
+                outline: "1px solid rgba(255, 255, 255, 0.85)",
+                backgroundColor: "rgba(59, 130, 246, 0.08)",
               }}
             />
           )}

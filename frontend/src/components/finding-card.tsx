@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
  * is ever silently dropped.
  */
 
-const LAYER_TITLES: Record<string, string> = {
+export const LAYER_TITLES: Record<string, string> = {
   layer1_hash: "Content hash",
   layer2_dom_structure: "DOM structure",
   layer3_link_audit: "Links & scripts",
@@ -27,7 +27,7 @@ const LAYER_TITLES: Record<string, string> = {
   layer9_fusion: "Fused risk",
 }
 
-const LAYER_BLURBS: Record<string, string> = {
+export const LAYER_BLURBS: Record<string, string> = {
   layer1_hash: "SHA-256 of normalized content against the baseline",
   layer2_dom_structure: "Tag-tree churn, script/iframe/hidden-element deltas",
   layer3_link_audit: "Reference-set diff — new external domains weigh heaviest",
@@ -39,14 +39,14 @@ const LAYER_BLURBS: Record<string, string> = {
   layer9_fusion: "Calibrated combination of all eight sub-scores",
 }
 
-function scoreTone(score: number | null): string {
+export function scoreTone(score: number | null): string {
   if (score == null) return "text-mute"
   if (score >= 0.5) return "text-accent-red"
   if (score >= 0.15) return "text-accent-orange"
   return "text-accent-green"
 }
 
-function dotFor(finding: ScanFinding): DotState {
+export function dotFor(finding: ScanFinding): DotState {
   if (finding.skipped) return "idle"
   const s = finding.score ?? 0
   if (s >= 0.5) return "threat"
@@ -76,22 +76,24 @@ function Mono({ children, className }: { children: React.ReactNode; className?: 
 function UrlList({ urls, tone }: { urls: string[]; tone?: "added" | "removed" }) {
   if (!urls.length) return null
   return (
-    <ul className="space-y-1">
-      {urls.map((u) => (
-        <li key={u} className="flex items-start gap-1.5">
-          <span
-            className={cn(
-              "mt-1.5 inline-block size-1.5 shrink-0 rounded-full",
-              tone === "added" && "bg-accent-red/70",
-              tone === "removed" && "bg-stone",
-              !tone && "bg-mute"
-            )}
-            aria-hidden
-          />
-          <Mono>{u}</Mono>
-        </li>
-      ))}
-    </ul>
+    <div className="overflow-y-auto max-h-[160px] border border-hairline bg-surface-deep/30 rounded-md p-2">
+      <ul className="space-y-1">
+        {urls.map((u) => (
+          <li key={u} className="flex items-start gap-1.5">
+            <span
+              className={cn(
+                "mt-1.5 inline-block size-1.5 shrink-0 rounded-full",
+                tone === "added" && "bg-accent-red/70",
+                tone === "removed" && "bg-stone",
+                !tone && "bg-mute"
+              )}
+              aria-hidden
+            />
+            <Mono>{u}</Mono>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -106,7 +108,7 @@ function KV({ label, value }: { label: string; value: React.ReactNode }) {
 
 /** Generic fallback: flat key/value rendering so unknown evidence keys
  * are still visible rather than silently dropped. */
-function GenericEvidence({ evidence }: { evidence: Record<string, unknown> }) {
+export function GenericEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   return (
     <div>
       {Object.entries(evidence).map(([k, v]) => (
@@ -128,66 +130,130 @@ function GenericEvidence({ evidence }: { evidence: Record<string, unknown> }) {
 
 // --- per-layer renderers ---
 
-function HashEvidence({ e }: { e: Record<string, unknown> }) {
+export function HashEvidence({ e }: { e: Record<string, unknown> }) {
+  const isIdentical = e.identical === true
   return (
-    <div className="space-y-2">
-      <KV label="Identical" value={e.identical ? "Yes" : "No"} />
-      <Section title="Baseline SHA-256">
-        <Mono>{String(e.baseline_sha256 ?? "—")}</Mono>
-      </Section>
-      <Section title="Current SHA-256">
-        <Mono>{String(e.current_sha256 ?? "—")}</Mono>
-      </Section>
+    <div className="space-y-4">
+      <div className={cn(
+        "rounded-md border p-3 flex items-center justify-between",
+        isIdentical ? "bg-accent-green/5 border-accent-green/20" : "bg-accent-red/5 border-accent-red/20"
+      )}>
+        <span className="text-body-sm font-medium text-ink">Identical Content Hash</span>
+        <span className={cn(
+          "text-body-sm font-mono font-semibold px-2 py-0.5 rounded",
+          isIdentical ? "bg-accent-green/20 text-accent-green" : "bg-accent-red/20 text-accent-red"
+        )}>
+          {isIdentical ? "Yes" : "No"}
+        </span>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="relative overflow-hidden rounded-md border border-hairline bg-surface-deep p-4 flex flex-col justify-between">
+          <div className="absolute left-0 top-0 bottom-0 w-1 bg-accent-red/50" />
+          <div>
+            <p className="text-caption font-mono text-mute mb-1">Baseline SHA-256</p>
+            <p className="font-mono text-code-md text-accent-red/90 break-all select-all">{String(e.baseline_sha256 ?? "—")}</p>
+          </div>
+        </div>
+        
+        <div className="relative overflow-hidden rounded-md border border-hairline bg-surface-deep p-4 flex flex-col justify-between">
+          <div className="absolute left-0 top-0 bottom-0 w-1 bg-accent-green/50" />
+          <div>
+            <p className="text-caption font-mono text-mute mb-1">Current SHA-256</p>
+            <p className="font-mono text-code-md text-accent-green/90 break-all select-all">{String(e.current_sha256 ?? "—")}</p>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
 
-function DomEvidence({ e }: { e: Record<string, unknown> }) {
+export function DomEvidence({ e }: { e: Record<string, unknown> }) {
   const counts = (key: string) => e[key] as { baseline?: number; current?: number } | undefined
   const tagMap = (key: string) => (e[key] ?? {}) as Record<string, number>
   const added = Object.entries(tagMap("tags_added"))
   const removed = Object.entries(tagMap("tags_removed"))
+  
+  const metrics = [
+    { key: "script_count", label: "Scripts" },
+    { key: "iframe_count", label: "Iframes" },
+    { key: "hidden_count", label: "Hidden Elements" },
+  ] as const
+
+  const baselineElements = e.baseline_elements as number | undefined
+  const currentElements = e.current_elements as number | undefined
+
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-x-6 sm:grid-cols-4">
-        {(["script_count", "iframe_count", "hidden_count"] as const).map((k) => {
-          const c = counts(k)
-          if (!c) return null
-          const grew = (c.current ?? 0) > (c.baseline ?? 0)
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {metrics.map((m) => {
+          const c = counts(m.key)
+          const baseline = c?.baseline ?? 0
+          const current = c?.current ?? 0
+          const diff = current - baseline
+          const grew = diff > 0
+          
           return (
-            <KV
-              key={k}
-              label={k.replace("_count", "s")}
-              value={
-                <span className={grew ? "text-accent-red" : undefined}>
-                  {c.baseline ?? 0} → {c.current ?? 0}
-                </span>
-              }
-            />
+            <div key={m.key} className="rounded-lg border border-hairline bg-surface-deep/40 p-4 flex flex-col justify-between hover:border-hairline-strong transition-colors">
+              <span className="text-caption text-mute font-medium">{m.label}</span>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-heading-sm font-bold text-ink">{current}</span>
+                {diff !== 0 && (
+                  <span className={cn(
+                    "text-caption font-semibold font-mono",
+                    grew ? "text-accent-red" : "text-accent-green"
+                  )}>
+                    {grew ? `+${diff}` : diff}
+                  </span>
+                )}
+              </div>
+              <span className="mt-1 text-caption text-stone">baseline: {baseline}</span>
+            </div>
           )
         })}
-        <KV
-          label="elements"
-          value={`${String(e.baseline_elements ?? "—")} → ${String(e.current_elements ?? "—")}`}
-        />
+
+        {/* Total Elements Card */}
+        <div className="rounded-lg border border-hairline bg-surface-deep/40 p-4 flex flex-col justify-between hover:border-hairline-strong transition-colors">
+          <span className="text-caption text-mute font-medium">Total Elements</span>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-heading-sm font-bold text-ink">{currentElements ?? 0}</span>
+            {baselineElements !== undefined && currentElements !== undefined && (currentElements - baselineElements !== 0) && (
+              <span className={cn(
+                "text-caption font-semibold font-mono",
+                (currentElements - baselineElements) > 0 ? "text-accent-red" : "text-accent-green"
+              )}>
+                {(currentElements - baselineElements) > 0 ? `+${currentElements - baselineElements}` : currentElements - baselineElements}
+              </span>
+            )}
+          </div>
+          <span className="mt-1 text-caption text-stone">baseline: {baselineElements ?? 0}</span>
+        </div>
       </div>
-      {added.length > 0 && (
-        <Section title="Tags added">
-          <div className="flex flex-wrap gap-1.5">
-            {added.map(([tag, n]) => (
-              <Badge key={tag} variant="threat">{`<${tag}> ×${n}`}</Badge>
-            ))}
-          </div>
-        </Section>
-      )}
-      {removed.length > 0 && (
-        <Section title="Tags removed">
-          <div className="flex flex-wrap gap-1.5">
-            {removed.map(([tag, n]) => (
-              <Badge key={tag} variant="secondary">{`<${tag}> ×${n}`}</Badge>
-            ))}
-          </div>
-        </Section>
+
+      {(added.length > 0 || removed.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+          {added.length > 0 && (
+            <div className="rounded-lg border border-hairline bg-surface-deep/20 p-4">
+              <h4 className="text-caption font-medium text-mute mb-2">Tags Added</h4>
+              <div className="flex flex-wrap gap-1.5">
+                {added.map(([tag, n]) => (
+                  <Badge key={tag} variant="threat">{`<${tag}> ×${n}`}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {removed.length > 0 && (
+            <div className="rounded-lg border border-hairline bg-surface-deep/20 p-4">
+              <h4 className="text-caption font-medium text-mute mb-2">Tags Removed</h4>
+              <div className="flex flex-wrap gap-1.5">
+                {removed.map(([tag, n]) => (
+                  <Badge key={tag} variant="secondary">{`<${tag}> ×${n}`}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -270,16 +336,18 @@ function SignaturesEvidence({ e }: { e: Record<string, unknown> }) {
     <div className="space-y-3">
       {matches.length > 0 ? (
         <Section title={`Matched phrases (${matches.length})`}>
-          <ul className="space-y-1">
-            {matches.map((m, i) => (
-              <li key={i} className="flex items-center gap-2">
-                <Badge variant={m.weight >= 0.9 ? "threat" : "pending"}>
-                  {m.weight >= 0.9 ? "strong" : m.weight >= 0.5 ? "medium" : "weak"}
-                </Badge>
-                <Mono>{m.matched}</Mono>
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-y-auto max-h-[160px] border border-hairline bg-surface-deep/30 rounded-md p-2">
+            <ul className="space-y-1">
+              {matches.map((m, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <Badge variant={m.weight >= 0.9 ? "threat" : "pending"}>
+                    {m.weight >= 0.9 ? "strong" : m.weight >= 0.5 ? "medium" : "weak"}
+                  </Badge>
+                  <Mono>{m.matched}</Mono>
+                </li>
+              ))}
+            </ul>
+          </div>
         </Section>
       ) : (
         <p className="text-body-sm text-mute">No signature phrases matched.</p>
@@ -380,12 +448,14 @@ function MetadataEvidence({ e }: { e: Record<string, unknown> }) {
       </Section>
       {robots.changed === true && (
         <Section title="robots.txt">
-          {((robots.lines_removed ?? []) as string[]).map((l, i) => (
-            <Mono key={`r${i}`} className="block text-accent-red/80">− {l}</Mono>
-          ))}
-          {((robots.lines_added ?? []) as string[]).map((l, i) => (
-            <Mono key={`a${i}`} className="block text-accent-green/80">+ {l}</Mono>
-          ))}
+          <div className="overflow-y-auto max-h-[160px] border border-hairline bg-surface-deep/30 rounded-md p-2 space-y-1">
+            {((robots.lines_removed ?? []) as string[]).map((l, i) => (
+              <Mono key={`r${i}`} className="block text-accent-red/80">− {l}</Mono>
+            ))}
+            {((robots.lines_added ?? []) as string[]).map((l, i) => (
+              <Mono key={`a${i}`} className="block text-accent-green/80">+ {l}</Mono>
+            ))}
+          </div>
         </Section>
       )}
     </div>
@@ -513,7 +583,7 @@ function FusionEvidence({ e }: { e: Record<string, unknown> }) {
   )
 }
 
-const RENDERERS: Record<string, (props: { e: Record<string, unknown> }) => React.ReactNode> = {
+export const RENDERERS: Record<string, (props: { e: Record<string, unknown> }) => React.ReactNode> = {
   layer1_hash: HashEvidence,
   layer2_dom_structure: DomEvidence,
   layer3_link_audit: LinksEvidence,

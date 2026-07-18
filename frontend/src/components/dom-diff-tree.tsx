@@ -141,8 +141,8 @@ function stateClasses(state: DiffState): string {
 }
 
 function NodeRow({ node, depth }: { node: DiffNode; depth: number }) {
-  // Auto-expand any path that contains changes; collapsed otherwise.
-  const [open, setOpen] = useState(node.hasChanges && depth < 12)
+  // Auto-expand top levels (depth < 4) and any path with changes
+  const [open, setOpen] = useState(depth < 4 || (node.hasChanges && depth < 12))
   const toggleable = node.children.length > 0
 
   return (
@@ -223,8 +223,8 @@ export function DomDiffTree({
   }
 
   return (
-    <div className={cn("rounded-lg border border-hairline-strong bg-surface-card", className)}>
-      <div className="flex items-center gap-4 border-b border-hairline px-4 py-2.5">
+    <div className={cn("flex flex-col h-full bg-transparent", className)}>
+      <div className="flex items-center gap-4 border-b border-hairline px-4 py-2.5 shrink-0">
         <span className="flex items-center gap-1.5 text-caption text-charcoal">
           <span className="inline-block h-3 w-0.5 bg-accent-green/50" aria-hidden />
           Added
@@ -241,7 +241,7 @@ export function DomDiffTree({
           <span className="ml-auto text-caption text-mute">No structural differences</span>
         )}
       </div>
-      <div className="max-h-[480px] overflow-auto py-2">
+      <div className="flex-1 overflow-auto py-2 min-h-0">
         <NodeRow node={root} depth={0} />
       </div>
     </div>

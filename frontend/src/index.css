@@ -124,7 +124,7 @@ body {
   font-size: 56px;
   font-weight: 400;
   line-height: 1.2;
-  letter-spacing: -2.8px;
+  letter-spacing: -0.56px;
 }
 @utility text-heading-md {
   font-family: var(--font-sans);
@@ -159,7 +159,7 @@ body {
   font-size: 16px;
   font-weight: 400;
   line-height: 1.5;
-  letter-spacing: -0.88px;
+  letter-spacing: -0.08px;
 }
 @utility text-body-sm {
   font-family: var(--font-sans);
@@ -210,7 +210,7 @@ body {
   }
   .text-display-lg {
     font-size: 40px;
-    letter-spacing: -2px;
+    letter-spacing: -0.4px;
   }
   [data-slot="button"]:not([data-size="icon-xs"]):not([data-size="xs"]) {
     min-height: 44px;
@@ -298,6 +298,32 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* Detail panel blur-in transition */
+@keyframes detail-blur-in {
+  from {
+    filter: blur(2px);
+    opacity: 0.85;
+    transform: translateY(1.5px);
+  }
+  to {
+    filter: blur(0);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-detail-in {
+  animation: detail-blur-in 180ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+/* Developer-tool background grid pattern */
+.bg-grid-pattern {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
 }
 
 

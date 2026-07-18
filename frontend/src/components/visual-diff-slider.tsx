@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { ChevronLeft, ChevronRight } from "lucide-react"
+
 import type { Region } from "@/lib/bbox"
 import { useArtifact } from "@/lib/use-artifact"
 import { cn } from "@/lib/utils"
@@ -213,16 +215,20 @@ export function VisualDiffSlider({
 
   return (
     <div className={className}>
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-caption text-mute">Baseline</span>
+      <div className="mb-3 flex items-center justify-between bg-surface-elevated/20 p-1.5 rounded-lg border border-hairline">
+        <span className="font-mono text-xs font-bold uppercase tracking-wider text-accent-orange select-none ml-2">
+          Baseline
+        </span>
         {imagesReady && (
-          <span className="text-caption text-charcoal">
+          <span className="font-display text-xs font-medium text-ink bg-surface-card px-3 py-1 rounded-full border border-hairline-strong shadow-sm select-none">
             {regions.length === 0
-              ? "No altered regions detected"
+              ? "No changes detected"
               : `${regions.length} altered region${regions.length === 1 ? "" : "s"} highlighted`}
           </span>
         )}
-        <span className="text-caption text-mute">Current</span>
+        <span className="font-mono text-xs font-bold uppercase tracking-wider text-accent-blue select-none mr-2">
+          Current
+        </span>
       </div>
       <div
         ref={containerRef}
@@ -298,7 +304,7 @@ export function VisualDiffSlider({
             aria-valuenow={Math.round(divider * 100)}
             aria-orientation="horizontal"
             tabIndex={0}
-            className="absolute inset-y-0 z-10 w-11 -translate-x-1/2 cursor-ew-resize md:w-4"
+            className="absolute inset-y-0 z-10 w-12 -translate-x-1/2 cursor-ew-resize group"
             style={{ left: `${divider * 100}%` }}
             onPointerDown={(e) => {
               draggingDivider.current = true
@@ -310,8 +316,16 @@ export function VisualDiffSlider({
               if (e.key === "ArrowRight") setDivider((d) => Math.min(1, d + 0.02))
             }}
           >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-ink/70" />
-          <div className="absolute top-1/2 left-1/2 h-8 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-hairline-strong bg-surface-elevated" />
+          {/* Vertical divider line - dual colored (white line, dark shadow glow) to remain visible on all image backgrounds */}
+          <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-white shadow-[0_0_3px_rgba(0,0,0,0.8),0_0_1px_rgba(0,0,0,1)]" />
+          
+          {/* Sticky Knob wrapper - floats in the vertical center of the scroll container viewport */}
+          <div className="sticky top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center h-0 w-full">
+            <div className="pointer-events-auto size-8 rounded-full border-2 border-primary bg-surface-elevated text-ink shadow-[0_2px_10px_rgba(0,0,0,0.55)] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150">
+              <ChevronLeft className="size-4 -mr-0.5 shrink-0 text-ink/90" />
+              <ChevronRight className="size-4 -ml-0.5 shrink-0 text-ink/90" />
+            </div>
+          </div>
         </div>
       </div>
     </div>
