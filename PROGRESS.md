@@ -1698,3 +1698,69 @@ start failing with 404 again, list the models available to the key
 (`GET /v1beta/models` with the `x-goog-api-key` header) and update
 `GEMINI_MODEL` in `.env` — the code default already tracks the alias,
 so this should only matter if Google retires the alias scheme itself.
+
+---
+
+## Post-audit: Critical fixes + needs-user-decision dispositions (2026-07-18)
+
+Worked the audit report's blocking tiers: the 2 CRITICALs and the 8
+`needs-user-decision` items. Every decision now has a recorded outcome
+in `WARDRESS_AUDIT_REPORT.md`; both Criticals are resolved (one fixed,
+one shown to be a false positive by build inspection).
+
+**CRITICAL #1 — bulk import per-row DB error rolled back the whole
+import (fixed).** `app/routers/imports.py`: a CSV-supplied `name` was
+inserted unbounded into `Site.name` (VARCHAR 200); on Postgres an
+over-length value raised `DataError` at flush and, with a single shared
+session and no per-row guard, took down every previously-flushed row in
+the same import — the all-or-nothing failure §11 forbids. Fix: cap the
+name to `SITE_NAME_MAX=200` before insert, and wrap each row's
+create/flush in `db.begin_nested()` (SAVEPOINT) with `except
+SQLAlchemyError`, so a bad row becomes `status="error"` (generic detail,
+no DB internals leaked) and the rest of the import commits. Verified
+three ways: 3 new tests in `test_phase5_bulk_import.py` (name truncated
+not errored; a forced `IntegrityError` row isolated while sibling rows
+persist; DB count assertions), the SQLite suite green — **and live on
+the compose Postgres**, because SQLite does not enforce VARCHAR lengths
+and structurally cannot catch this. Live proof: a 500-char name in a
+mixed 3-row batch created all 3 sites with the name truncated to 200 and
+0 errors; app image rebuilt serially, container recreated healthy, the 4
+test sites deleted afterward.
+
+**CRITICAL #2 — "Recharts not code-split" (deferred: not a defect).**
+The finding claimed static imports inside the `lazy()`-loaded chart
+components get bundled into the main chunk at parse time. Built the
+frontend and inspected the emitted chunks instead of trusting the
+premise: the main chunk (`index-*.js`) has zero Recharts references and
+zero static/dynamic imports of the chart chunk; Recharts core sits in
+its own async chunk (`CategoricalChart-*.js`, 254 kB) reached only via
+the two page-level `lazy()` chunks (`risk-gauge`, `incident-timeline`).
+The chart chunk's only mention in the main bundle is inside Vite's
+`__vitePreload` dep map, fetched when the dynamic import fires, not on
+initial load. Already code-split as Phase 3 required; no code change.
+
+**Decision 8-real — `allow_private_networks` on a sitemap crawl is now
+admin-only (implemented alongside the Criticals).** That flag relaxes
+SSRF for the crawl fetch plus every child-sitemap fetch and redirect
+hop, turning the server into an internal-network fetcher whose `<loc>`
+text is echoed back. `bulk_import` now returns 403 when a non-admin sets
+the flag with `sitemap_url`; CSV imports (which never crawl) keep the
+flag for analysts, where it only governs the per-row SSRF check. Schema
+`description` updated to state the restriction. 3 new tests (analyst
+sitemap+flag → 403 with the crawl proven not to run; admin sitemap+flag
+→ 200; analyst CSV+flag → 200).
+
+**The other 7 decisions were recorded, not yet implemented** (direction
+settled, implementation scoped to later tiers per the user): site-
+visibility scoping (dedicated follow-up — large), API-key creation
+restricted to analyst+admin (Low tier), audit-coverage expansion (Low),
+SMTP test-success token gating the PUT (Low), Telegram unauthorized-chat
+silent-drop + log (Medium), WeasyPrint libs dropped from Dockerfile.
+worker (Low/infra), and the body-md/button-sm font lane ratified to
+Instrument Sans — the one doc-only decision, applied this session in
+`WARDRESS_MASTER_PROMPT.md` §4. The out-of-scope remediation-hook Medium
+also has a pre-decided direction (gate to AdminUser).
+
+**Verified end state:** backend 388 passed (was 383; +5 new), frontend
+25 passed, `tsc --noEmit` clean, oxlint only pre-existing fast-refresh
+warnings (no frontend files changed this session), ruff clean/formatted.

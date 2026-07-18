@@ -592,7 +592,20 @@ class BulkImportRequest(BaseModel):
     csv_text: str | None = Field(default=None, max_length=BULK_IMPORT_MAX_CSV_BYTES)
     sitemap_url: str | None = Field(default=None, max_length=2048)
     # Applied to every created site (same defaults as single-site create).
-    allow_private_networks: bool = False
+    # Admin-only when combined with sitemap_url: relaxing SSRF for a crawl
+    # (including child-sitemap fetches and redirect hops) turns the server
+    # into an internal-network fetcher, so analysts may set this only on a
+    # CSV import, where it governs the per-row SSRF check on the URLs they
+    # supply and performs no crawl.
+    allow_private_networks: bool = Field(
+        default=False,
+        description=(
+            "Relax the SSRF deny-list for this import. On a CSV import it governs "
+            "the per-row check on the supplied URLs. On a sitemap import it also "
+            "relaxes the crawl fetch, child-sitemap fetches, and redirect hops, so "
+            "it is admin-only for the sitemap path (analysts get 403)."
+        ),
+    )
     auto_scan_enabled: bool = True
     scan_interval_minutes: int = Field(default=60, ge=5, le=24 * 60)
 

@@ -79,14 +79,16 @@
 - **What's wrong:** `GET /api/sites/{id}/remediation-hooks` uses `CurrentUser`, exposing hook names, action types, thresholds, and redacted webhook-URL hints (scheme+hostname) to viewers — inconsistent with the Phase 6 decision that made settings and notification-channel GETs admin-only.
 - **Evidence:** `settings.py:363` (`GET /api/notification-channels` = admin) vs the hook list (CurrentUser); equivalent redacted infrastructure hints on both.
 - **Suggested fix direction:** Gate the hook list admin (or analyst minimum), or document the exception.
-- **Status:** open
+- **Direction pre-decided 2026-07-18 (Critical/decisions session):** Gate `GET /api/sites/{id}/remediation-hooks` to `AdminUser`, matching the Phase 6 precedent that infrastructure-config reads are admin-only; update any test asserting viewer/analyst access. Implementation deferred to the Medium-tier pass — this finding stays a Medium and is out of scope for the Critical/decisions session, but the direction is settled so the Medium pass executes it directly without re-litigating.
+- **Status:** open (direction pre-decided: gate to AdminUser; implementation deferred to Medium-tier pass)
 
 ### [MEDIUM] Master-prompt "sites they can see" scoping is not implemented — flat visibility
 - **Area:** backend / docs
 - **Location:** `backend/app/routers/sites.py:138`, `alerts.py:43`, `remediation.py:242`, artifacts, reports
 - **What's wrong:** Master Prompt §6 specifies roles "scoped to sites they can see"; no per-site visibility scoping exists — every authenticated user sees every site, scan, alert, artifact, and execution. Single-tenant use mitigates, but no doc records the narrowing.
 - **Suggested fix direction:** Implement site-membership scoping or amend docs to state flat visibility as the design.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Implement real per-site membership scoping — join table, filter the ~6 affected routers (sites/scans/alerts/artifacts/reports/remediation) by membership, add the user↔site assignment UI, and write the migration. Too large to fold into this Critical-fix session without crowding the Critical work; implementation deferred to a dedicated follow-up (its own bounded pass). Direction is settled: build the feature, do not document flat visibility as intended.
+- **Status:** needs-user-decision resolved → IMPLEMENT (site-membership scoping); implementation deferred to a dedicated follow-up pass
 
 ### [MEDIUM] Fusion feature-vector build runs outside the fallback try — a malformed layer result kills the pipeline
 - **Area:** backend
@@ -149,7 +151,8 @@
 - **Location:** `backend/app/routers/apikeys.py:29-59`
 - **What's wrong:** Key management is session-gated with no role check. Bounded (keys inherit the owner's role) but the policy is implicit.
 - **Suggested fix direction:** Decide and document; optionally restrict to analyst+.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Restrict API-key creation to analyst and admin roles; viewers lose self-service key creation. Add the role check, update `test_api_key_authenticates_with_owner_role` and adjacent tests, and update the API-key docs. Implementation deferred to the Low-tier fix pass (this session implements only the 2 Criticals + Decision 8-real per the user's scoping); direction is settled.
+- **Status:** needs-user-decision resolved → IMPLEMENT (restrict to analyst+admin); implementation deferred to Low-tier pass
 
 ### [LOW] API key can call GET /api/auth/me
 - **Area:** backend
@@ -410,7 +413,8 @@
 - **Location:** `backend/app/routers/sites.py` (scan-now, explain), `routers/auth.py`
 - **What's wrong:** scan-now and explain (writes to the scan row) carry no audit record; auth has no failed/successful-login trail. All other required surfaces verified covered.
 - **Suggested fix direction:** Decide whether these belong in scope; add if so.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Add audit-log entries for all three gaps — scan-now, "explain this incident," and login attempts (both success and failure) — extending sites.py/auth.py. This expands the audited-actions scope beyond Master Prompt §6's original list, so §6's audited-actions list in WARDRESS_MASTER_PROMPT.md must be updated to match. Implementation deferred to the Low-tier fix pass (this session implements only the 2 Criticals + Decision 8-real); direction is settled.
+- **Status:** needs-user-decision resolved → IMPLEMENT (audit scan-now + explain + login success/failure; update §6); implementation deferred to Low-tier pass
 
 ### [LOW] Rate-limiter/CORS polish
 - **Area:** backend
@@ -451,7 +455,8 @@
 - **What's wrong:** `PUT /api/settings/smtp` saves configuration with no linkage to a prior successful test; the test endpoint (`POST /smtp/test`, :123-151) is a separate route with no state connecting the two. The §8 "Send Test Email gates Save" requirement is enforced only by the frontend disabling the Save button. A direct API caller (or a future UI regression) can save untested credentials. Noting the Phase 4 decision documented the frontend gating as the design — this records that the backend does not independently enforce it.
 - **Evidence:** settings.py:87 PUT handler proceeds directly to `save_setting(db, SMTP_KEY, value)` at :119 with no test-state check.
 - **Suggested fix direction:** Either document test-before-save as a UI-only responsibility, or add a short-lived test-success token the PUT requires.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Add real backend enforcement. On a successful "Send Test Email," issue a short-lived test-success token; require it on `PUT /api/settings/smtp` and reject the save without it. Token lifetime and storage must be made explicit in code and in PROGRESS.md. Implementation deferred to the Low-tier fix pass (this session implements only the 2 Criticals + Decision 8-real); direction is settled — do NOT document as UI-only.
+- **Status:** needs-user-decision resolved → IMPLEMENT (backend test-success token gates SMTP PUT); implementation deferred to Low-tier pass
 
 ### [LOW] Alert email render uses bracket access on top_layers items
 - **Area:** backend
@@ -471,7 +476,8 @@
 - **What's wrong:** Commands from a non-captured chat get a "this bot is linked to a different chat" reply, and a second `/start` gets "already linked to another chat" — confirming to any chat that reaches the token that an active, configured Wardress instance exists behind it. Single-owner enforcement itself is correct (no command executes); this is an information-disclosure refinement for a monitoring tool. The refusal-reply behavior is documented as intended in the module comment, so this may be a deliberate trade-off.
 - **Evidence:** `_guarded` refusal at :127-130; `/start` second-chat reply at :153.
 - **Suggested fix direction:** Silent drop for unauthorized chats (with a log line), or a one-time setup token in `/start <token>` shown in the Settings UI.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Switch to silent drop + log. An unauthorized chat gets no reply at all; log the attempt (chat id, timestamp) server-side. Remove the "this bot is linked to a different chat" / "already linked to another chat" reply strings entirely. Implementation deferred to the Medium-tier fix pass (this session implements only the 2 Criticals + Decision 8-real); direction is settled.
+- **Status:** needs-user-decision resolved → IMPLEMENT (silent drop + log; remove refusal strings); implementation deferred to Medium-tier pass
 
 ### [LOW] Bot /scan enqueues without re-running URL validation
 - **Area:** backend
@@ -540,7 +546,7 @@
 - **What's wrong:** The per-row create loop has no try/except around `db.add(site)` / `await db.flush()`. A CSV-supplied `name` is stored unbounded into `Site.name` (VARCHAR 200); the derived name is capped at 200 (`_derive_name`) but a user-provided name is not. A row like `https://ok.example.com,<201+ chars>` raises DataError at flush, propagates out as a 500, and rolls back the shared session — every previously-flushed site in the import is lost. This is exactly the all-or-nothing failure the contract (§11 bulk-import spec, docstring :6-7) forbids. Any per-row DB error (IntegrityError from a concurrent create, DataError) has the same effect. Tests run on SQLite, which does not enforce VARCHAR lengths, so the suite cannot catch this.
 - **Evidence:** imports.py:240 `name=(name or _derive_name(url))` with no length cap on `name`; no try around :239-253; single session, single commit at :278; models.py:182 `String(200)`.
 - **Suggested fix direction:** Cap/truncate CSV names to 200 chars and validate per row, and wrap each row's add/flush in try/except with SAVEPOINT (`db.begin_nested()`) so a failing row becomes `status="error"` and the rest survive.
-- **Status:** open
+- **Status:** fixed (2026-07-18, Critical/decisions session) — CSV/derived name capped to `SITE_NAME_MAX=200` before insert (`imports.py`), and each row's create wrapped in `db.begin_nested()` (SAVEPOINT) with `except SQLAlchemyError` → the row becomes `status="error"` with a generic detail and the rest of the import survives. Verified: 3 new tests in `test_phase5_bulk_import.py` (oversized-name-truncated, one forced-IntegrityError row isolated with prior rows persisted, count assertions) all green; and live on the compose **Postgres** stack (the SQLite suite structurally cannot enforce VARCHAR(200)) — a 500-char name in a mixed batch created 3 sites with the long name truncated to 200 and 0 errors, where the pre-fix code would have raised DataError and rolled the whole import back. Test sites deleted afterward.
 
 ### [HIGH] Sitemap fetch buffers entire response before size cap is applied
 - **Area:** backend
@@ -604,7 +610,8 @@
 - **What's wrong:** `allow_private_networks` is a single request-level flag settable by any analyst, and it does triple duty: it relaxes the SSRF policy for the sitemap fetch itself (including the pinning transport and every redirect hop), for every child-sitemap fetch, and for every created site's per-row check. An analyst can point `sitemap_url` at an internal host with `allow_private_networks=true` and have the server fetch internal HTTP resources, with any `<loc>` text from the response echoed back verbatim in the API response — a direct internal-network read oracle (more direct than the screenshot channel single-site create offers, which requires image rendering). Per-row checks themselves are correctly present: every CSV row and every sitemap-derived row runs `assert_url_allowed` (:231-233); no row can individually opt in — the flag is batch-wide, which also means one flag silently opts *all* rows into private ranges.
 - **Evidence:** BulkImportRequest.allow_private_networks (schemas.py:595) → `_crawl_sitemap_impl` (:125-127, :146, :152-154) and the per-row check (:231-233); loc text propagated to `result.url` at :213.
 - **Suggested fix direction:** If internal-sitemap crawling isn't a deliberate feature, restrict `allow_private_networks=true` bulk imports (or at least the sitemap-crawl variant) to admin, or require the flag per-row for CSV; at minimum document that this flag turns the crawler into an internal fetcher.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Restrict `allow_private_networks=true` to admin for the sitemap-crawl path (covering the initial fetch plus every child-sitemap fetch and redirect hop). Analysts keep CSV import and ordinary bulk import; only admins may set the flag on a `sitemap_url` import. Add tests: a non-admin `sitemap_url` import with `allow_private_networks=true` is rejected; the same flag still works for non-admin CSV imports (no crawl). Update the `allow_private_networks` schema/API description to state the admin restriction. Small enough to fold into this Critical session — implementing now.
+- **Status:** needs-user-decision resolved → IMPLEMENTING THIS SESSION (admin-only allow_private_networks on sitemap crawl)
 
 ### [LOW] Sitemap fetch timeout is per-operation, not total deadline; relative HTTPS redirects break TLS after pinning
 - **Area:** backend
@@ -641,7 +648,7 @@
 - **What's wrong:** Both components statically import Recharts at the top level. The scan-detail and site-detail pages lazy-load these components (`scan-detail.tsx:25`, `site-detail.tsx:39`), but `React.lazy()` only defers the component module — static imports *inside* those modules are bundled immediately at parse time. Recharts (~90KB gzipped, ~250KB in the main bundle per typical tree-shaking) is loaded on initial page load regardless of whether any chart ever renders. The Phase 3 decision explicitly required code-split via lazy/Suspense to keep the main bundle small.
 - **Evidence:** incident-timeline.tsx:1-11 and risk-gauge.tsx:1 both static-import Recharts symbols; page-level `lazy()` wrappers only defer the wrapper module, not its synchronous dependencies.
 - **Suggested fix direction:** Dynamic import Recharts inside the component render (`const Recharts = await import("recharts")` or nested lazy subcomponent), or accept the bundle cost and document it.
-- **Status:** open
+- **Status:** deferred: not a defect — Recharts is already code-split; the finding's premise is incorrect. **Re-verified 2026-07-18 (Critical/decisions session) by building the frontend and inspecting the emitted chunks, not by reading code.** The finding claims "static imports *inside* a `lazy()`-loaded module are bundled immediately at parse time" — that is not how Rollup/Vite treats a dynamic-import boundary. Build output: `index-*.js` (main chunk, 500.96 kB) contains **zero** Recharts references and **zero** static- or dynamic-import statements for the chart chunk; Recharts core lands in its own async chunk `CategoricalChart-*.js` (254.53 kB / 78.65 kB gzip), reached only through `risk-gauge-*.js` (29.82 kB) and `incident-timeline-*.js` (103.74 kB), which are themselves the two page-level `lazy()` chunks. The only occurrence of the chart chunk's name in the main bundle is inside Vite's `__vitePreload` dependency map (`m.f = [...]`), which lists deps to fetch **when the dynamic import fires**, not on initial page load. So Recharts is loaded on demand exactly as the Phase 3 decision required — nothing to fix. (Verification commands: `pnpm build` then `grep -c recharts index-*.js` → 0; `grep -c 'import("[^"]*CategoricalChart' index-*.js` → 0.) No code change made; converting the components to an in-render dynamic import would add Suspense complexity for no measurable initial-bundle benefit.
 
 ### [HIGH] Visual diff slider missing aria-orientation on keyboard-accessible handle
 - **Area:** frontend
@@ -920,7 +927,8 @@
 - **What's wrong:** §4's substitution table reads "Instrument Sans for display-lg/subtitle roles, Inter for body-md/UI roles," but the implementation puts `text-body-md` and `text-button-sm` on Instrument Sans. The spec contradicts itself: body-md is an ABC Favorit token in DESIGN-resend, and §4's own "-0.5% tracking compensation on body sizes" note only makes sense if body-md rides the Favorit substitute — which is exactly what index.css implements (-0.88px = -0.8 + -0.5% of 16px), and what PROGRESS.md Phase 1 documented. The strict-lane rule makes this load-bearing either way.
 - **Evidence:** index.css:158 `font-family: var(--font-display-sans)` inside `@utility text-body-md`; §4 table row vs its own compensation note; PROGRESS.md Phase 1 "Instrument Sans (display-lg/subtitle/body-md lane…)".
 - **Suggested fix direction:** Rule which reading is authoritative; either move body-md/button-sm to Inter per the literal table, or amend §4 to codify the Instrument Sans reading (recommended — it matches DESIGN-resend's lane structure).
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Ratify the Instrument Sans reading — body-md and button-sm ride Instrument Sans, matching the implementation, DESIGN-resend's lane structure, the §4 tracking-compensation note, and PROGRESS.md Phase 1. Pure documentation fix to WARDRESS_MASTER_PROMPT.md §4 so the substitution table and the compensation note agree; no code or visual change. Applied this session (documentation-only resolution).
+- **Status:** needs-user-decision resolved → §4 amended to ratify Instrument Sans (documentation-only, applied this session)
 
 ### [MEDIUM] Card component internal padding is 24px; feature-card spec is 32px
 - **Area:** ui-ux
@@ -1332,7 +1340,8 @@
 - **What's wrong:** The worker Dockerfile installs Pango/Cairo/GDK-PixBuf "for PDF report rendering (Phase 4)", but per PROGRESS.md and reports-router design, WeasyPrint renders in the API (app) process, not the worker. If no worker/beat task generates PDFs, these native libs are dead weight in the worker/beat image (which is already the largest). Needs confirmation that no Celery task path calls WeasyPrint.
 - **Evidence:** Dockerfile.worker:16-23 installs the WeasyPrint libs with that comment; Dockerfile.app:44-52 also installs them (correct — reports render there). Verified both in-source.
 - **Suggested fix direction:** Confirm whether any worker task renders PDFs; if not, drop the WeasyPrint libs from Dockerfile.worker and update the comment.
-- **Status:** needs-user-decision
+- **Decision (2026-07-18, Critical/decisions session):** Confirmed no code under `backend/worker/` imports WeasyPrint (grep clean this session). Drop Pango/Cairo/GDK-PixBuf from Dockerfile.worker, then rebuild the worker/beat/telegram-bot image and confirm it still starts and runs a real scan + notification cleanly with the libs removed before calling it done. Implementation deferred to the Low-tier/infra fix pass (this session implements only the 2 Criticals + Decision 8-real); direction is settled — drop the libs.
+- **Status:** needs-user-decision resolved → IMPLEMENT (drop WeasyPrint libs from Dockerfile.worker + rebuild-verify); implementation deferred to Low-tier/infra pass
 
 ### [LOW] install/update .env parser captures trailing CR on a CRLF-edited .env
 - **Area:** infra

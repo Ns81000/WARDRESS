@@ -127,3 +127,130 @@ class TestSitemapImport:
         pages, children = _extract_sitemap_urls(doc)
         assert pages == []
         assert children == ["https://x.example.com/sitemap1.xml"]
+
+
+class TestPerRowIsolation:
+    """CRITICAL: a per-row DB error must not roll back the whole import
+    (§11 — imports are never all-or-nothing)."""
+
+    async def test_oversized_csv_name_is_truncated_not_errored(
+        self, client, auth_headers, db_factory
+    ):
+        # A CSV-supplied name longer than Site.name's 200-char column must
+        # be capped, not raise DataError. (SQLite doesn't enforce the width,
+        # so this asserts the source-level cap that prevents the error on
+        # Postgres.)
+        long_name = "x" * 500
+        csv = f"https://long.example.com,{long_name}"
+        resp = await client.post(
+            "/api/sites/bulk-import", headers=auth_headers, json={"csv_text": csv}
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["created"] == 1
+        assert len(body["results"][0]["name"]) == 200
+
+        async with db_factory() as db:
+            site = await db.scalar(select(Site).where(Site.url == "https://long.example.com"))
+            assert site is not None
+            assert len(site.name) == 200
+
+    async def test_one_failing_row_does_not_lose_the_others(
+        self, client, auth_headers, db_factory, monkeypatch
+    ):
+        # Force a genuine DB-layer failure on exactly one row's flush and
+        # confirm the SAVEPOINT isolates it: the other rows still commit.
+        from sqlalchemy.exc import IntegrityError
+
+        real_add = imports_router.Site
+
+        class ExplodingSite(real_add):  # type: ignore[misc, valid-type]
+            def __init__(self, *args, **kwargs):
+                if kwargs.get("url") == "https://boom.example.com":
+                    raise IntegrityError("forced", None, Exception("forced per-row failure"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(imports_router, "Site", ExplodingSite)
+
+        csv = "\n".join(
+            [
+                "https://ok1.example.com",
+                "https://boom.example.com",
+                "https://ok2.example.com",
+            ]
+        )
+        resp = await client.post(
+            "/api/sites/bulk-import", headers=auth_headers, json={"csv_text": csv}
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["created"] == 2
+        assert body["errors"] == 1
+        by_url = {r["url"]: r for r in body["results"]}
+        assert by_url["https://boom.example.com"]["status"] == "error"
+        assert by_url["https://ok1.example.com"]["status"] == "created"
+        assert by_url["https://ok2.example.com"]["status"] == "created"
+
+        # The two good rows are actually persisted; the failing one is not.
+        async with db_factory() as db:
+            count = await db.scalar(select(func.count()).select_from(Site))
+            assert count == 2
+            boom = await db.scalar(select(Site).where(Site.url == "https://boom.example.com"))
+            assert boom is None
+
+
+class TestPrivateNetworksSitemapAdminGate:
+    """Decision 8-real: allow_private_networks on a sitemap crawl is
+    admin-only (it turns the server into an internal-network fetcher);
+    analysts keep it for CSV imports, which never crawl."""
+
+    async def test_analyst_sitemap_with_private_flag_is_forbidden(
+        self, client, analyst_headers, monkeypatch
+    ):
+        # Crawl must never run for a forbidden request — patch it to prove
+        # the 403 fires before any fetch.
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("crawl must not run for a forbidden request")
+
+        monkeypatch.setattr(imports_router, "_crawl_sitemap_impl", fail_if_called)
+        resp = await client.post(
+            "/api/sites/bulk-import",
+            headers=analyst_headers,
+            json={
+                "sitemap_url": "https://site.example.com/sitemap.xml",
+                "allow_private_networks": True,
+            },
+        )
+        assert resp.status_code == 403, resp.text
+
+    async def test_admin_sitemap_with_private_flag_is_allowed(
+        self, client, auth_headers, monkeypatch
+    ):
+        async def fake_crawl(sitemap_url, *, allow_private_networks):
+            assert allow_private_networks is True
+            return [(1, "https://internal.example.com/page", None)]
+
+        monkeypatch.setattr(imports_router, "_crawl_sitemap_impl", fake_crawl)
+        resp = await client.post(
+            "/api/sites/bulk-import",
+            headers=auth_headers,
+            json={
+                "sitemap_url": "https://site.example.com/sitemap.xml",
+                "allow_private_networks": True,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["created"] == 1
+
+    async def test_analyst_csv_with_private_flag_still_works(self, client, analyst_headers):
+        # CSV import never crawls, so the flag stays available to analysts.
+        resp = await client.post(
+            "/api/sites/bulk-import",
+            headers=analyst_headers,
+            json={
+                "csv_text": "https://public.example.com",
+                "allow_private_networks": True,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["created"] == 1

@@ -23,12 +23,13 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
 from app.db import get_db
 from app.deps import AnalystUser
-from app.models import Baseline, BaselineStatus, Site
+from app.models import Baseline, BaselineStatus, Site, UserRole
 from app.scanning import clamp_interval
 from app.schemas import (
     BULK_IMPORT_MAX_ROWS,
@@ -47,6 +48,13 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 SITEMAP_TIMEOUT_S = 20.0
 SITEMAP_MAX_BYTES = 5 * 1024 * 1024
 SITEMAP_MAX_CHILD_SITEMAPS = 5
+
+# Site.name is String(200). A CSV-supplied name is untrusted and otherwise
+# unbounded: on Postgres an over-length value raises DataError at flush and
+# (without per-row isolation) would roll back the whole import. Cap it at
+# the column width so a long name degrades to a truncated name, never an
+# error — matching _derive_name's own [:200] cap.
+SITE_NAME_MAX = 200
 
 
 def _derive_name(url: str) -> str:
@@ -182,6 +190,18 @@ async def bulk_import(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
 
+    # A sitemap crawl with allow_private_networks=true relaxes the SSRF
+    # policy for the crawl itself plus every child-sitemap fetch and
+    # redirect hop, turning the server into an internal-network fetcher
+    # (<loc> text is echoed back). That capability is admin-only. CSV
+    # imports never crawl, so the flag there only governs the per-row
+    # SSRF check on user-supplied URLs and stays available to analysts.
+    if body.sitemap_url is not None and body.allow_private_networks and user.role != UserRole.admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Crawling a sitemap with allow_private_networks enabled requires the admin role",
+        )
+
     if body.csv_text is not None:
         rows = _parse_csv_rows(body.csv_text)
     else:
@@ -236,21 +256,40 @@ async def bulk_import(
             results.append(result)
             continue
 
-        site = Site(
-            name=(name or _derive_name(url)),
-            url=url,
-            created_by=user.id,
-            allow_private_networks=body.allow_private_networks,
-            auto_scan_enabled=body.auto_scan_enabled,
-            scan_interval_minutes=interval,
-        )
-        db.add(site)
-        await db.flush()
-        if site.auto_scan_enabled:
-            site.next_scan_at = datetime.now(UTC) + timedelta(minutes=interval)
-        baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
-        db.add(baseline)
-        await db.flush()
+        # A CSV-supplied name is untrusted; cap it to the column width so an
+        # over-length value can't raise DataError at flush. (_derive_name
+        # already caps its output.)
+        site_name = (name or _derive_name(url))[:SITE_NAME_MAX]
+
+        # Per-row isolation (§11 — imports are never all-or-nothing): each
+        # row commits or fails on its own SAVEPOINT, so an IntegrityError or
+        # DataError on one row rolls back only that row and the rest survive.
+        try:
+            async with db.begin_nested():
+                site = Site(
+                    name=site_name,
+                    url=url,
+                    created_by=user.id,
+                    allow_private_networks=body.allow_private_networks,
+                    auto_scan_enabled=body.auto_scan_enabled,
+                    scan_interval_minutes=interval,
+                )
+                db.add(site)
+                await db.flush()
+                if site.auto_scan_enabled:
+                    site.next_scan_at = datetime.now(UTC) + timedelta(minutes=interval)
+                baseline = Baseline(
+                    site_id=site.id, status=BaselineStatus.pending, is_current=False
+                )
+                db.add(baseline)
+                await db.flush()
+        except SQLAlchemyError:
+            # The SAVEPOINT is rolled back; this row is an error, prior rows
+            # are untouched. Keep the message generic (no DB internals).
+            result.detail = "could not be saved (database rejected the row)"
+            results.append(result)
+            continue
+
         created_baselines.append(baseline.id)
         seen_in_batch.add(url)
         result.status = "created"
