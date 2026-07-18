@@ -13,6 +13,8 @@ dist/
 build/
 Audit
 react-bits-main
+.agents
+.claude
 
 # --- Node / pnpm ---
 node_modules/
