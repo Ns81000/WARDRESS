@@ -296,8 +296,9 @@ export function VisualDiffSlider({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(divider * 100)}
+            aria-orientation="horizontal"
             tabIndex={0}
-            className="absolute inset-y-0 z-10 w-4 -translate-x-1/2 cursor-ew-resize"
+            className="absolute inset-y-0 z-10 w-11 -translate-x-1/2 cursor-ew-resize md:w-4"
             style={{ left: `${divider * 100}%` }}
             onPointerDown={(e) => {
               draggingDivider.current = true

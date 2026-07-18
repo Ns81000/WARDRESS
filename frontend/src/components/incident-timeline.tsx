@@ -152,17 +152,30 @@ export function IncidentTimeline({
             isAnimationActive={false}
             dot={({ cx, cy, payload }: { cx?: number; cy?: number; payload?: Point }) =>
               cx != null && cy != null && payload ? (
-                <circle
-                  key={payload.id}
-                  cx={cx}
-                  cy={cy}
-                  r={payload.verdict === "flagged" ? 4.5 : 3}
-                  fill={verdictColor(payload.verdict)}
-                  stroke="#000000"
-                  strokeWidth={1}
-                  style={{ cursor: onPointClick ? "pointer" : undefined }}
-                  onClick={() => onPointClick?.(payload.id)}
-                />
+                <g key={payload.id}>
+                  {onPointClick && (
+                    <circle
+                      className="md:hidden"
+                      cx={cx}
+                      cy={cy}
+                      r={22}
+                      fill="transparent"
+                      pointerEvents="all"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => onPointClick(payload.id)}
+                    />
+                  )}
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={payload.verdict === "flagged" ? 4.5 : 3}
+                    fill={verdictColor(payload.verdict)}
+                    stroke="#000000"
+                    strokeWidth={1}
+                    style={{ cursor: onPointClick ? "pointer" : undefined }}
+                    onClick={() => onPointClick?.(payload.id)}
+                  />
+                </g>
               ) : (
                 <g key={`empty-${cx}-${cy}`} />
               )

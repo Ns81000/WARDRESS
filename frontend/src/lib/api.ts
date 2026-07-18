@@ -25,12 +25,25 @@ export class ApiError extends Error {
   }
 }
 
-async function parseDetail(resp: Response): Promise<string> {
+const GENERIC_ERROR_DETAIL = "Something went wrong. Please try again."
+const INTERNAL_DETAIL_PATTERNS = [
+  /Traceback/,
+  /^ {2}File "/m,
+  /(?:^|\s)\/app\/\S+/,
+]
+
+export function sanitizeApiDetail(detail: string): string {
+  return INTERNAL_DETAIL_PATTERNS.some((pattern) => pattern.test(detail))
+    ? GENERIC_ERROR_DETAIL
+    : detail
+}
+
+export async function parseDetail(resp: Response): Promise<string> {
   try {
     const body = await resp.json()
-    if (typeof body.detail === "string") return body.detail
+    if (typeof body.detail === "string") return sanitizeApiDetail(body.detail)
     if (Array.isArray(body.detail) && body.detail[0]?.msg)
-      return String(body.detail[0].msg)
+      return sanitizeApiDetail(String(body.detail[0].msg))
     return `Request failed (${resp.status})`
   } catch {
     return `Request failed (${resp.status})`

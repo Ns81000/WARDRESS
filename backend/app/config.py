@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # refresh tokens rotate on every use (see app/routers/auth.py).
     access_token_ttl: int = 15 * 60
     refresh_token_ttl: int = 7 * 24 * 60 * 60
+    # Absolute session ceiling. A session refreshing continuously still ends
+    # here — each rotated successor's expiry is capped at the original login
+    # time plus this, so a sliding 7-day refresh window can't live forever.
+    max_session_ttl: int = 30 * 24 * 60 * 60
+    # Clock-skew leeway (seconds) applied when validating JWT exp/iat, so a
+    # small drift between app and client clocks doesn't 401 at the boundary.
+    jwt_leeway_seconds: int = 30
 
     # Where scan artifacts (HTML snapshots, screenshots) live. The worker
     # writes here (rw); the app container mounts the same volume read-only
@@ -72,6 +79,7 @@ class Settings(BaseSettings):
     rate_limit_per_ip: int = 300
     rate_limit_per_user: int = 240
     rate_limit_window_seconds: int = 60
+    max_request_body_bytes: int = 1024 * 1024
     # Honor X-Forwarded-For for the per-IP limit only when explicitly
     # fronted by a trusted reverse proxy. Default off: the socket peer is
     # authoritative and unspoofable on the plain self-hosted setup.

@@ -106,6 +106,18 @@ class TestAnalystScope:
         resp = await client.get("/api/audit-log", headers=analyst_headers)
         assert resp.status_code == 403
 
+    async def test_remediation_hook_list_is_admin_only(
+        self, client, auth_headers, analyst_headers, viewer_headers, db_factory, admin_user
+    ):
+        # Hook lists carry infrastructure-config hints (redacted webhook URL
+        # scheme+hostname) — admin scope like settings/channel reads.
+        site = await _make_site(db_factory, admin_user)
+        path = f"/api/sites/{site.id}/remediation-hooks"
+        for headers in (analyst_headers, viewer_headers):
+            resp = await client.get(path, headers=headers)
+            assert resp.status_code == 403, f"{path} returned {resp.status_code}"
+        assert (await client.get(path, headers=auth_headers)).status_code == 200
+
     async def test_analyst_cannot_create_remediation_hook(
         self, client, analyst_headers, db_factory, admin_user
     ):

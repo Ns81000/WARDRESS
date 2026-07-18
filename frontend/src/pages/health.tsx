@@ -62,7 +62,7 @@ function Stat({
         <div className="mt-1 text-charcoal">{icon}</div>
         <div>
           <p className="text-caption uppercase tracking-wide text-mute">{label}</p>
-          <p className="mt-1 text-heading-lg text-ink">{value}</p>
+          <p className="mt-1 text-heading-md text-ink">{value}</p>
           {hint && <p className="mt-0.5 text-caption text-mute">{hint}</p>}
         </div>
       </CardContent>

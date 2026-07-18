@@ -173,12 +173,14 @@ export function SitesPage() {
                 />
               </div>
               <label className="flex items-center gap-3 text-body-sm text-charcoal">
-                <input
-                  type="checkbox"
-                  checked={allowPrivate}
-                  onChange={(e) => setAllowPrivate(e.target.checked)}
-                  className="size-4 accent-white"
-                />
+                <span className="flex min-h-11 min-w-11 items-center justify-center md:min-h-0 md:min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={allowPrivate}
+                    onChange={(e) => setAllowPrivate(e.target.checked)}
+                    className="size-4 accent-white"
+                  />
+                </span>
                 Allow private-network target (internal hosts are blocked by
                 default)
               </label>

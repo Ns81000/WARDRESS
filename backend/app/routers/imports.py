@@ -48,6 +48,7 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 SITEMAP_TIMEOUT_S = 20.0
 SITEMAP_MAX_BYTES = 5 * 1024 * 1024
 SITEMAP_MAX_CHILD_SITEMAPS = 5
+CSV_FIELD_MAX_CHARS = 128 * 1024
 
 # Site.name is String(200). A CSV-supplied name is untrusted and otherwise
 # unbounded: on Postgres an over-length value raises DataError at flush and
@@ -70,16 +71,23 @@ def _parse_csv_rows(text: str) -> list[tuple[int, str, str | None]]:
     """[(line_number, url, name|None)] — blank lines skipped, an optional
     header line recognized by 'url' in the first cell."""
     rows: list[tuple[int, str, str | None]] = []
-    reader = csv.reader(io.StringIO(text))
-    for line_no, row in enumerate(reader, start=1):
-        cells = [c.strip() for c in row]
-        if not any(cells):
-            continue
-        first = cells[0]
-        if line_no == 1 and first.lower() in ("url", "urls", "website", "address"):
-            continue
-        name = cells[1] if len(cells) > 1 and cells[1] else None
-        rows.append((line_no, first, name))
+    old_limit = csv.field_size_limit()
+    csv.field_size_limit(CSV_FIELD_MAX_CHARS)
+    try:
+        reader = csv.reader(io.StringIO(text), quoting=csv.QUOTE_NONE)
+        for line_no, row in enumerate(reader, start=1):
+            cells = [c.strip() for c in row]
+            if not any(cells):
+                continue
+            first = cells[0]
+            if line_no == 1 and first.lower() in ("url", "urls", "website", "address"):
+                continue
+            name = cells[1] if len(cells) > 1 and cells[1] else None
+            rows.append((line_no, first, name))
+    except csv.Error as exc:
+        raise ValueError(f"CSV could not be parsed: {exc}") from None
+    finally:
+        csv.field_size_limit(old_limit)
     return rows
 
 
@@ -117,10 +125,27 @@ def _extract_sitemap_urls(xml_bytes: bytes) -> tuple[list[str], list[str]]:
 
 
 async def _fetch_sitemap_bytes(client: httpx.AsyncClient, url: str) -> bytes:
-    resp = await client.get(url)
-    if resp.status_code != 200:
-        raise ValueError(f"sitemap fetch returned HTTP {resp.status_code}")
-    return resp.content[:SITEMAP_MAX_BYTES]
+    async with client.stream("GET", url) as resp:
+        if resp.status_code != 200:
+            raise ValueError(f"sitemap fetch returned HTTP {resp.status_code}")
+        content_length = resp.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > SITEMAP_MAX_BYTES:
+                    raise ValueError("sitemap exceeds the configured size limit")
+            except ValueError as exc:
+                if str(exc) == "sitemap exceeds the configured size limit":
+                    raise
+                raise ValueError("sitemap has invalid Content-Length") from None
+
+        chunks = bytearray()
+        total = 0
+        async for chunk in resp.aiter_bytes():
+            total += len(chunk)
+            if total > SITEMAP_MAX_BYTES:
+                raise ValueError("sitemap exceeds the configured size limit")
+            chunks.extend(chunk)
+        return bytes(chunks)
 
 
 async def _crawl_sitemap_impl(
@@ -203,7 +228,10 @@ async def bulk_import(
         )
 
     if body.csv_text is not None:
-        rows = _parse_csv_rows(body.csv_text)
+        try:
+            rows = _parse_csv_rows(body.csv_text)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     else:
         try:
             rows = await _crawl_sitemap_impl(

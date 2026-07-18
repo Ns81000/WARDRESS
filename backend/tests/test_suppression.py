@@ -116,6 +116,33 @@ def test_regex_removes_matching_text() -> None:
     assert "Welcome to our site" in b.html
 
 
+def test_regex_catastrophic_backtracking_times_out_not_hangs() -> None:
+    """HIGH: a stored regex with catastrophic backtracking must not stall the
+    worker. The timeout-guarded substitution skips the rule (recording it as
+    unusable) instead of running unbounded — master prompt rule 6."""
+    import time
+
+    # "(a|a)+$" against a long non-matching text node is the classic
+    # exponential-backtracking case for a backtracking engine.
+    evil_pattern = r"(a|a)+$"
+    supp = build_suppression([("regex", evil_pattern)])
+    assert supp.regexes == [evil_pattern]  # compiles fine, so it's "usable"
+
+    long_text = "a" * 60 + "!"
+    page = _page(f"<html><body><p>{long_text}</p></body></html>")
+
+    start = time.time()
+    out = suppressed_copy(page, supp)
+    elapsed = time.time() - start
+
+    # Bounded by the per-substitution timeout (a few seconds), not unbounded.
+    assert elapsed < 10, f"suppression ran {elapsed:.1f}s — timeout guard failed"
+    # The rule was recorded as unusable rather than silently dropped, and the
+    # text survives (nothing was removed because the rule couldn't run).
+    assert any(u["reason"] == "timed out during application" for u in supp.unusable)
+    assert long_text in out.html
+
+
 def test_suppressed_copy_untouched_without_rules() -> None:
     page = _page(BASE_HTML)
     out = suppressed_copy(page, Suppression())

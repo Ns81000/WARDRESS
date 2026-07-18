@@ -31,6 +31,65 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
+class RequestBodySizeLimitMiddleware:
+    def __init__(self, app, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_bytes:
+                    await self._send_too_large(scope, receive, send)
+                    return
+            except ValueError:
+                await self._send_too_large(scope, receive, send)
+                return
+
+        total = 0
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body = message.get("body", b"")
+            total += len(body)
+            if total > self.max_bytes:
+                await self._send_too_large(scope, receive, send)
+                return
+            chunks.append(body)
+            if not message.get("more_body", False):
+                break
+
+        body = b"".join(chunks)
+        sent = False
+
+        async def limited_receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, limited_receive, send)
+
+    async def _send_too_large(self, scope, receive, send) -> None:
+        response = JSONResponse({"detail": "Request body too large"}, status_code=413)
+        await response(scope, receive, send)
+
+
+app.add_middleware(
+    RequestBodySizeLimitMiddleware,
+    max_bytes=get_settings().max_request_body_bytes,
+)
+
 # CORS locked to explicitly-configured origins (§9). The Phase 0 decision
 # serves the SPA same-origin, so the default list is empty and no cross-
 # origin request is permitted; set CORS_ALLOWED_ORIGINS only if the

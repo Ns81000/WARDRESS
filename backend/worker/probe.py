@@ -93,6 +93,10 @@ async def probe_tls(url: str) -> dict | None:
         )
         try:
             ssl_obj = writer.get_extra_info("ssl_object")
+            if ssl_obj is None:
+                # Transport torn down before the ssl object was available;
+                # nothing to observe. Treat as a failed probe (None).
+                return None
             der = ssl_obj.getpeercert(binary_form=True)
             peer = ssl_obj.getpeercert()  # parsed dict (empty w/ CERT_NONE)
         finally:
@@ -123,7 +127,11 @@ async def probe_tls(url: str) -> dict | None:
                 info["issuer"] = str(_name_attrs(peer.get("issuer")))
                 info["not_after"] = peer.get("notAfter")
         return info
-    except (TimeoutError, OSError, ssl.SSLError, ValueError) as exc:
+    except Exception as exc:
+        # Contract: None on any handshake problem. Beyond the expected
+        # timeout/OS/SSL/value errors, transport-teardown races can surface
+        # AttributeErrors and similar — none of them must escape into the
+        # scan task (probe_tls is called before probe_site's outer try).
         logger.debug("TLS probe failed for %s: %s", host, exc)
         return None
 

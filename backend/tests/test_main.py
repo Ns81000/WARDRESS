@@ -23,6 +23,33 @@ async def test_unknown_api_route_is_404_json(client: httpx.AsyncClient) -> None:
     assert resp.headers["content-type"].startswith("application/json")
 
 
+async def test_over_limit_body_returns_413_before_parsing(client: httpx.AsyncClient) -> None:
+    resp = await client.post(
+        "/api/sites/bulk-import",
+        content=b"{" + (b"x" * (1024 * 1024 + 1)),
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 413
+
+
+async def test_under_limit_body_still_reaches_endpoint(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    stub_all_enqueues,
+) -> None:
+    from app.routers import imports as imports_router
+
+    monkeypatch.setattr(imports_router, "assert_url_allowed", lambda *args, **kwargs: None)
+    resp = await client.post(
+        "/api/sites/bulk-import",
+        headers=auth_headers,
+        json={"csv_text": "https://body-limit.example.com"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["created"] == 1
+
+
 @pytest.fixture
 async def spa_client(tmp_path):
     (tmp_path / "index.html").write_text("<html><body>SPA</body></html>", encoding="utf-8")

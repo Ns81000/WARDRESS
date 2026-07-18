@@ -181,12 +181,14 @@ function SettingsCard({ site }: { site: Site }) {
           </div>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-body-sm text-body">
-          <input
-            type="checkbox"
-            checked={autoScan}
-            onChange={(e) => setAutoScan(e.target.checked)}
-            className="size-4 accent-ink"
-          />
+          <span className="flex min-h-11 min-w-11 items-center justify-center md:min-h-0 md:min-w-0">
+            <input
+              type="checkbox"
+              checked={autoScan}
+              onChange={(e) => setAutoScan(e.target.checked)}
+              className="size-4 accent-ink"
+            />
+          </span>
           Scheduled scans enabled
         </label>
         {site.next_scan_at && site.auto_scan_enabled && (

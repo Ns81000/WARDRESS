@@ -55,11 +55,13 @@ def decode_access_token(token: str) -> dict | None:
     """Returns the payload dict, or None for anything invalid/expired.
     Never raises — callers translate None into 401."""
     try:
+        settings = get_settings()
         payload = jwt.decode(
             token,
-            get_settings().jwt_secret,
+            settings.jwt_secret,
             algorithms=[JWT_ALGORITHM],
             options={"require": ["sub", "exp", "iat"]},
+            leeway=settings.jwt_leeway_seconds,
         )
     except jwt.PyJWTError:
         return None

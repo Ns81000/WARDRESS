@@ -385,6 +385,44 @@ def test_fusion_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "fallback" in result["evidence"]["model"]
 
 
+def test_layer_result_clamps_nan_to_zero() -> None:
+    """A NaN score is a numeric fault, not a max-severity signal: it must
+    coerce to 0.0 (not 1.0) and record the fault in evidence, so a bug in
+    one layer can't manufacture a top-severity alarm with no trail."""
+    from worker.detection.types import layer_result
+
+    out = layer_result(float("nan"), {"note": "computed"})
+    assert out["score"] == 0.0
+    assert "non-finite" in out["evidence"]["score_fault"]
+    assert out["evidence"]["note"] == "computed"  # original evidence preserved
+
+    inf_out = layer_result(float("inf"), {})
+    assert inf_out["score"] == 0.0
+    assert "non-finite" in inf_out["evidence"]["score_fault"]
+
+
+def test_fusion_survives_malformed_layer_score() -> None:
+    """A present-but-non-numeric layer score must not raise out of the
+    fusion vector build (which used to run before the fallback try). It is
+    coerced to 0.0 and the layer still produces a score."""
+    results = _results_from_scores(dict.fromkeys(FEATURE_KEYS, 0.0))
+    # A layer that returned a bad score dict (e.g. a string leaked through).
+    results["layer4_visual_diff"] = {"score": "not-a-number", "evidence": {}}
+    vector, ran = build_feature_vector(results)
+    assert vector[FEATURE_KEYS.index("layer4_visual_diff")] == 0.0
+    out = layer9_fusion(results)
+    assert 0.0 <= out["score"] <= 1.0
+
+
+def test_fusion_survives_nan_layer_score() -> None:
+    results = _results_from_scores(dict.fromkeys(FEATURE_KEYS, 0.0))
+    results["layer2_dom_structure"] = {"score": float("nan"), "evidence": {}}
+    vector, _ = build_feature_vector(results)
+    assert vector[FEATURE_KEYS.index("layer2_dom_structure")] == 0.0
+    out = layer9_fusion(results)
+    assert 0.0 <= out["score"] <= 1.0
+
+
 # --- pipeline gating ---
 
 

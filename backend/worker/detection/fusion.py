@@ -18,6 +18,7 @@ The fitted model is cached per worker process; fitting is deterministic
 """
 
 import logging
+import math
 import threading
 
 import numpy as np
@@ -98,10 +99,24 @@ def get_fusion_model() -> LogisticRegression:
         return _model
 
 
+def _coerce_score(value) -> float:
+    """A layer score coerced to a finite float in [feature space]. A
+    malformed value (non-numeric, NaN, inf) contributes 0.0 rather than
+    raising — a single bad sub-score must not take out the whole layer."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(num):
+        return 0.0
+    return num
+
+
 def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], dict[str, bool]]:
     """Flatten per-layer results into the fixed feature order. A skipped
     layer contributes 0.0 (its gate already established 'no change') and
-    is marked ran=False."""
+    is marked ran=False. A present-but-malformed score also contributes 0.0
+    (see _coerce_score) so fusion stays robust to a misbehaving layer."""
     features: list[float] = []
     ran: dict[str, bool] = {}
     for key in FEATURE_KEYS:
@@ -110,16 +125,19 @@ def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], d
             features.append(0.0)
             ran[key] = False
         else:
-            features.append(float(result.get("score") or 0.0))
+            features.append(_coerce_score(result.get("score")))
             ran[key] = True
     return features, ran
 
 
 def layer9_fusion(layer_results: dict[str, dict]) -> dict:
-    """Fuse layers 1-8 into one calibrated risk score. Never raises: a
-    broken model fit degrades to the max sub-score with a note."""
-    features, ran = build_feature_vector(layer_results)
+    """Fuse layers 1-8 into one calibrated risk score. Never raises: any
+    failure (malformed input, broken model fit) degrades to the max
+    sub-score with a note."""
+    features: list[float] = []
+    ran: dict[str, bool] = {}
     try:
+        features, ran = build_feature_vector(layer_results)
         model = get_fusion_model()
         proba = float(model.predict_proba(np.array([features]))[0][1])
         contributions = {
@@ -145,7 +163,9 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
             {
                 "model": "fallback_max (fusion model unavailable)",
                 "error": str(exc)[:200],
-                "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=True)},
+                # zip without strict: features may be empty if the vector
+                # build itself failed — the fallback must still return.
+                "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features)},
                 "layers_ran": ran,
             },
         )

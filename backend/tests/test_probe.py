@@ -152,3 +152,44 @@ async def test_probe_site_transport_failure_degrades(monkeypatch: pytest.MonkeyP
     result = await probe_site("https://example.com/")  # must not raise
     assert result.robots_txt is None
     assert all(v.error for v in result.ua_variants)
+
+
+async def test_probe_tls_none_ssl_object_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """probe_tls contract: None on any handshake problem. A transport
+    teardown race can make get_extra_info('ssl_object') return None — the
+    probe must return None, never raise AttributeError into the scan task."""
+    import asyncio
+
+    from worker.probe import probe_tls
+
+    class FakeWriter:
+        def get_extra_info(self, name):
+            return None  # the teardown race
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    async def fake_open_connection(*args, **kwargs):
+        return object(), FakeWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+    assert await probe_tls("https://example.com/") is None
+
+
+async def test_probe_tls_unexpected_error_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error type outside the expected timeout/OS/SSL set (e.g. an
+    AttributeError from a half-torn-down transport) degrades to None."""
+    import asyncio
+
+    from worker.probe import probe_tls
+
+    async def exploding_open_connection(*args, **kwargs):
+        raise AttributeError("simulated teardown race")
+
+    monkeypatch.setattr(asyncio, "open_connection", exploding_open_connection)
+    assert await probe_tls("https://example.com/") is None

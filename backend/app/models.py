@@ -167,6 +167,13 @@ class RefreshToken(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # When the session this token belongs to originally logged in. Carried
+    # unchanged across rotations so successor expiry can be capped at
+    # session_started_at + max_session_ttl (no infinitely-sliding sessions).
+    # NULL on pre-upgrade rows: treated as created_at.
+    session_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Set when this token is rotated, pointing at its successor — makes
     # token-reuse detection possible (reuse of a rotated token means theft).

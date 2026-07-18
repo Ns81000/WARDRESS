@@ -78,6 +78,7 @@ function UserRow({ user, isSelf }: { user: UserAdmin; isSelf: boolean }) {
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <select
+          data-slot="select"
           value={user.role}
           disabled={isSelf || update.isPending}
           onChange={(e) => update.mutate({ role: e.target.value as Role })}
@@ -200,6 +201,7 @@ export function UsersCard() {
                   <Label htmlFor="new-user-role">Role</Label>
                   <select
                     id="new-user-role"
+                    data-slot="select"
                     value={role}
                     onChange={(e) => setRole(e.target.value as Role)}
                     className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"

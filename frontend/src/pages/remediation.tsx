@@ -181,15 +181,17 @@ export function RemediationPage() {
           </p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-body-sm text-charcoal">
-          <input
-            type="checkbox"
-            checked={pendingOnly}
-            onChange={(e) => {
-              setPendingOnly(e.target.checked)
-              setPage(0)
-            }}
-            className="size-4 accent-ink"
-          />
+          <span className="flex min-h-11 min-w-11 items-center justify-center md:min-h-0 md:min-w-0">
+            <input
+              type="checkbox"
+              checked={pendingOnly}
+              onChange={(e) => {
+                setPendingOnly(e.target.checked)
+                setPage(0)
+              }}
+              className="size-4 accent-ink"
+            />
+          </span>
           Awaiting confirmation only
         </label>
       </div>

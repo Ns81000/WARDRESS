@@ -86,7 +86,7 @@ async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID) -> Site:
 
 
 @router.get("/sites/{site_id}/remediation-hooks", response_model=list[RemediationHookOut])
-async def list_hooks(site_id: uuid.UUID, user: CurrentUser, db: DB) -> list[RemediationHookOut]:
+async def list_hooks(site_id: uuid.UUID, admin: AdminUser, db: DB) -> list[RemediationHookOut]:
     await _get_site_or_404(db, site_id)
     hooks = (
         await db.scalars(

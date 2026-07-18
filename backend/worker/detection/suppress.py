@@ -25,6 +25,8 @@ import logging
 import re
 from dataclasses import dataclass, field, replace
 
+import regex
+
 from lxml import html as lxml_html
 from lxml.cssselect import CSSSelector, SelectorError
 
@@ -32,6 +34,9 @@ from worker.detection.dom import parse_html
 from worker.detection.types import PageData
 
 logger = logging.getLogger(__name__)
+
+# Suppression regex timeout (seconds) to guard against catastrophic backtracking.
+_REGEX_TIMEOUT_SECONDS = 2.0
 
 # A bbox rule's value: "x,y,w,h" as fractions (0-1) of the baseline capture.
 _BBOX_RE = re.compile(r"^(\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$")
@@ -94,8 +99,8 @@ def build_suppression(rules: list[tuple[str, str]]) -> Suppression:
             supp.css_selectors.append(value)
         elif rule_type == "regex":
             try:
-                re.compile(value)
-            except re.error as exc:
+                regex.compile(value)
+            except regex.error as exc:
                 supp.unusable.append({"type": rule_type, "value": value[:200], "reason": str(exc)})
                 continue
             supp.regexes.append(value)
@@ -137,14 +142,26 @@ def _apply_to_html(html: str, supp: Suppression) -> str:
             logger.warning("CSS suppression rule failed to apply: %r", sel)
 
     for pattern in supp.regexes:
-        compiled = re.compile(pattern)
-        for el in root.iter():
-            if not isinstance(el.tag, str):
-                continue
-            if el.text:
-                el.text = compiled.sub("", el.text)
-            if el.tail:
-                el.tail = compiled.sub("", el.tail)
+        compiled = regex.compile(pattern)
+        try:
+            for el in root.iter():
+                if not isinstance(el.tag, str):
+                    continue
+                # timeout= bounds each substitution: a pattern with
+                # catastrophic backtracking (e.g. "(a+)+$") on a long text
+                # node raises TimeoutError instead of stalling the worker.
+                if el.text:
+                    el.text = compiled.sub("", el.text, timeout=_REGEX_TIMEOUT_SECONDS)
+                if el.tail:
+                    el.tail = compiled.sub("", el.tail, timeout=_REGEX_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # A stored rule that can't run within the budget is skipped for
+            # this scan rather than allowed to hang it (master prompt rule 6).
+            # Recorded in evidence so the suppression stays auditable.
+            logger.warning("Suppression regex timed out; skipping rule: %r", pattern)
+            supp.unusable.append(
+                {"type": "regex", "value": pattern[:200], "reason": "timed out during application"}
+            )
 
     try:
         return lxml_html.tostring(root, encoding="unicode")

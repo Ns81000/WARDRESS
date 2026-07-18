@@ -580,16 +580,17 @@ class AuditLogPage(BaseModel):
 # --- Phase 5: bulk site import (§7 /api/sites/bulk-import) ---
 
 # The frontend reads the chosen CSV client-side and posts its text, so
-# the API needs no multipart parser (and no new dependency). Caps keep a
-# pathological upload from becoming a memory problem.
-BULK_IMPORT_MAX_CSV_BYTES = 512 * 1024
+# the API needs no multipart parser (and no new dependency). The ASGI
+# middleware enforces bytes before parsing; this second layer caps the
+# decoded text size.
+BULK_IMPORT_MAX_CSV_CHARS = 512 * 1024
 BULK_IMPORT_MAX_ROWS = 500
 
 
 class BulkImportRequest(BaseModel):
     """Exactly one source: inline CSV text, or a sitemap URL to crawl."""
 
-    csv_text: str | None = Field(default=None, max_length=BULK_IMPORT_MAX_CSV_BYTES)
+    csv_text: str | None = Field(default=None, max_length=BULK_IMPORT_MAX_CSV_CHARS)
     sitemap_url: str | None = Field(default=None, max_length=2048)
     # Applied to every created site (same defaults as single-site create).
     # Admin-only when combined with sitemap_url: relaxing SSRF for a crawl

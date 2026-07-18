@@ -12,11 +12,13 @@ import asyncio
 import os
 import sys
 
-from sqlalchemy import select
+from datetime import UTC, datetime
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import get_settings
-from app.models import User, UserRole
+from app.models import RefreshToken, User, UserRole
 from app.security import hash_password
 
 MIN_PASSWORD_LENGTH = 12
@@ -54,9 +56,23 @@ async def seed() -> int:
                 print(f"Created admin user {email}")
             elif reset:
                 existing.password_hash = hash_password(password)
+                reactivated = not existing.is_active
+                # Explicit: an emergency reset also reactivates the account.
                 existing.is_active = True
+                # Revoke every outstanding refresh token — an emergency
+                # password reset must sign out existing sessions, same as
+                # the admin PATCH password path (app/routers/users.py).
+                await db.execute(
+                    update(RefreshToken)
+                    .where(
+                        RefreshToken.user_id == existing.id,
+                        RefreshToken.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=datetime.now(UTC))
+                )
                 await db.commit()
-                print(f"Reset password for existing user {email}")
+                note = " (account reactivated)" if reactivated else ""
+                print(f"Reset password for existing user {email}; existing sessions revoked{note}")
             else:
                 print(f"User {email} already exists (set ADMIN_RESET_PASSWORD=true to reset)")
     finally:

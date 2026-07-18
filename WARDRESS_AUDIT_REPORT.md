@@ -41,7 +41,7 @@
 - **What's wrong:** Rotation is read-then-write with no row lock or atomic conditional update. Two concurrent requests presenting the same refresh cookie both read the record while `revoked_at IS NULL`, both pass the reuse check, both mint successors and commit — two live refresh tokens from one presented token, no reuse alarm. The reuse branch only fires on a third, later presentation.
 - **Evidence:** Traced `db.scalar(select(...))` at line 98 → checks at 108/122 → commit at 140; no `FOR UPDATE`, no rowcount-gated conditional UPDATE.
 - **Suggested fix direction:** `with_for_update()` on the token row or an atomic `UPDATE ... WHERE revoked_at IS NULL` whose rowcount gates rotation; add a concurrent-refresh regression test.
-- **Status:** open
+- **Status:** fixed (2026-07-18, Low/Medium/High fix pass) — rotation now mints the successor, then claims the presented token with an atomic `UPDATE refresh_tokens SET revoked_at=..., replaced_by=... WHERE id=? AND revoked_at IS NULL AND replaced_by IS NULL`. Only the request whose `rowcount == 1` proceeds; a racing duplicate matches zero rows, rolls back its successor, and falls through to the reuse response (family revocation + 401). Regression test `test_refresh_rotation_race_only_one_successor` asserts no unrevoked tokens survive after a rotate-then-replay. `auth.py`.
 
 ### [HIGH] Stored suppression regex runs with no backtracking guard — one pathological rule can stall the worker
 - **Area:** backend
@@ -49,21 +49,21 @@
 - **What's wrong:** `build_suppression` only validates that a regex *compiles*. A pattern like `(a+)+$` compiles fine, then `_apply_to_html` runs `compiled.sub("")` on every DOM text node with stdlib `re` (no timeout). One stored rule + one long text node stalls the scan — exactly the "unusable rule must not break a scan" failure the module promises to prevent. The css_selector path has a runtime `except Exception`; the regex path has none.
 - **Evidence:** suppress.py:97 (compile-only validation), :139-147 (unguarded substitution loop), contrasted with :134 (selector guard).
 - **Suggested fix direction:** Use the `regex` module with `timeout=`, or wrap per-rule application in try + bounded input, recording the rule as `unusable`. Add a pathological-pattern test.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — suppression regexes now compile and run via the `regex` module (already a transitive dependency) with `timeout=2.0` on every `.sub()`. A pattern with catastrophic backtracking raises `TimeoutError`, which is caught per-rule: the rule is skipped for that scan and appended to `supp.unusable` with reason "timed out during application", keeping it auditable. Validation in `build_suppression` also switched to `regex.compile` so save-time and run-time engines match. Test `test_regex_catastrophic_backtracking_times_out_not_hangs` asserts `(a|a)+$` against a long text node completes bounded and records the rule unusable. `suppress.py`.
 
 ### [MEDIUM] "Family" revocation is user-wide; a replayed logout token kills all sessions
 - **Area:** backend
 - **Location:** `backend/app/routers/auth.py:108-120`, `backend/app/models.py:173`
 - **What's wrong:** The reuse branch revokes every unrevoked token for the user, not the family chain (`replaced_by` stored but never traversed). Safe as a superset, but a logout-revoked token replayed once (browser retry, stale tab) trips the escalation and signs out every device.
 - **Suggested fix direction:** Distinguish logout-revoked from rotation-revoked before escalating, or document user-wide semantics as intended.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — the reuse branch now fires only on `replaced_by IS NOT NULL` (a *rotated* token, i.e. genuine theft evidence, since the legitimate client holds the successor). A `revoked_at`-only token (logout, admin reset, deactivation sweep) is rejected with a plain 401 and no family escalation. Test `test_refresh_logout_reuse_does_not_escalate` confirms the logout-revoked token has no `replaced_by` and replaying it does not kill the family. `auth.py`.
 
 ### [MEDIUM] No absolute session lifetime — refresh TTL is sliding
 - **Area:** backend
 - **Location:** `backend/app/routers/auth.py:134`
 - **What's wrong:** Every rotation issues a successor with a fresh 7-day TTL; a session refreshing weekly lives forever. "7-day refresh tokens" is per-token, not per-session.
 - **Suggested fix direction:** Cap successor expiry at original-login time + max session age.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `RefreshToken` gained `session_started_at`, set to `now()` on login and carried forward on every rotation. Successor expiry is capped at `session_started_at + MAX_SESSION_TTL` (default 30 days, env-configured). A session that would slide past the absolute ceiling is rejected with 401 "session expired". Migration `0a6bd482fe1f_auth_add_session_started_at_for_.py`, config `MAX_SESSION_TTL`, test `test_absolute_session_lifetime_caps_successor_expiry`. `auth.py`, `models.py`, `config.py`.
 
 ### [MEDIUM] ADMIN_RESET_PASSWORD doesn't revoke refresh tokens and silently reactivates
 - **Area:** backend
@@ -71,7 +71,7 @@
 - **What's wrong:** The reset path rewrites `password_hash` and forces `is_active=True` but never revokes refresh tokens — old cookies keep working after an emergency password reset. Implicit reactivation is undocumented.
 - **Evidence:** Contrast `users.py:123-125` (admin PATCH path revokes families).
 - **Suggested fix direction:** Revoke token families in the reset branch; make reactivation explicit.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — the reset branch now revokes all of the user's outstanding refresh tokens (matching the admin PATCH-password path), so old cookies stop working after an emergency reset. Reactivation is still performed (an emergency reset intentionally re-enables the account) but is no longer silent: the command reports "(account reactivated)" when it flips a previously-inactive user. `seed_admin.py`.
 
 ### [MEDIUM] Remediation-hook list readable by viewer while parallel admin surfaces are admin-gated
 - **Area:** backend
@@ -80,7 +80,7 @@
 - **Evidence:** `settings.py:363` (`GET /api/notification-channels` = admin) vs the hook list (CurrentUser); equivalent redacted infrastructure hints on both.
 - **Suggested fix direction:** Gate the hook list admin (or analyst minimum), or document the exception.
 - **Direction pre-decided 2026-07-18 (Critical/decisions session):** Gate `GET /api/sites/{id}/remediation-hooks` to `AdminUser`, matching the Phase 6 precedent that infrastructure-config reads are admin-only; update any test asserting viewer/analyst access. Implementation deferred to the Medium-tier pass — this finding stays a Medium and is out of scope for the Critical/decisions session, but the direction is settled so the Medium pass executes it directly without re-litigating.
-- **Status:** open (direction pre-decided: gate to AdminUser; implementation deferred to Medium-tier pass)
+- **Status:** fixed (2026-07-18, fix pass) — `GET /api/sites/{id}/remediation-hooks` now uses the `AdminUser` dependency (was `CurrentUser`), matching the Phase 6 rule that infrastructure-config reads are admin scope; non-admin requests receive 403. Frontend panel fetches the list only for admins (`enabled: isAdmin`) and shows an "managed by an admin" note otherwise. New test `test_remediation_hook_list_is_admin_only` (analyst/viewer 403, admin 200). `remediation.py`, `remediation-hooks-panel.tsx`.
 
 ### [MEDIUM] Master-prompt "sites they can see" scoping is not implemented — flat visibility
 - **Area:** backend / docs
@@ -95,21 +95,21 @@
 - **Location:** `backend/worker/detection/fusion.py:121`, `pipeline.py:158`
 - **What's wrong:** `layer9_fusion` promises "never raises," but `build_feature_vector` executes before the `try`; a malformed layer result (non-numeric score) raises out, and the pipeline calls fusion with no isolation — `run_detection` fails entirely (rule-6 violation).
 - **Suggested fix direction:** Move the vector build inside the try or wrap the fusion call in the pipeline; add a malformed-result test.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `build_feature_vector` now runs inside `layer9_fusion`'s try, and a new `_coerce_score` helper turns any non-numeric/NaN/inf sub-score into 0.0 instead of raising. The fallback `zip` dropped `strict=True` so it still returns when the vector is empty. Test `test_fusion_survives_malformed_layer_score`. `fusion.py`.
 
 ### [MEDIUM] NaN layer score silently clamps to 1.0
 - **Area:** backend
 - **Location:** `backend/worker/detection/types.py:48`
 - **What's wrong:** `max(0.0, min(1.0, float(score)))` maps NaN to 1.0 (NaN comparisons are False), turning a numeric bug into a max-severity alarm with no evidence trail, feeding fusion and JSONB as a clean float.
 - **Suggested fix direction:** Explicitly detect NaN/inf before clamping, record it in evidence; test it.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `layer_result` now checks `math.isfinite` before clamping. A non-finite score coerces to 0.0 (no evidence of change, not a false max-severity alarm) and records `score_fault` in evidence, preserving the original evidence dict. Tests `test_layer_result_clamps_nan_to_zero`, `test_fusion_survives_nan_layer_score`. `types.py`.
 
 ### [MEDIUM] probe_tls can raise despite its "never raises" contract
 - **Area:** backend
 - **Location:** `backend/worker/probe.py:95-97,126,176`
 - **What's wrong:** `writer.get_extra_info("ssl_object")` can return None (transport teardown race); the ensuing AttributeError is not in the catch tuple, and `probe_site` calls `probe_tls` outside its outer try — the probe can raise into the scan task.
 - **Suggested fix direction:** Broad except in probe_tls or move the call under the outer try.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `probe_tls` now returns None explicitly when `get_extra_info("ssl_object")` is None, and its except broadened from the narrow `(TimeoutError, OSError, ssl.SSLError, ValueError)` tuple to `Exception` so a teardown-race AttributeError (or any other unexpected error) degrades to None instead of escaping into the scan task. Tests `test_probe_tls_none_ssl_object_returns_none`, `test_probe_tls_unexpected_error_returns_none`. `probe.py`.
 
 ### [MEDIUM] Layer 3 can lose the whole layer on a malformed final_url
 - **Area:** backend
@@ -123,14 +123,14 @@
 - **Location:** `backend/app/routers/auth.py:165`
 - **What's wrong:** `delete_cookie` omits httponly/secure/samesite; strict user agents may ignore the deletion.
 - **Suggested fix direction:** Mirror the set-time flags (auth.py:40-50) on deletion.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `logout` now passes `httponly=True, secure=settings.cookie_secure, samesite="strict"` to `delete_cookie`, mirroring `_set_refresh_cookie`. Test `test_logout_cookie_deleted_with_mirrored_attributes`. `auth.py`.
 
 ### [LOW] No clock-skew leeway on JWT decode
 - **Area:** backend
 - **Location:** `backend/app/security.py:58-63`
 - **What's wrong:** leeway=0; tokens fail at exact expiry boundaries under clock drift. Low at single-host scale.
 - **Suggested fix direction:** ~30 s leeway.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `decode_access_token` now passes `leeway=timedelta(seconds=JWT_LEEWAY_SECONDS)` (default 30, env-configured) to `jwt.decode`. Config `JWT_LEEWAY_SECONDS`, `config.py`, `security.py`.
 
 ### [LOW] DB failure mid-auth yields a raw 500 (no 503 mapping)
 - **Area:** backend
@@ -144,7 +144,7 @@
 - **Location:** `backend/app/security.py:37`
 - **What's wrong:** Defined, never called; Argon2 parameter upgrades never re-hash existing passwords.
 - **Suggested fix direction:** Call it on login success, or remove it.
-- **Status:** open
+- **Status:** fixed (2026-07-18, fix pass) — `login` now checks `password_needs_rehash` on success and re-hashes in-place if the cost factor changed. `auth.py`.
 
 ### [LOW] Any role (incl. viewer) can create API keys
 - **Area:** backend
@@ -554,7 +554,7 @@
 - **What's wrong:** `_fetch_sitemap_bytes` does `resp.content[:SITEMAP_MAX_BYTES]` — `resp.content` fully buffers the response body in memory *before* the 5MB slice is applied. The cap is cosmetic: a malicious or misconfigured sitemap server streams an arbitrarily large body and the API process buffers all of it. This applies to the top-level sitemap and up to 5 child sitemaps per request (6 unbounded buffers). Combined with the per-read timeout (not total), one authorized analyst request can exhaust API memory.
 - **Evidence:** `resp = await client.get(url)` (non-streaming, :112) → `.content` accessed at :115; no `stream=True` / `aiter_bytes` accounting anywhere in the file.
 - **Suggested fix direction:** Use `client.stream("GET", url)` and accumulate chunks, aborting once the running total exceeds SITEMAP_MAX_BYTES; also check `Content-Length` up front when present.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — sitemap fetches now stream chunks with a running byte cap and a Content-Length precheck for the top-level and child sitemap paths. Test `test_sitemap_stream_stops_at_size_limit`. `backend/app/routers/imports.py`, `backend/tests/test_phase5_bulk_import.py`.
 
 ### [HIGH] No request body-size limit anywhere in the API — unauthenticated oversized bodies fully buffered
 - **Area:** backend
@@ -562,7 +562,7 @@
 - **What's wrong:** The "512KB cap" is not enforced before parsing. `csv_text` is capped by Pydantic `max_length=BULK_IMPORT_MAX_CSV_BYTES`, which (a) counts *characters*, not bytes — 512K chars of multi-byte UTF-8 can be ~2MB, so the constant's name is wrong — and (b) runs only after Starlette has read and JSON-decoded the entire request body. There is no body-size limit middleware anywhere in main.py, and FastAPI reads the body before resolving the auth dependency, so even an *unauthenticated* client can POST a multi-hundred-MB JSON body that is fully buffered and JSON-parsed before any 401/422. The per-IP rate limiter limits request count, not request size.
 - **Evidence:** schemas.py:592 `max_length=BULK_IMPORT_MAX_CSV_BYTES` (str max_length = chars); main.py:28-77 has no Content-Length/body-size guard.
 - **Suggested fix direction:** Add middleware (or reverse-proxy config documented as a requirement) rejecting bodies over ~1MB by Content-Length and by streamed count; keep the Pydantic cap as the second layer and fix its name/semantics if bytes are the real contract.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — request bodies now pass through a 1MB ASGI size limit before endpoint parsing, with both Content-Length and streamed-byte accounting, and the CSV text cap is named for decoded characters. Tests `test_over_limit_body_returns_413_before_parsing` and `test_under_limit_body_still_reaches_endpoint`. `backend/app/main.py`, `backend/app/config.py`, `backend/app/schemas.py`, `backend/tests/test_main.py`.
 
 ### [HIGH] Oversized CSV field crashes import with 500
 - **Area:** backend
@@ -570,7 +570,7 @@
 - **What's wrong:** `_parse_csv_rows` does not catch `csv.Error`. Python's csv module raises `_csv.Error: field larger than field limit (131072)` for any single field over 128K chars — within the permitted 512K-char `csv_text`. One such row (e.g., a pasted multi-MB URL or garbage line) crashes the whole endpoint with a 500 instead of degrading to a per-row error, violating the per-row-degradation contract. Additionally, an unclosed quote makes csv.reader silently merge all subsequent physical lines into one record, so following rows vanish without any per-row error — the caller cannot see they were dropped.
 - **Evidence:** `csv.reader(io.StringIO(text))` iterated at :66 with no try/except; no `csv.field_size_limit` adjustment.
 - **Suggested fix direction:** Iterate the reader inside try/except csv.Error and convert to a per-row (or whole-parse 422) error; pre-split pathological inputs or set an explicit field size limit; consider `quoting=csv.QUOTE_NONE` given the spec is plain `url[,name]`.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — CSV parsing now uses an explicit field limit, quote-neutral parsing, and maps csv parser errors to a handled 422 response. Test `test_oversized_csv_field_is_handled`. `backend/app/routers/imports.py`, `backend/tests/test_phase5_bulk_import.py`.
 
 ### [MEDIUM] 500-row truncation is invisible to the caller
 - **Area:** backend
@@ -611,7 +611,7 @@
 - **Evidence:** BulkImportRequest.allow_private_networks (schemas.py:595) → `_crawl_sitemap_impl` (:125-127, :146, :152-154) and the per-row check (:231-233); loc text propagated to `result.url` at :213.
 - **Suggested fix direction:** If internal-sitemap crawling isn't a deliberate feature, restrict `allow_private_networks=true` bulk imports (or at least the sitemap-crawl variant) to admin, or require the flag per-row for CSV; at minimum document that this flag turns the crawler into an internal fetcher.
 - **Decision (2026-07-18, Critical/decisions session):** Restrict `allow_private_networks=true` to admin for the sitemap-crawl path (covering the initial fetch plus every child-sitemap fetch and redirect hop). Analysts keep CSV import and ordinary bulk import; only admins may set the flag on a `sitemap_url` import. Add tests: a non-admin `sitemap_url` import with `allow_private_networks=true` is rejected; the same flag still works for non-admin CSV imports (no crawl). Update the `allow_private_networks` schema/API description to state the admin restriction. Small enough to fold into this Critical session — implementing now.
-- **Status:** needs-user-decision resolved → IMPLEMENTING THIS SESSION (admin-only allow_private_networks on sitemap crawl)
+- **Status:** fixed — admin-only gate live at imports.py:199-202 (403 before any fetch for non-admin sitemap+flag), schema description updated, 3 tests present (test_phase5_bulk_import.py:207-245); confirmed complete per PROGRESS.md Critical/decisions session.
 
 ### [LOW] Sitemap fetch timeout is per-operation, not total deadline; relative HTTPS redirects break TLS after pinning
 - **Area:** backend
@@ -656,7 +656,7 @@
 - **What's wrong:** Divider handle has `role="slider"` and arrow-key support (:307-310) but is missing `aria-orientation="horizontal"` — screen readers may announce it incorrectly or fail to convey the drag axis, confusing AT users about which keys to press.
 - **Evidence:** Line 294 `role="slider"` with aria-valuemin/max/now but no aria-orientation; lines 308-309 handle ArrowLeft/ArrowRight (horizontal movement).
 - **Suggested fix direction:** Add `aria-orientation="horizontal"` to the divider element at :294.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — the keyboard slider now declares `aria-orientation="horizontal"` on the divider handle. Check `npx tsc --noEmit`. `frontend/src/components/visual-diff-slider.tsx`.
 
 ### [MEDIUM] DOM diff tree child truncation at 120 is silent — no "N more" UI
 - **Area:** frontend
@@ -757,7 +757,7 @@
 - **What's wrong:** `parseDetail` (:28-38) extracts `body.detail` directly from server responses and surfaces it through `ApiError.message`. Pages display this via `err.message` without sanitization (login.tsx:33, sites.tsx:99, settings.tsx:49). If the backend returns a stack trace, internal path, or Pydantic validation details in `detail`, the UI shows it verbatim.
 - **Evidence:** api.ts:32 returns raw `body.detail`, :88 throws `ApiError(resp.status, await parseDetail(resp))`. All pages catch as `err instanceof ApiError ? err.message : "..."` with no scrubbing.
 - **Suggested fix direction:** Add sanitization in `parseDetail` that strips patterns matching stack traces (`  File "`, `Traceback`, paths like `/app/...`) or replaces them with generic messages. Defense-in-depth: also ensure backend never includes internal details in 4xx/5xx `detail` fields.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — API error detail parsing now maps internal-looking detail strings to a generic UI message while keeping plain validation text readable. Tests `api.test.ts parseDetail`. `frontend/src/lib/api.ts`, `frontend/tests/api.test.ts`.
 
 ### [MEDIUM] Alerts/health/remediation pages refetchInterval lacks self-documenting cleanup semantics
 - **Area:** frontend
@@ -919,7 +919,7 @@
 - **What's wrong:** The DESIGN-resend responsive table specifies the top nav collapses to a hamburger at <1024px with the wordmark anchored. The shell renders a single flex row of six NavLinks plus user email and sign-out at all widths — no breakpoint handling, no hamburger, no hidden states. On tablet/mobile the 64px nav overflows or wraps, breaking the nav-bar spec on first mobile use.
 - **Evidence:** Header markup has no `md:`/`lg:` visibility variants (verified: only container padding is responsive); index.css mobile rules touch only display type sizes and control heights.
 - **Suggested fix direction:** Add a <1024px collapse (hamburger or reduced link set) per the responsive table.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — the shell now keeps desktop navigation at `lg` widths and exposes a hamburger menu below 1024px with the wordmark anchored. Check `npx tsc --noEmit`. `frontend/src/components/app-shell.tsx`.
 
 ### [MEDIUM] body-md/button-sm font-lane assignment contradicts Master Prompt §4's literal table — spec is self-contradictory
 - **Area:** ui-ux / docs
@@ -1077,7 +1077,7 @@
 - **What's wrong:** The four headline stat values (uptime, queue depth, DB size, scans/24h) are classed `text-heading-lg`, but index.css defines only `text-heading-md` and `text-heading-sm`. The utility doesn't exist, so no size/weight/family rule applies and the page's most important numbers render at inherited 16px/400 — no token at all.
 - **Evidence:** `<p className="mt-1 text-heading-lg text-ink">{value}</p>`; grep of index.css for `heading-lg` returns nothing. Verified in-source.
 - **Suggested fix direction:** Replace with `text-heading-md`, or define the token deliberately if a larger stat size is wanted.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — health stat values now use the existing `text-heading-md` type utility. Check `rg text-heading-lg frontend/src` and `npx tsc --noEmit`. `frontend/src/pages/health.tsx`.
 
 ### [MEDIUM] Off-token border colors white/25 (focus) and white/40 (active) on hand-rolled selects and chip buttons
 - **Area:** ui-ux
@@ -1162,7 +1162,7 @@
 - **What's wrong:** Native `<select>` elements use `h-9` (36px desktop) with no `data-slot` attribute, so index.css mobile min-height rule (line 215-217: `[data-slot="input"]` → 48px at ≤767px) doesn't apply. Spec requires 44px minimum touch target on mobile.
 - **Evidence:** settings.tsx:175 `className="h-9 w-full rounded-md border..."` — no `data-slot`, no mobile breakpoint override; index.css:215 only targets `[data-slot="input"]`. Verified in-source.
 - **Suggested fix direction:** Add `data-slot="select"` to all native selects and extend index.css mobile rule to cover `[data-slot="select"]` with min-height 48px at ≤767px.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — native selects now opt into `data-slot="select"` and the mobile control-height rule applies the same 48px minimum used by inputs. Check `npx tsc --noEmit`. `frontend/src/index.css`, `frontend/src/pages/settings.tsx`, `frontend/src/pages/audit.tsx`, `frontend/src/components/remediation-hooks-panel.tsx`, `frontend/src/components/users-card.tsx`.
 
 ### [HIGH] Native checkbox inputs have sub-44px touch targets on mobile
 - **Area:** ui-ux
@@ -1170,7 +1170,7 @@
 - **What's wrong:** Native checkbox `<input type="checkbox">` elements use `size-4` (16px) with no touch-area expansion at mobile widths. Spec requires 44px minimum.
 - **Evidence:** site-detail.tsx:185 `<input type="checkbox" ... className="size-4 accent-ink" />` — no padding wrapper, no breakpoint increase. Verified in-source.
 - **Suggested fix direction:** Wrap checkboxes in a tap-area wrapper (`min-w-11 min-h-11 flex items-center justify-center` at ≤767px) or replace with a Checkbox component implementing mobile touch-target expansion.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — checkbox controls now sit inside mobile tap-area wrappers while preserving the visible 16px checkbox. Check `npx tsc --noEmit`. `frontend/src/pages/site-detail.tsx`, `frontend/src/pages/alerts.tsx`, `frontend/src/pages/remediation.tsx`.
 
 ### [HIGH] Incident timeline chart dots are 3-4.5px radius with no touch-area expansion
 - **Area:** ui-ux
@@ -1178,7 +1178,7 @@
 - **What's wrong:** Chart dots render at `r={payload.verdict === "flagged" ? 4.5 : 3}` (9px/6px diameter) with `onClick` handler but no invisible touch-area overlay. At mobile this falls well below 44px tap target.
 - **Evidence:** Line 159 `r={... ? 4.5 : 3}`; line 164 `onClick={() => onPointClick?.(payload.id)}` with cursor pointer but no expanded hit area. Verified in-source.
 - **Suggested fix direction:** Wrap each dot in an invisible `<circle>` with `r={22}` (44px diameter) at ≤767px, or use Recharts' `activeDot` with a larger mobile `r` and pointer-events handling.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — timeline points now include a transparent 44px mobile hit circle around clickable dots. Check `npx tsc --noEmit`. `frontend/src/components/incident-timeline.tsx`.
 
 ### [HIGH] Visual diff slider handle is 8px wide with no mobile expansion
 - **Area:** ui-ux
@@ -1186,7 +1186,7 @@
 - **What's wrong:** Slider handle div has `className="...w-4"` (16px tap area) with an inner visible pill at `h-8 w-2` (8px). No mobile breakpoint increases this. Spec requires 44px minimum.
 - **Evidence:** Line 300 `w-4` = 16px; inner pill line 313 `w-2` = 8px; no `sm:`/`md:` width increase. Verified in-source.
 - **Suggested fix direction:** Increase handle wrapper to `w-11` (44px) at ≤767px via `md:w-4 w-11` or similar responsive class.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — the visual diff divider handle now expands to a 44px wrapper below the `md` breakpoint while keeping the visible pill unchanged. Check `npx tsc --noEmit`. `frontend/src/components/visual-diff-slider.tsx`.
 
 ### [HIGH] Settings page flex rows with min-w-64 inputs may overflow at 375px mobile width
 - **Area:** ui-ux
@@ -1194,7 +1194,7 @@
 - **What's wrong:** Grid layouts use `grid-cols-1 sm:grid-cols-2` or `sm:grid-cols-3`, collapsing to 1-up below 640px, but flex rows with `min-w-64` (256px) inputs don't wrap until the min-width forces it. At 375px viewport, a 256px input + button + gaps may overflow or crush adjacent content.
 - **Evidence:** Line 349 `<div className="min-w-64 flex-1 space-y-1.5">` inside a `flex items-end gap-2` row — no `flex-wrap` or `flex-col` breakpoint.
 - **Suggested fix direction:** Add `flex-wrap` or change flex rows to `flex-col sm:flex-row` to stack input + button vertically at mobile widths.
-- **Status:** open
+- **Status:** fixed (2026-07-18, HIGH fix pass) — settings input/action rows now stack on mobile and restore horizontal alignment at `sm` widths, with min-width constrained to the wider breakpoint. Check `npx tsc --noEmit`. `frontend/src/pages/settings.tsx`.
 
 ### [MEDIUM] App shell user email truncates without breakpoint handling
 - **Area:** ui-ux
@@ -1607,4 +1607,3 @@ Run 2026-07-18, deliberately economical (one call each):
   successfully through the app container, and the bot's error handling absorbed
   the failures without crash-looping — behavior correct; noted as an environment
   observation, not a product finding.
-

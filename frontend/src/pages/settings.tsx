@@ -174,6 +174,7 @@ function SmtpCard() {
             <Label htmlFor="smtp-security">Connection security</Label>
             <select
               id="smtp-security"
+              data-slot="select"
               value={security}
               onChange={(e) => setSecurityE(e.target.value)}
               className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"
@@ -231,7 +232,7 @@ function SmtpCard() {
             </div>
           </div>
           <div className="flex flex-wrap items-end justify-between gap-4 border-t border-hairline pt-4">
-            <div className="flex items-end gap-2">
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
               <div className="space-y-1.5">
                 <Label htmlFor="smtp-test-to">Send a test to</Label>
                 <Input
@@ -345,8 +346,8 @@ function TelegramCard() {
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-64 flex-1 space-y-1.5">
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1 space-y-1.5 sm:min-w-64">
             <Label htmlFor="tg-token">Bot token</Label>
             <Input
               id="tg-token"
@@ -484,8 +485,8 @@ function AiCard() {
               )}
             </div>
           </div>
-          <div className="flex items-end gap-2">
-            <div className="min-w-64 flex-1 space-y-1.5">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1 space-y-1.5 sm:min-w-64">
               <Label htmlFor="gemini-key">API key</Label>
               <Input
                 id="gemini-key"
@@ -528,8 +529,8 @@ function AiCard() {
               </Button>
             </div>
           </div>
-          <div className="flex items-end gap-2">
-            <div className="min-w-64 flex-1 space-y-1.5">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1 space-y-1.5 sm:min-w-64">
               <Label htmlFor="ollama-model">Model</Label>
               <Input
                 id="ollama-model"
@@ -802,6 +803,7 @@ function ChannelsCard() {
                   <Label htmlFor="chan-site">Scope</Label>
                   <select
                     id="chan-site"
+                    data-slot="select"
                     value={siteId}
                     onChange={(e) => setSiteId(e.target.value)}
                     className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"

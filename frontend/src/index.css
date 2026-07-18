@@ -215,7 +215,8 @@ body {
   [data-slot="button"]:not([data-size="icon-xs"]):not([data-size="xs"]) {
     min-height: 44px;
   }
-  [data-slot="input"] {
+  [data-slot="input"],
+  [data-slot="select"] {
     min-height: 48px;
   }
 }

@@ -29,6 +29,23 @@ const TARGET_TYPES = [
   "remediation_execution",
 ]
 
+function auditActionClass(action: string): string {
+  const family = action.split(".", 1)[0]
+  if (action.endsWith(".delete") || action.endsWith(".deactivate") || action.endsWith(".revoke")) {
+    return "border-glow-red bg-glow-red text-accent-red"
+  }
+  if (action.endsWith(".create") || action.endsWith(".reactivate") || action.endsWith(".ack")) {
+    return "border-glow-green bg-glow-green text-accent-green"
+  }
+  if (action.endsWith(".update") || action.endsWith(".test") || action.endsWith(".reset")) {
+    return "border-glow-orange bg-glow-orange text-accent-orange"
+  }
+  if (family === "settings" || family === "notification_channel" || family === "api_key") {
+    return "border-glow-blue bg-glow-blue text-link"
+  }
+  return "border-hairline-strong bg-surface-elevated text-body"
+}
+
 function SnapshotBlock({ label, data }: { label: string; data: Record<string, unknown> }) {
   return (
     <div className="min-w-0 flex-1">
@@ -43,18 +60,21 @@ function SnapshotBlock({ label, data }: { label: string; data: Record<string, un
 function AuditRow({ entry }: { entry: AuditLogEntry }) {
   const [open, setOpen] = useState(false)
   const hasDetail = entry.before_json != null || entry.after_json != null
+  const targetLabel = entry.target_label ?? entry.target_id ?? entry.target_type
 
   return (
     <li className="border-b border-hairline px-5 py-4 last:border-b-0">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-code-md text-charcoal">
+        <span className="shrink-0 text-code-md text-charcoal">
           {new Date(entry.created_at).toLocaleString()}
         </span>
-        <Badge variant="secondary">{entry.action}</Badge>
-        <span className="text-body-sm text-body">
-          {entry.target_label ?? entry.target_id ?? entry.target_type}
+        <Badge variant="outline" className={auditActionClass(entry.action)}>
+          {entry.action}
+        </Badge>
+        <span className="min-w-0 flex-1 truncate text-body-sm text-body" title={targetLabel}>
+          {targetLabel}
         </span>
-        <span className="ml-auto text-caption text-mute">
+        <span className="ml-auto max-w-full truncate text-caption text-mute" title={entry.actor_email ?? "system"}>
           {entry.actor_email ?? "system"}
         </span>
         {hasDetail && (
@@ -121,6 +141,7 @@ export function AuditPage() {
           />
         </div>
         <select
+          data-slot="select"
           value={targetType}
           onChange={(e) => {
             setTargetType(e.target.value)

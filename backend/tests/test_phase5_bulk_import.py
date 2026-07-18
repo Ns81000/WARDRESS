@@ -1,6 +1,7 @@
 """Bulk site import — CSV + sitemap, per-row results (Phase 5, §7)."""
 
 import pytest
+import httpx
 from sqlalchemy import func, select
 
 from app.models import Site
@@ -93,6 +94,16 @@ class TestCsvImport:
         )
         assert resp.status_code == 422
 
+    async def test_oversized_csv_field_is_handled(self, client, auth_headers, monkeypatch):
+        monkeypatch.setattr(imports_router, "CSV_FIELD_MAX_CHARS", 32)
+        resp = await client.post(
+            "/api/sites/bulk-import",
+            headers=auth_headers,
+            json={"csv_text": "https://example.com/" + ("a" * 64)},
+        )
+        assert resp.status_code == 422
+        assert "CSV could not be parsed" in resp.text
+
 
 class TestSitemapImport:
     async def test_sitemap_urls_parsed(self, client, auth_headers, monkeypatch):
@@ -127,6 +138,31 @@ class TestSitemapImport:
         pages, children = _extract_sitemap_urls(doc)
         assert pages == []
         assert children == ["https://x.example.com/sitemap1.xml"]
+
+    async def test_sitemap_stream_stops_at_size_limit(self, monkeypatch):
+        monkeypatch.setattr(imports_router, "SITEMAP_MAX_BYTES", 100)
+
+        class CountingStream(httpx.AsyncByteStream):
+            def __init__(self) -> None:
+                self.chunks_sent = 0
+
+            async def __aiter__(self):
+                for _ in range(5):
+                    self.chunks_sent += 1
+                    yield b"x" * 40
+
+        stream = CountingStream()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=stream)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as sitemap_client:
+            with pytest.raises(ValueError, match="configured size limit"):
+                await imports_router._fetch_sitemap_bytes(
+                    sitemap_client, "https://site.example.com/sitemap.xml"
+                )
+
+        assert stream.chunks_sent == 3
 
 
 class TestPerRowIsolation:

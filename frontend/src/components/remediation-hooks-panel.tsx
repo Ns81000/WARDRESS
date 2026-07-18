@@ -61,9 +61,13 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
   const { user } = useAuth()
   const isAdmin = user?.role === "admin"
   const queryClient = useQueryClient()
+  // The hook list endpoint requires the admin role (it returns redacted
+  // infrastructure-config hints), so only fetch it for admins. Non-admins see
+  // the panel description and a note that an admin manages these.
   const hooks = useQuery({
     queryKey: ["remediation-hooks", siteId],
     queryFn: () => apiClient.listRemediationHooks(siteId),
+    enabled: isAdmin,
   })
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -174,6 +178,7 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                     <Label htmlFor="hook-action">Action type</Label>
                     <select
                       id="hook-action"
+                      data-slot="select"
                       value={actionType}
                       onChange={(e) => setActionType(e.target.value as RemediationActionType)}
                       className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"
@@ -214,12 +219,14 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                     </p>
                   </div>
                   <label className="flex cursor-pointer items-start gap-3 rounded-md border border-hairline p-3">
-                    <input
-                      type="checkbox"
-                      checked={autoExecute}
-                      onChange={(e) => setAutoExecute(e.target.checked)}
-                      className="mt-0.5 size-4 accent-ink"
-                    />
+                    <span className="flex min-h-11 min-w-11 items-center justify-center md:min-h-0 md:min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={autoExecute}
+                        onChange={(e) => setAutoExecute(e.target.checked)}
+                        className="size-4 accent-ink"
+                      />
+                    </span>
                     <span className="text-body-sm text-body">
                       Auto-execute without confirmation
                       <span className="mt-0.5 block text-caption text-accent-red">
@@ -246,12 +253,14 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
         </div>
       </CardHeader>
       <CardContent>
-        {hooks.isLoading ? (
+        {!isAdmin ? (
+          <p className="text-body-sm text-charcoal">
+            Remediation hooks are managed by an admin.
+          </p>
+        ) : hooks.isLoading ? (
           <p className="text-body-sm text-mute">Loading hooks…</p>
         ) : (hooks.data ?? []).length === 0 ? (
-          <p className="text-body-sm text-charcoal">
-            No hooks configured{isAdmin ? "" : " (an admin can add them)"}.
-          </p>
+          <p className="text-body-sm text-charcoal">No hooks configured.</p>
         ) : (
           <ul className="divide-y divide-hairline">
             {(hooks.data ?? []).map((h: RemediationHook) => (
