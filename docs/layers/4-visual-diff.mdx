@@ -1,52 +1,75 @@
 ---
 title: "Layer 4: Visual Diff"
-description: "Pixel-perfect computer vision analysis using Structural Similarity."
+description: "Computer-vision analysis combining structural similarity with perceptual hashing."
 icon: "image"
 ---
 
-The **Visual Diff Layer** evaluates what the user actually sees. Some defacements bypass the DOM and semantic layers by simply uploading a massive image that covers the entire screen (an image-based defacement). Layer 4 catches this immediately.
+The **Visual Diff Layer** evaluates what a visitor actually sees. Image-based defacements bypass the DOM and semantic layers by covering the page with a single large image; a subtle overlay can change the rendered result without much structural churn. Layer 4 compares full-page screenshots three ways and fuses the results.
 
+<Info>
+  Source: `backend/worker/detection/visual.py` (`layer4_visual_diff`). Screenshots are captured by Playwright/Chromium in the worker; comparison uses `scikit-image` (SSIM) and `imagehash` (pHash + dHash).
+</Info>
 
-## Deep Dive Mechanism
+## Three measurements, one score
 
 ```mermaid
-graph LR
-    BROWSER[Headless Chromium] --> SCREENSHOT_B[Baseline Image]
-    BROWSER --> SCREENSHOT_C[Current Image]
-    
-    SCREENSHOT_B --> GRAY[Convert to Grayscale Numpy Arrays]
-    SCREENSHOT_C --> GRAY
-    
-    GRAY --> BBOX[Apply Bounding Box Masks]
-    BBOX --> SSIM[Structural Similarity Index Measure]
-    
-    SSIM --> |1.0 - SSIM| SCORE[Scoring]
-    SCORE --> OUT[Layer 4 Score 0.0 - 1.0]
+flowchart LR
+    BS[Baseline PNG] --> GL[Grayscale · Pillow]
+    CS[Current PNG] --> GL
+    GL --> MK[Mask bbox regions · mid-gray 128]
+    MK --> RS[Scale to 683px width · crop shared top]
+    RS --> SSIM["SSIM · scikit-image"]
+    MK --> PH["pHash + dHash · 16×16 = 256-bit"]
+    SSIM --> SS[ssim_score = 1 − SSIM]
+    PH --> HS[hash_score = pHash + dHash norm]
+    SS --> F["score = 0.7·ssim + 0.3·hash"]
+    HS --> F
+    F --> OUT[Layer 4 score · 0.0–1.0]
+
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
 ```
 
-Wardress utilizes a headless Chromium instance (orchestrated via Playwright inside the Celery worker) to capture a full-page screenshot of the target site. The baseline screenshot is compared against the current screenshot using the `scikit-image` computer vision library.
-
 <Steps>
-  <Step title="Image Normalization">
-    Both images are decoded and converted to grayscale `numpy` arrays. This removes false positives caused by minor color banding or anti-aliasing artifacts that occur between browser rendering passes.
+  <Step title="Grayscale decode">
+    Both PNGs are decoded with Pillow and converted to grayscale (`convert("L")`). This removes false positives from minor color banding and anti-aliasing between render passes. An unreadable or absent screenshot on either side is a content problem, not a crash: the layer returns `0.0` with a note and the other eight layers still run.
   </Step>
-  <Step title="Masking (BBox Suppression)">
-    If the operator has defined any Bounding Box (`bbox`) suppression rules (e.g., hiding a cycling ad banner), those specific coordinate regions are overwritten with pure black pixels `(0, 0, 0)` on *both* arrays. The regions are mathematically excluded from structural variance.
+  <Step title="Bounding-box masking">
+    Any `bbox` suppression regions are filled with a uniform **mid-gray (value 128)** — not black — on a copy of both images, *before* any comparison. Both SSIM and the perceptual hashes see the mask. Coordinates are resolved against the **baseline** capture geometry (the image the operator drew on) and scaled to the current image through the width ratio.
   </Step>
-  <Step title="Structural Similarity Index (SSIM)">
-    The images are compared using the SSIM algorithm. Unlike raw pixel-by-pixel Euclidean distance calculations (which fail disastrously if a layout shifts by a single pixel), SSIM mimics human visual perception by measuring changes in structural information, luminance, and contrast over localized image windows.
+  <Step title="Align for SSIM">
+    Full-page captures of the same site legitimately differ in height (a new post pushes the footer down). Both images are scaled to a common `COMPARE_WIDTH` of **683px** (half the 1366px capture viewport), then cropped to the shorter of the two heights (bounded at 4096px). SSIM therefore compares the shared top region; the whole-image perceptual hashes still see the tails.
   </Step>
-  <Step title="Scoring">
-    The resulting SSIM is a float between `0.0` and `1.0`, where `1.0` means perfectly identical. Wardress inverts this (`1.0 - SSIM`) so the output aligns with the risk scale: a score of `0.0` means visually identical; `1.0` means entirely different.
+  <Step title="SSIM">
+    `structural_similarity` runs on the aligned grayscale arrays with `data_range=255.0` passed explicitly (the skimage docs warn the float estimate is otherwise wrong). SSIM ≈ 1.0 means structurally identical.
+  </Step>
+  <Step title="Perceptual hashes">
+    `imagehash.phash` and `imagehash.dhash` run at `hash_size=16` (a 256-bit hash, finer than the default 64-bit). Hamming distance is normalized by the 256 bits. These are robust to compression and minor rendering noise and corroborate the SSIM signal.
   </Step>
 </Steps>
 
-## Bounding Box Rules
+### Final score
 
-Because visual rendering is highly sensitive (even a 1px shift in a font rendering engine can trigger a minor difference), Wardress allows operators to draw boxes over dynamic regions via the dashboard.
+```python
+ssim_score = max(0.0, min(1.0, 1.0 - ssim))
+hash_score = max(0.0, min(1.0, phash_dist + dhash_dist))   # each realistically ≤ 0.5
+score      = 0.7 * ssim_score + 0.3 * hash_score
+```
 
-These rules are stored in the database as normalized fractions `(x, y, w, h)` (e.g., `0.1, 0.2, 0.5, 0.1`). 
+SSIM dominates (weight 0.7) because it perceives layout structure; the perceptual-hash distance (weight 0.3) confirms whole-page change. A score of `0.0` means visually identical; `1.0` means entirely different.
+
+<Note>
+  Because SSIM mimics human visual perception over localized windows — measuring luminance, contrast, and structure rather than raw per-pixel Euclidean distance — it does not collapse when the layout shifts by a single pixel, unlike naive pixel differencing.
+</Note>
+
+## Evidence recorded
+
+The findings row stores the raw `ssim` value, pHash and dHash distances in both bits and normalized form, the hash bit count, baseline and current image sizes, the compared size, and the list of suppressed regions when any were applied.
+
+## Bounding-box rules
+
+Operators draw boxes over dynamic regions (cycling banners, live tickers) in the dashboard. Rules are stored as normalized fractions `x,y,w,h` in `[0,1]` of the baseline capture.
 
 <Warning>
-  **Resolution Independence**: Because the boxes are stored as fractions rather than absolute pixel coordinates, they are resolution-independent. If the site dynamically grows vertically and is captured at a different total height tomorrow, the masked region proportionally scales to cover the exact same relative area.
+  **Resolution and height independence.** Because boxes are fractions of the baseline geometry and applied through the width ratio, they stay pinned to the same content even when the current capture grows taller. Scaling the vertical axis by each image's own height would drift the mask down a longer page — the layer deliberately avoids that.
 </Warning>

@@ -1,73 +1,103 @@
 ---
 title: "Layer 2: DOM Structure"
-description: "Detects structural tampering, script injections, and iframe hijacks."
+description: "Detects structural tampering, script injections, iframe hijacks, and hidden elements."
 icon: "code"
 ---
 
-The **DOM Structure Layer** inspects the underlying HTML tree of the page, completely independent of how it visually renders in the browser. Defacements often rely on injecting hidden elements, malicious scripts, or overriding style attributes to hide the original content.
+The **DOM Structure Layer** inspects the tag tree of the page, independent of how it renders. Defacements frequently inject hidden elements, add `<script>` or `<iframe>` nodes, or gut the original markup — all of which show up as structural deltas even when the visual layout is manipulated to hide them.
 
+<Info>
+  Source: `backend/worker/detection/dom.py` (`layer2_dom_structure`, `_tree_stats`, `parse_html`). Input: the suppression-filtered HTML of both sides.
+</Info>
 
-## Deep Dive Mechanism
+## Parsing: lxml with recovery
 
-```mermaid
-graph LR
-    HTML[Raw HTML] --> SUPPRESS[Suppression Engine]
-    SUPPRESS --> PARSE[BeautifulSoup DOM Parser]
-    
-    PARSE --> STATS[Extract Tree Statistics]
-    STATS --> |Tag Count, Tree Depth| DIFF_STATS[Statistical Divergence]
-    
-    PARSE --> NODES[Extract High-Risk Nodes]
-    NODES --> |Scripts, Iframes, Forms| DIFF_NODES[Node Set Difference]
-    
-    DIFF_STATS --> SCORE[Scoring Heuristics]
-    DIFF_NODES --> SCORE
-    SCORE --> OUT[Layer 2 Score 0.0 - 1.0]
+Layer 2 parses with **lxml's** `HTMLParser(recover=True)`, not BeautifulSoup. libxml2 recovers from arbitrarily broken markup without raising, so a malformed page never crashes the layer. A page that produces no tree at all (for example an empty string) is reported in evidence rather than raised.
+
+```python
+parser = lxml_html.HTMLParser(recover=True)
+root = lxml_html.document_fromstring(text, parser=parser)
 ```
 
-Layer 2 receives the **Suppression-Filtered** copy of the HTML. It parses the document into a tree using Python's `BeautifulSoup4` library and evaluates several structural heuristics:
+If **both** sides fail to parse, the layer returns `0.0` with a note. If **one** side parses and the other does not, that is treated as a drastic change and scored `1.0`.
+
+## Deep dive mechanism
+
+```mermaid
+flowchart LR
+    HTML[Suppressed HTML] --> P[lxml recover parse]
+    P --> S[Tree statistics]
+    S --> CH[Tag churn score × 0.6]
+    S --> SN[Sensitive-tag score]
+    CH --> M[max]
+    SN --> M
+    M --> OUT[Layer 2 score · 0.0–1.0]
+
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
+```
+
+The layer walks the tree once and extracts a statistics bundle for each side: total element count, maximum depth, per-tag counts, and dedicated counts for `<script>`, `<iframe>`, and hidden elements. It then computes two scores and takes the larger.
 
 <AccordionGroup>
-  <Accordion title="Tree Depth & Element Counts">
-    Massive shifts in the total number of HTML tags or the depth of the document tree indicate a severe rewrite or replacement of the page. If the baseline has 1,500 elements and a depth of 12, and the current scan drops to 30 elements and a depth of 3, the page structure has been gutted (a classic signature of a full defacement).
+  <Accordion title="Structural churn" icon="chart-column">
+    From the per-tag `Counter`s, the layer computes how many tag instances were added and removed. Churn is `sum(added) + sum(removed)`, saturating against half the tree:
+
+    ```python
+    churn_score = min(1.0, churn / (0.5 * total))
+    ```
+
+    where `total = max(baseline_elements, current_elements, 1)`. Roughly half the tree changing drives `churn_score` to `1.0`. This term is then weighted by `0.6` in the final score, so pure structural churn alone caps its contribution at `0.6`.
   </Accordion>
-  <Accordion title="Script Tag Injections">
-    The parser isolates all `<script>` nodes. It compares the `src` attributes and the inline script content hashes. Newly added scripts—especially those loading external resources not present in the baseline—heavily penalize the score.
+  <Accordion title="Sensitive-tag deltas" icon="triangle-exclamation">
+    New `<script>`, `<iframe>`, and hidden elements get a dedicated boost — one injected script on a 1,000-element page is negligible churn but a serious signal. Their combined increase saturates through an exponential:
+
+    ```python
+    sensitive = new_scripts + new_iframes + new_hidden
+    sensitive_score = 1 - math.exp(-0.7 * sensitive)
+    ```
+
+    A single new sensitive element yields ≈ 0.50; two yields ≈ 0.75; three ≈ 0.88.
   </Accordion>
-  <Accordion title="Iframe Hijacks">
-    Attackers frequently use hidden or absolutely-positioned `<iframe>` tags to overlay malicious content (clickjacking) or mine cryptocurrency silently. Layer 2 explicitly isolates and tracks iframe insertions.
-  </Accordion>
-  <Accordion title="Style Overrides">
-    Detects inline `style=""` attributes that force structural elements to `display: none` or `visibility: hidden` unexpectedly. Defacers often use this to hide the original site without deleting the code, ensuring their massive injected image takes focus.
+  <Accordion title="Hidden-element detection" icon="eye-slash">
+    An element counts as hidden if it carries the `hidden` attribute, or its inline `style` contains `display:none` / `display: none` / `visibility:hidden` / `visibility: hidden` (whitespace-insensitive). Defacers use hidden containers to stage injected content or overlay the original page.
   </Accordion>
 </AccordionGroup>
 
-## False Positive Suppression
+The final score is:
 
-If an operator defines a CSS Selector suppression rule (e.g., `#visitor-counter`), the `Suppression Engine` actively strips that subtree from *both* the baseline and the current scan *before* the DOM parser builds the tree. 
+```python
+score = max(churn_score * 0.6, sensitive_score)
+```
 
-This ensures that a dynamic widget adding child elements every second does not artificially inflate the structural risk score.
+Maximum tree-depth delta is recorded in evidence for context but does not directly drive the score.
+
+## Evidence recorded
+
+The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. When suppression content rules applied, a `suppression_applied` summary is attached.
+
+## False-positive suppression
+
+Layer 2 receives the **suppression-filtered** copy of both pages. If an operator defines a CSS-selector rule (for example `#visitor-counter`), the matching subtree is dropped from *both* baseline and current via lxml `drop_tree()` before the tree is analyzed — so a widget that adds child nodes every second does not inflate structural risk.
 
 <CodeGroup>
-```html Baseline (Stripped)
+```html Baseline (filtered)
 <body>
   <div id="hero">Welcome</div>
-  <!-- #visitor-counter removed by suppression engine -->
+  <!-- #visitor-counter dropped by suppression -->
 </body>
 ```
 
-```html Current (Stripped)
+```html Current (filtered)
 <body>
   <div id="hero">Welcome</div>
-  <!-- #visitor-counter removed by suppression engine -->
+  <!-- #visitor-counter dropped by suppression -->
 </body>
 ```
 </CodeGroup>
 
-## Evasion Mitigation
+## What this layer does and does not do
 
 <Warning>
-  **Evasion Attempt**: An attacker injects a malicious payload into an existing `<script>` tag by appending code to the end of a benign, minified jQuery library.
+  **Common misconception:** Layer 2 does *not* hash the text content of individual inline `<script>` tags. It counts scripts and diffs tag-set structure. A payload appended inside an existing inline script with no change to tag counts is caught by the [Content Hash](/layers/1-content-hash) (the bytes changed, opening the gate) and, if it introduces a new external domain, by [Link Audit](/layers/3-link-audit) and the fusion model — not by a per-script content hash here.
 </Warning>
-
-**Mitigation**: The DOM Structure layer hashes the exact text content of every inline script. Even if the DOM tree shape and element counts remain exactly identical, the hash of the injected script tag diverges from the baseline, driving the layer score up.

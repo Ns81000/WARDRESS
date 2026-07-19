@@ -1,53 +1,73 @@
 ---
 title: "Reusable Components"
-description: "The core UI components that drive the Wardress dashboard aesthetic."
+description: "The core UI components that drive the Wardress dashboard."
 icon: "puzzle-piece"
 ---
 
-The Wardress frontend utilizes a custom design system heavily inspired by high-end, cyberpunk-adjacent cybersecurity tooling. It avoids flat, generic corporate styling in favor of glowing indicators, rigid mono-spaced typography for data, and stark contrast.
-
-## Architecture
-
-```mermaid
-graph LR
-    COMPONENTS[src/components/] --> RADIX[Radix UI Primitives]
-    COMPONENTS --> TAILWIND[Tailwind CSS v4]
-    
-    RADIX --> ACCESSIBILITY[Screen Readers & Keyboard Nav]
-    TAILWIND --> STYLING[Dark Mode & Glows]
-    
-    ACCESSIBILITY --> SHADCN[Shadcn/UI Base]
-    STYLING --> SHADCN
-    
-    SHADCN --> WARDRESS[Wardress Custom Components]
-```
-
-## Core Visual Components
-
-### `<RiskGauge>`
-A circular SVG progress indicator used to visualize the `0.0 - 1.0` risk score. 
-It uses dynamic Tailwind classes to shift colors based on severity:
-- `< 0.3`: Green (`text-emerald-500`)
-- `0.3 - 0.7`: Yellow (`text-amber-500`)
-- `> 0.7`: Red (`text-red-500` with an SVG `drop-shadow` for a glowing effect).
-
-### `<StatusDot>`
-A pulsing micro-animation used in the Global Sites list to indicate a site's real-time status. It uses Tailwind's `@keyframes` to create a radar-ping effect.
-- **Pulsing Green**: Site is actively being monitored and is currently clean.
-- **Solid Red**: Site has crossed the flag threshold and requires immediate attention.
-- **Gray**: Site monitoring is paused or muted.
-
-### `<DomDiffTree>`
-A highly specialized component used exclusively in the `scan-detail` view. It takes a JSON representation of an HTML DOM diff and renders it recursively. It utilizes recursive React rendering, calling itself to render deeply nested child elements, allowing analysts to expand and collapse HTML nodes to find the exact line of an injected script.
-
-## Theme & Styling
-
-Wardress strictly enforces a **Dark Mode First** aesthetic. The `index.css` file defines global CSS variables tailored specifically for dark interfaces:
-
-- **Backgrounds**: Deep, unsaturated slates (`#0f172a`).
-- **Borders**: Subtle, semi-transparent whites (`rgba(255, 255, 255, 0.1)`).
-- **Typography**: Uses the `Inter` font family for readability and standard mono-spaced fonts for all code blocks, IPs, and hashes.
+The frontend has two component tiers: low-level primitives in `src/components/ui/` (Radix-backed, shadcn-style) and higher-level Wardress components in `src/components/` that compose them into the dashboard's forensic surfaces.
 
 <Info>
-  **Responsive Design**: While the core dashboard is optimized for large desktop monitors (as cybersecurity operations centers typically utilize 1080p+ screens), all components are fully responsive and degrade gracefully on mobile devices.
+  Source: `frontend/src/components/`. Primitives wrap the unified `radix-ui` package; charts use Recharts; toasts use Sonner.
+</Info>
+
+## Component layering
+
+```mermaid
+flowchart TB
+    RADIX["radix-ui primitives<br/>accessible · keyboard · a11y"] --> UI["ui/ · shadcn-style<br/>button · dialog · select · table · badge"]
+    TW["Tailwind v4 tokens<br/>@theme in index.css"] --> UI
+    RECHARTS[Recharts] --> WC
+    UI --> WC["Wardress components<br/>risk-gauge · dom-diff-tree · visual-diff-slider ..."]
+    WC --> PAGES[Pages]
+
+    classDef base fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class WC base;
+```
+
+## Primitives (`ui/`)
+
+Thin, restyled wrappers over Radix primitives, each mapped onto the Wardress design tokens: `button`, `badge` (both use Radix `Slot` for `asChild`), `dialog`, `label`, `select`, `input`, `card`, `table`, `sonner` (toaster), and `spotlight-card` (a pointer-tracking glow surface).
+
+## Core Wardress components
+
+### `<RiskGauge>`
+
+A radial gauge built on **Recharts** `RadialBarChart` (a 225°→−45° arc), not a hand-built SVG. It renders the fused risk as a percentage with a tone driven by `riskTone(risk, threshold)`:
+
+- `risk >= threshold` → red (`#ff2047`) — flagged.
+- `risk >= 0.15` → orange (`#ff801f`) — the scheduler's material-change band.
+- otherwise → green (`#11ff99`) — clean.
+
+The track is a hairline white; the value arc is the accent color at a thin stroke.
+
+### `<StatusDot>`
+
+A small status indicator used across the sites list to show a site's real-time state (monitored/clean, flagged, or paused), keeping the list scannable at a glance.
+
+### `<DomDiffTree>`
+
+Used only in the scan-detail view. It takes the JSON DOM-diff representation and renders it recursively — calling itself to render nested child nodes — so an analyst can expand and collapse HTML nodes to locate an injected element, with added and removed nodes visually distinguished.
+
+### `<VisualDiffSlider>`
+
+Overlays the current capture on the baseline with a draggable wipe handle, so an analyst can slide between the two images to spot pixel-level tampering without comparing side-by-side.
+
+### `<IncidentTimeline>`
+
+A Recharts-based visualization of a scan or site's event history.
+
+### Panels and cards
+
+Higher-level surfaces compose the primitives into feature panels: `finding-card` (per-layer evidence), `remediation-hooks-panel`, `suppression-panel`, `api-keys-card`, `users-card`, `bulk-import-dialog`, and `app-shell` (the authenticated layout with navigation). `wardress-mark` renders the brand mark.
+
+## Theme and styling
+
+The theme is dark-first over **true black** (`#000000`). Hairline borders replace drop shadows; accents render as glows rather than solid fills. Design tokens (colors, radii, font stacks) live in `index.css` under Tailwind v4's `@theme` block and are mapped onto shadcn's semantic names (`background`, `primary`, `border`, `ring`, …) so every primitive renders in the Wardress skin.
+
+- **Backgrounds:** true black canvas, near-black card surfaces (`#0a0a0c`).
+- **Borders:** subtle semi-transparent white hairlines (`rgba(255,255,255,0.06)`).
+- **Typography:** Inter for UI, Geist Mono for hashes/IPs/code, Fraunces and Instrument Sans for display.
+
+<Info>
+  Radix primitives give the component library accessible focus management, keyboard navigation, and screen-reader semantics out of the box.
 </Info>

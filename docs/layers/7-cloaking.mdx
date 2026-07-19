@@ -1,55 +1,70 @@
 ---
 title: "Layer 7: Cloaking"
-description: "Detects SEO spam and targeted evasion via User-Agent rotation."
+description: "Detects SEO-spam and targeted evasion via User-Agent rotation and intra-scan comparison."
 icon: "user-secret"
 ---
 
-The **Cloaking Layer** identifies attacks designed to hide from the site owner while simultaneously poisoning search engine results (SEO Spam) or targeting specific devices.
+The **Cloaking Layer** catches pages that serve different content to a search-engine crawler than to a browser — a common way defacement and SEO spam hide from the site owner while poisoning search results. It is an **intra-scan** comparison: it never touches the baseline, only the responses gathered within the current scan.
 
-A cloaked page inspects the incoming request (specifically the `User-Agent` HTTP header) and serves a completely different HTML document to a search engine crawler (like Googlebot) than it does to a standard browser. Because Wardress normally scans using a standard Desktop Chrome profile, a cloaked defacement would remain completely invisible to layers 1-5.
+<Info>
+  Source: `backend/worker/detection/cloaking.py` (`layer7_cloaking`, `_text_similarity`, `_usable`). The UA variants are fetched by the metadata prober (`worker/probe.py`).
+</Info>
 
+## Raw fetches, compared apples-to-apples
 
-## Deep Dive Mechanism
+The prober re-fetches the page over plain HTTP with **httpx (no JavaScript execution)** under three User-Agents:
+
+- `desktop_chrome` — the reference
+- `googlebot`
+- `mobile_safari`
+
+<Warning>
+  Each rotated UA is compared against the **desktop raw fetch**, raw-vs-raw. The Playwright-rendered primary DOM is deliberately *not* used here — comparing a raw fetch against a JS-rendered page would false-flag every JavaScript-heavy site.
+</Warning>
 
 ```mermaid
-graph LR
-    TRIGGER[Execution Triggered] --> FETCH_A[Fetch: Desktop Chrome]
-    TRIGGER --> FETCH_B[Fetch: Googlebot]
-    TRIGGER --> FETCH_C[Fetch: Mobile Safari]
-    
-    FETCH_A --> EXTRACT_A[Extract Visible Text A]
-    FETCH_B --> EXTRACT_B[Extract Visible Text B]
-    FETCH_C --> EXTRACT_C[Extract Visible Text C]
-    
-    EXTRACT_A --> JACCARD_1{Jaccard Similarity: A vs B}
-    EXTRACT_A --> JACCARD_2{Jaccard Similarity: A vs C}
-    
-    JACCARD_1 --> SCORE_CALC[Calculate Divergence]
-    JACCARD_2 --> SCORE_CALC
-    
-    SCORE_CALC --> OUT[Layer 7 Score 0.0 - 1.0]
+flowchart LR
+    REF[desktop_chrome · raw] --> RT[Reference visible text]
+    GB[googlebot · raw] --> C1{usable 2xx?}
+    MS[mobile_safari · raw] --> C2{usable 2xx?}
+    C1 -->|yes| J1[Jaccard vs reference]
+    C2 -->|yes| J2[Jaccard vs reference]
+    C1 -->|403/429/fail| SKIP1[Record · not scored]
+    C2 -->|403/429/fail| SKIP2[Record · not scored]
+    J1 --> WD[worst divergence]
+    J2 --> WD
+    WD --> SK["soft knee at 0.5"]
+    SK --> OUT[Layer 7 score · 0.0–1.0]
+
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
 ```
 
-Like Layer 6, this layer runs independently of the `layer1_hash` gate. It operates purely as an **intra-scan comparison**. It doesn't even use the baseline! It compares the responses of the *current* scan against each other.
-
 <Steps>
-  <Step title="Parallel Fetches">
-    The prober re-fetches the target URL concurrently using three distinct HTTP requests, each with a different User-Agent profile:
-    - `Desktop Chrome` (The Reference)
-    - `Googlebot`
-    - `Mobile Safari`
+  <Step title="Locate the reference">
+    The `desktop_chrome` variant is the reference. If it is missing, or its raw fetch is not a usable 2xx response, the layer returns `0.0` with a note — there is nothing to compare against.
   </Step>
-  <Step title="Text Extraction">
-    The raw HTML responses are scrubbed of all tags, scripts, and CSS, leaving only the visible text.
+  <Step title="Filter usable variants">
+    A variant is usable only when it had no error and returned an HTTP status in the 2xx range. Bot-blocking responses (403, 429, CAPTCHA challenges) are common and legitimate — they are recorded in evidence and **not** scored as cloaking.
   </Step>
-  <Step title="Jaccard Token Comparison">
-    The text strings are tokenized into sets of words. The Googlebot and Mobile Safari token sets are compared against the Desktop Chrome token set using a **Jaccard Similarity** algorithm (`Intersection over Union`).
+  <Step title="Compare">
+    For each usable rotated variant, if its content hash equals the reference's, similarity is `1.0` (identical page — short-circuit). Otherwise visible text is extracted from both and compared with a Jaccard token-set overlap (intersection over union). The worst divergence (`1.0 − similarity`) across variants is kept.
   </Step>
-  <Step title="Scoring">
-    Mild dynamic variations between UAs (like responsive navigation labels saying "Menu" on mobile vs "Home, About" on desktop) result in a low score due to an algorithmic "soft knee" at `0.5` overlap. If the token divergence exceeds 50% (indicating entirely different content was served to the bot), the layer score scales rapidly toward `1.0`.
+  <Step title="Score with a soft knee">
+    Token-set Jaccard exaggerates small edits on short pages, so a soft knee sits at 0.5:
+
+    ```python
+    score = (worst_divergence - 0.5) / 0.5 if worst_divergence > 0.5 else 0.0
+    ```
+
+    Divergence up to 50% scores `0.0` (responsive nav differences, minor dynamic bits); beyond 50% the score scales linearly toward `1.0`.
   </Step>
 </Steps>
 
 <Info>
-  **Bot Blocking Handling**: If a site employs WAF rules that actively block `Googlebot` (returning `403 Forbidden` or a CAPTCHA challenge), Layer 7 recognizes this as legitimate bot-blocking, notes it in the evidence, and returns a `0.0` risk score. It *only* penalizes readable `2xx` responses that heavily diverge.
+  **Bot-blocking is not cloaking.** A WAF that returns `403` to Googlebot is scored `0.0` and noted — the layer only penalizes readable 2xx responses that diverge heavily. Multi-region fetching via proxy nodes is an optional feature that is not configured; the evidence records it as unavailable.
 </Info>
+
+## Independence from the content hash
+
+Like Layer 6, this layer runs regardless of the Layer 1 gate. A cloaked page can serve identical content to the desktop scanner (matching the baseline hash exactly) while feeding a crawler an entirely different, spam-laden document. Only the UA rotation surfaces that divergence.

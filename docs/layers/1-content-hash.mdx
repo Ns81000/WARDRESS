@@ -4,64 +4,97 @@ description: "The foundational byte-level integrity check that gates the rest of
 icon: "hashtag"
 ---
 
-The **Content Hash Layer** is the first, fastest, and most fundamental layer in the Wardress detection pipeline. It performs a raw cryptographic comparison of the HTML bytes of the baseline against the current scan.
+The **Content Hash Layer** is the first, fastest, and most fundamental layer in the pipeline. It performs a cryptographic comparison of the normalized HTML of the trusted baseline against the current scan. It answers one binary question — *did the bytes change at all?* — and that answer decides how much of the rest of the pipeline needs to run.
 
+<Info>
+  Source: `backend/worker/hashing.py` (`normalize_content`, `content_sha256`, `layer1_hash_diff`). The gating logic lives in `backend/worker/detection/pipeline.py`.
+</Info>
 
-## Deep Dive Mechanism
+## What this layer produces
 
-The Wardress backend executes Layer 1 before instantiating any NLP models (`MiniLM`) or computer vision frameworks (`scikit-image`).
+| Property | Value |
+| :--- | :--- |
+| Stable key | `layer1_hash` |
+| Algorithm | SHA-256 over normalized HTML |
+| Score domain | Binary: `0.0` (identical) or `1.0` (any difference) |
+| Runs on | The **original**, unsuppressed HTML — always |
+| Gates | Layers 2, 3, 4, 5, 8 when identical |
+
+A hash cannot grade *how much* a page changed — that is the job of the downstream layers. Layer 1 only reports change versus no-change, and it is deliberately the one signal suppression rules can never silence: the hash is a tamper-evidence anchor.
+
+## Deep dive mechanism
 
 <Steps>
-  <Step title="Fetch Content">
-    The Celery worker fetches the target URL using `httpx`.
+  <Step title="Capture content">
+    The Celery worker captures the page. The exact HTML that was stored when the baseline was frozen is compared against the HTML captured on this scan.
   </Step>
-  <Step title="Normalize Bytes">
-    The raw HTML string is normalized using Python's `re` module to collapse sequences of `\r`, `\n`, `\t`, and spaces into a single space. This prevents insignificant formatting changes (like an editor changing spaces to tabs) from breaking the hash.
+  <Step title="Normalize conservatively">
+    Normalization removes only representation noise, never content. `normalize_content()` converts `\r\n` and `\r` to `\n`, right-strips every line, and strips leading and trailing blank lines. It does **not** collapse internal whitespace, lowercase, or reorder attributes — aggressive normalization would mask real defacement.
+
+    ```python
+    def normalize_content(html: str) -> str:
+        lines = html.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        normalized = "\n".join(line.rstrip() for line in lines)
+        return normalized.strip("\n")
+    ```
   </Step>
-  <Step title="Cryptographic Digest">
-    The normalized bytes are hashed using the `hashlib.sha256()` algorithm.
+  <Step title="Digest">
+    The normalized string is UTF-8 encoded (`errors="replace"`) and hashed with `hashlib.sha256()`.
   </Step>
-  <Step title="Comparison">
-    If the current scan's digest matches the `content_hash` in the active Baseline database record, Layer 1 emits a score of `0.0`. If it differs, it emits a score of `1.0`.
+  <Step title="Compare">
+    If the current digest equals the baseline's stored `content_hash`, the layer emits `0.0`. Any difference emits `1.0`. The evidence records both digests and the `identical` flag.
   </Step>
 </Steps>
 
-## Pipeline Gating (The Fail-Safe Bypass)
+<Note>
+  Dynamic-content false positives (timestamps, session tokens, rotating widgets) are **not** handled by hashing less. They are handled by [suppression rules](/layers/9-risk-fusion#suppression) that gate the downstream *scores*, while Layer 1 still faithfully reports that bytes changed.
+</Note>
+
+## Pipeline gating
+
+Layer 1 is the pipeline's largest performance optimization. A byte-identical document cannot differ in its DOM tree, its links, its rendered pixels, its visible text, or its semantics — so an identical hash skips those layers entirely.
 
 ```mermaid
-graph LR
-    FETCH[Worker HTTP Fetch] --> HTML[Raw HTML Bytes]
-    HTML --> NORM[Whitespace Normalizer]
-    NORM --> HASH[SHA-256 Hasher]
-    HASH --> CMP{Compare to Baseline}
-    CMP -- "Match (0.0)" --> SKIP[Skip Downstream Content Layers]
-    CMP -- "Mismatch (1.0)" --> RUN[Execute Downstream Content Layers]
+flowchart TB
+    H[Normalized HTML] --> D[SHA-256 digest]
+    D --> C{Equals baseline?}
+    C -->|Identical · 0.0| SKIP[Skip layers 2 · 3 · 4 · 5 · 8]
+    C -->|Different · 1.0| RUN[Run layers 2 · 3 · 4 · 5 · 8]
+    SKIP --> ALWAYS[Layers 6 · 7 · 9 run regardless]
+    RUN --> ALWAYS
+
+    classDef gate fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class C gate;
 ```
 
-Layer 1 acts as a massive performance optimization via **gating**. Because a byte-identical HTML document cannot possibly differ in its DOM tree, external links, visual rendering, or textual semantics, an identical hash automatically skips several downstream layers.
-
 <AccordionGroup>
-  <Accordion title="Layers Skipped (If Identical)">
-    These layers are hardcoded in `pipeline.py` within the `GATED_BY_IDENTICAL_HASH` set:
-    - **Layer 2** (DOM Structure)
-    - **Layer 3** (Link Audit)
-    - **Layer 4** (Visual Diff)
-    - **Layer 5** (Signatures)
-    - **Layer 8** (Semantics)
-    
-    *Note: Layer 4 is skipped because a byte-identical page can only differ visually due to non-deterministic rendering noise in the headless browser. The gate actively suppresses this false positive.*
+  <Accordion title="Skipped when identical" icon="ban">
+    Defined in `pipeline.py` as `GATED_BY_IDENTICAL_HASH`:
+    - **Layer 2** — DOM Structure
+    - **Layer 3** — Link Audit
+    - **Layer 4** — Visual Diff
+    - **Layer 5** — Signatures
+    - **Layer 8** — Semantics
+
+    Skipped layers are not silently dropped. Each records a `skip_result` with score `None` and the reason *"gated by layer 1: content hash identical, layer cannot produce new signal"*, so the scan output always shows why a layer did not run.
+
+    Layer 4 is included in the gate on purpose: a byte-identical page could only differ visually through non-deterministic rendering noise in the headless browser, which is exactly the false-positive class the gate exists to suppress.
   </Accordion>
-  <Accordion title="Layers Never Skipped">
-    - **Layer 6** (Security Metadata): TLS certificates and HTTP headers can shift entirely independently of the HTML payload.
-    - **Layer 7** (Cloaking): Bot-specific User-Agent variations are completely invisible to the baseline desktop fetch.
-    - **Layer 9** (Risk Fusion): The Scikit-Learn logistic regression model always executes. The skipped layers simply contribute `0.0` to the feature vector.
+  <Accordion title="Never skipped" icon="circle-check">
+    - **Layer 6** (Security Metadata): TLS certificates and HTTP headers shift independently of the HTML payload.
+    - **Layer 7** (Cloaking): per-User-Agent divergence is invisible to the primary content hash.
+    - **Layer 9** (Risk Fusion): always runs. Gated layers contribute `0.0` to the feature vector and are marked `ran=False`.
   </Accordion>
 </AccordionGroup>
 
-## Evasion Mitigation
-
 <Warning>
-  **Evasion Attempt**: An attacker tries to defeat the hash by injecting a malicious script and simultaneously deleting an equivalent number of benign bytes elsewhere to keep the file size identical.
+  **Baseline artifact missing.** If the baseline's stored HTML artifact is unavailable (a moved volume or lost file) but its stored digest survives, Layer 1 can still hash-compare. In that case the content-comparing layers (2, 3, 5, 8) are skipped with the reason *"baseline HTML artifact unavailable — content comparison impossible"* rather than false-flagging everything against an empty baseline. Layer 4 still runs because it compares screenshots, not HTML.
 </Warning>
 
-**Mitigation**: Wardress uses SHA-256, a cryptographic hash function resistant to collision attacks. It is computationally infeasible for an attacker to manipulate the file bytes to intentionally reproduce the same baseline hash digest. If a single bit is altered by an injection, the hash completely diverges, the gate opens, and layers 2-8 execute immediately.
+## Evasion resistance
+
+<Warning>
+  **Evasion attempt:** an attacker injects a malicious script and deletes an equal number of benign bytes elsewhere to keep the file size identical.
+</Warning>
+
+SHA-256 is a cryptographic hash: matching a target digest by manipulating unrelated bytes is computationally infeasible. Changing a single bit anywhere in the normalized content produces a completely different digest, the gate opens, and layers 2–8 run. File size is irrelevant — the hash depends on content, not length.

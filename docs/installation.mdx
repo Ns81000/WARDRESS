@@ -81,6 +81,19 @@ When you run the installation script, Wardress automatically handles the full se
   Once completed, the script will output a generated admin password. Log into **[http://localhost:8321](http://localhost:8321)** using the printed credentials.
 </Check>
 
+<Note>
+  **The installer is idempotent and safe to re-run.** An existing `.env` is never touched, admin seeding never resets an existing password, and re-running simply rebuilds and restarts the stack. On a re-run the installer reports "existing install detected" instead of printing new credentials.
+</Note>
+
+### Optional services
+
+The Telegram bot and the offline Ollama LLM are opt-in Compose profiles and are not started by default. Enable either after installation:
+
+```bash
+docker compose --profile telegram up -d   # two-way Telegram agent surface
+docker compose --profile ollama up -d      # fully offline incident explanations
+```
+
 <Warning>
   **The generated admin credentials are shown exactly once** during first installation. They are stored locally in your `.env` file (`ADMIN_PASSWORD`) and are not saved or transmitted anywhere else. Keep your `.env` file secure.
 </Warning>

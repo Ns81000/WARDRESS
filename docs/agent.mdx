@@ -4,44 +4,55 @@ description: "Interact with Wardress via a conversational AI interface."
 icon: "robot"
 ---
 
-Wardress features a conversational AI agent designed to help operators analyze incidents and manage the system. The agent acts as an advanced interface to the platform, leveraging the underlying data models and RBAC permissions.
+Wardress ships a conversational AI agent that helps operators analyze incidents and manage the system. It is an interface *over* the platform: every tool the agent can call runs the same domain logic as the REST routers, so RBAC, SSRF protection, audit logging, and detection semantics stay identical across surfaces. Nothing the model emits is trusted — role and confirmation gating happen in the dispatcher, not in the declarations the model sees.
 
-## Operating Surfaces
+<Info>
+  Source: `backend/app/agent/` (`engine.py`, `tools.py`, `guard.py`, `context.py`). The model is Gemini (configurable in Settings), with optional offline Ollama.
+</Info>
 
-You can interact with the agent through two primary surfaces:
+## Operating surfaces
 
-1. **Web Dashboard**: An integrated chat interface inside the React frontend.
-2. **Telegram Bot**: If configured in the `.env` settings, the agent can converse securely via Telegram.
+You can talk to the agent two ways, and conversation history is stored in the database and shared across both:
 
-Regardless of the surface used, the conversation history and context are synced and stored in the database.
+1. **Web dashboard** — the chat surface in the React frontend (`agent-web`).
+2. **Telegram bot** — an opt-in two-way surface (`agent-telegram`), enabled via the `telegram` Compose profile and configured in Settings.
 
-## Capabilities
+## Tools and tiers
 
-The agent can perform operations on your behalf, including:
-- Querying the health of the system.
-- Explaining defacement evidence in plain English.
-- Fetching scan histories and active alerts.
-- Acknowledging alerts and interacting with remediation hooks.
+Each tool declares a **tier** and a **minimum role**. Tiers 0–1 auto-execute; tier 2 and above are frozen and require explicit confirmation.
 
-## Safety & Action Confirmation Loop
+| Tier | Behavior | Tools |
+| :--- | :--- | :--- |
+| **0 · read** | Auto-execute (viewer+) | `list_sites`, `get_site`, `get_status_overview`, `list_scans`, `get_scan_findings`, `explain_incident`, `list_alerts` |
+| **1 · safe write** | Auto-execute (analyst+) | `run_scan_now`, `acknowledge_alert`, `mute_site`, `unmute_site` |
+| **2 · high impact** | Confirm required (analyst+) | `add_site`, `rebaseline_site`, `set_flag_threshold`, `set_scan_interval` |
+| **3 · destructive** | Confirm required (analyst+) | `delete_site` |
 
-Because an AI model can hallucinate or misinterpret a request, Wardress implements a strict **Action Confirmation Loop** for all high-impact actions. The agent model *never* executes state-changing actions directly.
+<Note>
+  Acknowledging an alert or running a scan-now is a **safe** action and executes without a confirmation card. Only changing configuration (thresholds, intervals), adding or rebaselining a site, or deleting a site pauses for confirmation.
+</Note>
+
+Tool results are compact JSON — ids truncated, no raw HTML or evidence blobs — for token efficiency and prompt-injection containment. Tool output is treated as *data*, never as instructions.
+
+## The action confirmation loop
+
+Because a model can misinterpret a request, all tier ≥ 2 actions go through a strict confirmation loop. The model never executes a state-changing action directly.
 
 <Steps>
-  <Step title="Model Proposal">
-    The user asks the agent to perform a high-impact action (e.g., "Acknowledge the alert for example.com"). The model decides to call the internal API tool.
+  <Step title="Model proposal">
+    The user asks for a high-impact action ("delete the staging site" or "set example.com's flag threshold to 0.8"). The model calls the corresponding tool.
   </Step>
-  <Step title="Frozen Pending State">
-    Instead of executing the action, the backend intercepts the tool call, freezes the arguments verbatim, and places it into a `pending` state.
+  <Step title="Frozen pending state">
+    The dispatcher intercepts the call, freezes the tool name and arguments verbatim into an `agent_pending_actions` row, and surfaces a confirmation card. Only one pending action per conversation exists at a time — proposing a new one cancels the prior.
   </Step>
-  <Step title="Explicit User Confirmation">
-    The UI renders a confirmation card (or the Telegram Bot sends a confirmation prompt). The user must explicitly click "Confirm" or "Reject".
+  <Step title="Explicit user confirmation">
+    The UI renders a confirmation card (or Telegram sends a prompt). The user presses Confirm or Cancel — a button, never model output. Cards expire after **10 minutes**.
   </Step>
-  <Step title="Execution">
-    Only after the user confirms does the system dispatch the action. At confirmation time, the system rigorously re-checks the user's RBAC permissions to ensure they are authorized to execute the action.
+  <Step title="Re-checked execution">
+    On confirm, ownership (the confirmer must be the proposer), the pending status, expiry, and the user's current role are all re-checked. Only then are the frozen arguments executed exactly as stored. A role change or expiry between propose and confirm fails closed.
   </Step>
 </Steps>
 
 <Warning>
-  **Safety Guarantee**: The LLM is never in the loop between the "propose" and "execute" phases. It cannot bypass the confirmation, modify the frozen arguments post-approval, or escalate its own privileges.
+  **Safety guarantee.** The LLM is never in the loop between propose and execute. It cannot bypass the confirmation, alter the frozen arguments after approval, or escalate its own privileges. The action is marked confirmed *before* execution so a crash can never leave a re-runnable pending row.
 </Warning>

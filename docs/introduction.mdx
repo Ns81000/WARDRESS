@@ -41,26 +41,58 @@ Unlike simple page monitors, Wardress uses a **fused risk model** that aggregate
   </Card>
 </CardGroup>
 
-## System Architecture
+## System architecture
 
-Wardress is modularly designed as a set of containerized services coordinated via **Docker Compose**.
+Wardress is a set of containerized services coordinated by **Docker Compose**. The API and the workers share one codebase but run as separate containers, communicating only through PostgreSQL (durable state) and Redis (the task broker).
 
 ```mermaid
-graph LR
-    UI[Frontend SPA] <--> API[FastAPI]
-    API <--> DB[(PostgreSQL)]
-    API <--> REDIS[(Redis)]
-    REDIS <--> CELERY[Workers]
-    CELERY --> PLAYWRIGHT[Playwright]
-    PLAYWRIGHT --> TARGET((Target Website))
+flowchart TB
+    UI[Frontend SPA<br/>React 19 · Vite]
+    subgraph HOST [Docker Compose stack]
+      direction TB
+      API["app · FastAPI<br/>REST · JWT · RBAC"]
+      DB[("db · PostgreSQL 16")]
+      REDIS[("redis · broker")]
+      BEAT["beat · Celery Beat<br/>60 s scheduler"]
+      WORKER["worker · Celery<br/>scan · alert · remediation"]
+      PW[Playwright / Chromium]
+      TG["telegram-bot<br/>(profile: telegram)"]
+      OL["ollama<br/>(profile: ollama)"]
+    end
+    TARGET((Monitored site))
+
+    UI <-->|:8321 → :8000| API
+    API <--> DB
+    API <--> REDIS
+    BEAT -->|enqueue due scans| REDIS
+    REDIS -->|dispatch tasks| WORKER
+    WORKER <--> DB
+    WORKER --> PW
+    PW -->|fetch · render · screenshot| TARGET
+    WORKER -->|raw httpx probes| TARGET
+    API -.serves screenshots read-only.-> WORKER
+    TG <--> DB
+    WORKER -.optional escalation.-> OL
+
+    classDef core fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    classDef opt fill:#37474f,stroke:#546e7a,color:#fff,stroke-dasharray:4 3;
+    class API,WORKER core;
+    class TG,OL opt;
 ```
 
-### Components
+### Core services
 
-- **Frontend SPA**: React 19 single-page application built with Vite and styled using Tailwind CSS v4. Includes visual diffing elements, full audit logs, and interactive controls.
-- **FastAPI Web Server**: High-performance asynchronous REST API that implements JWT session management, RBAC, and cryptographically hashed API keys.
-- **Celery & Redis**: An asynchronous task execution engine. **Celery Beat** schedules periodic probes, while **Celery Workers** perform parallel scans, alert dispatches, and webhooks.
-- **Playwright / Chromium Worker**: A headless browser instance running within the Celery worker that executes full DOM compilation, resource tracking, and screenshot captures.
+- **Frontend SPA** — a React 19 single-page app built with Vite and Tailwind CSS v4, served by the API container. Visual diffing, DOM diff trees, audit logs, and interactive controls.
+- **`app` (FastAPI)** — an async REST API with JWT session management, role-based access control, and cryptographically hashed API keys. Binds host port `8321` to container port `8000`. Mounts the scan artifact volume read-only to serve screenshots.
+- **`db` (PostgreSQL 16)** — durable store for sites, baselines, scans, findings, alerts, audit log, users, and encrypted settings.
+- **`redis`** — the Celery broker and the store for the health heartbeat.
+- **`worker` (Celery)** — executes scans (Playwright capture, the 9-layer pipeline), alert dispatch, and remediation webhooks. The only container that writes scan artifacts.
+- **`beat` (Celery Beat)** — a fixed 60-second scheduler that enqueues sites whose next scan is due; all adaptive-cadence state lives in the database.
+
+### Optional services (opt-in profiles)
+
+- **`telegram-bot`** — a two-way Telegram surface for the AI agent. Started with `docker compose --profile telegram up -d`.
+- **`ollama`** — a fully offline LLM for incident explanations, so no page text leaves your host. Started with `docker compose --profile ollama up -d`.
 
 <Card title="Ready to get started?" icon="rocket" href="/installation">
   Head over to the Installation guide to deploy Wardress on your local machine or server.

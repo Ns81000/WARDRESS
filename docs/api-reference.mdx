@@ -1,46 +1,146 @@
 ---
 title: "API Reference"
-description: "Integrate Wardress with external tools using our REST API."
+description: "Integrate Wardress with external tools using its REST API."
 icon: "code"
 ---
 
-Wardress is built API-first. Everything you can do in the dashboard, you can do via the REST API. 
+Wardress is API-first: everything the dashboard does runs over the same REST API. The interactive OpenAPI documentation (Swagger UI) is served locally at **`http://localhost:8321/docs`**, and the raw schema at `/openapi.json`.
 
-The interactive OpenAPI documentation (Swagger UI) is available locally at **`http://localhost:8321/docs`**.
+<Info>
+  All API routes are mounted under the `/api` prefix. The SPA is served from the same origin, so browser sessions and API-key scripts hit identical endpoints.
+</Info>
 
-## Authenticating API Requests
+## Authentication
 
-All external API requests to Wardress must be authenticated using a Bearer token.
+Two credential kinds arrive in the same `Authorization: Bearer` header and are routed by prefix:
+
+- **JWT access tokens** — issued to the dashboard on login, kept in memory, refreshed via an `HttpOnly` cookie.
+- **API keys** (`wk_...`) — for scripting. Looked up by SHA-256 hash and carrying the owning user's role, so RBAC applies identically to both.
 
 <Steps>
-  <Step title="Generate API Key">
-    Navigate to **Settings → API Keys** in the dashboard and click "Generate Key". The key will only be shown to you once.
+  <Step title="Generate an API key">
+    In the dashboard, go to **Settings → API Keys** and create a key. The raw key is shown **exactly once** — store it securely. It looks like `wk_` followed by 43 URL-safe characters.
   </Step>
-  <Step title="Include in Request Header">
-    Include this token in the `Authorization` header of your HTTP requests:
-    
+  <Step title="Send it as a Bearer token">
     ```bash
-    curl -H "Authorization: Bearer wk_your_api_key_here" http://localhost:8321/api/sites
+    curl -H "Authorization: Bearer wk_your_api_key_here" \
+      http://localhost:8321/api/sites
     ```
   </Step>
 </Steps>
 
-## Example: Managing Sites
+<Warning>
+  **API keys cannot manage credentials.** The endpoints that mint or manage credentials (`/api/api-keys`, `/api/auth/logout`) require an interactive JWT session and reject API keys — a leaked key must not be able to create more credentials. Everything else accepts either credential kind, subject to the key owner's role.
+</Warning>
+
+## Roles at the API boundary
+
+RBAC is enforced per endpoint via dependency factories, so a `403` (valid credential, insufficient role) is distinct from a `401` (no/invalid credential).
+
+| Role | Scope |
+| :--- | :--- |
+| **admin** | Everything, including users, settings, notification channels, remediation hooks, and the audit log. |
+| **analyst** | Sites, scans, rebaselines, suppression rules, alert acks, explains, reports, bulk import, and remediation confirm/dismiss. |
+| **viewer** | Read-only GET surfaces. |
+
+## Endpoint map
+
+<AccordionGroup>
+  <Accordion title="Auth · /api/auth" icon="key">
+    | Method | Path | Notes |
+    | :--- | :--- | :--- |
+    | POST | `/api/auth/login` | Email + password → access token (+ refresh cookie). |
+    | POST | `/api/auth/refresh` | Rotates the refresh token, returns a new access token. |
+    | POST | `/api/auth/logout` | Interactive session only. `204`. |
+    | GET | `/api/auth/me` | Current user. |
+  </Accordion>
+  <Accordion title="Sites, scans, suppression · /api/sites" icon="globe">
+    | Method | Path | Role |
+    | :--- | :--- | :--- |
+    | GET | `/api/sites` · `/api/sites/{id}` | any |
+    | POST | `/api/sites` | analyst |
+    | PATCH | `/api/sites/{id}` | analyst |
+    | DELETE | `/api/sites/{id}` | analyst |
+    | POST | `/api/sites/{id}/rebaseline` | analyst · `202` |
+    | POST | `/api/sites/{id}/scan-now` | analyst |
+    | GET | `/api/sites/{id}/scans` · `/scans/{scanId}` | any |
+    | POST | `/api/sites/{id}/scans/{scanId}/explain` | analyst |
+    | GET/POST/DELETE | `/api/sites/{id}/suppression-rules[/{ruleId}]` | GET any · write analyst |
+    | POST | `/api/sites/bulk-import` | analyst |
+  </Accordion>
+  <Accordion title="Alerts · /api/alerts" icon="bell">
+    | Method | Path | Role |
+    | :--- | :--- | :--- |
+    | GET | `/api/alerts` (paged) · `/api/alerts/{id}` | any |
+    | POST | `/api/alerts/{id}/ack` | analyst |
+  </Accordion>
+  <Accordion title="Remediation · /api" icon="bolt">
+    | Method | Path | Role |
+    | :--- | :--- | :--- |
+    | GET/POST/PATCH/DELETE | `/api/sites/{id}/remediation-hooks[/{hookId}]` | admin |
+    | GET | `/api/remediation/executions` (`?pending_only=`) | any |
+    | POST | `/api/remediation/executions/{id}/confirm` | analyst |
+    | POST | `/api/remediation/executions/{id}/dismiss` | analyst |
+  </Accordion>
+  <Accordion title="Reports & artifacts" icon="file-lines">
+    | Method | Path | Notes |
+    | :--- | :--- | :--- |
+    | GET | `/api/reports/{scanId}/markdown` | Markdown export. |
+    | GET | `/api/reports/{scanId}/pdf` | WeasyPrint PDF. |
+    | GET | `/api/artifacts/baselines/{id}/screenshot` · `/html` | Baseline artifacts. |
+    | GET | `/api/artifacts/scans/{id}/screenshot` · `/html` | Scan artifacts. |
+  </Accordion>
+  <Accordion title="Admin · users, settings, audit, keys" icon="shield-halved">
+    | Method | Path | Role |
+    | :--- | :--- | :--- |
+    | GET/POST/PATCH/DELETE | `/api/users[/{id}]` | admin |
+    | GET/POST/DELETE | `/api/api-keys[/{id}]` | session (own keys) |
+    | GET | `/api/audit-log` (paged) | admin |
+    | GET/PUT/POST | `/api/settings/{smtp,telegram,gemini,ollama}` (+ `/test`) | admin |
+    | * | `/api/notification-channels` | admin |
+  </Accordion>
+  <Accordion title="Agent · /api/agent" icon="robot">
+    | Method | Path |
+    | :--- | :--- |
+    | GET/POST/DELETE | `/api/agent/conversations[/{id}]` |
+    | POST | `/api/agent/conversations/{id}/messages` |
+    | POST | `/api/agent/actions/{id}/{confirm,cancel}` |
+  </Accordion>
+  <Accordion title="Operations · /api/health" icon="heart-pulse">
+    | Method | Path | Notes |
+    | :--- | :--- | :--- |
+    | GET | `/api/health/live` | Liveness (unauthenticated; used by the container healthcheck). |
+    | GET | `/api/health` · `/api/health/details` | Queue depth, heartbeats, throughput. |
+  </Accordion>
+</AccordionGroup>
+
+## Example: managing sites
 
 <CodeGroup>
 
-```bash List Sites
+```bash List sites
 curl -X GET "http://localhost:8321/api/sites" \
   -H "Authorization: Bearer wk_your_api_key_here"
 ```
 
-```bash Trigger Manual Scan
-curl -X POST "http://localhost:8321/api/sites/123/scan" \
+```bash Trigger a manual scan
+curl -X POST "http://localhost:8321/api/sites/{site_id}/scan-now" \
+  -H "Authorization: Bearer wk_your_api_key_here"
+```
+
+```bash Acknowledge an alert
+curl -X POST "http://localhost:8321/api/alerts/{alert_id}/ack" \
   -H "Authorization: Bearer wk_your_api_key_here"
 ```
 
 </CodeGroup>
 
-## Hashed API Keys
+## Request limits and rate limiting
 
-For security, API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted or reused. If you lose your API key, you must revoke it and generate a new one via the dashboard.
+- A request-body size limit is enforced by middleware (`413 Request body too large` when exceeded).
+- A **per-IP** rate limit runs in middleware before authentication; a **per-user** limit runs in the auth dependency. Both return `429` with a `Retry-After` header. Tune via `RATE_LIMIT_PER_IP`, `RATE_LIMIT_PER_USER`, and `RATE_LIMIT_WINDOW_SECONDS` (see [Configuration](/configuration)).
+- CORS is locked to explicitly configured origins (`CORS_ALLOWED_ORIGINS`); by default the SPA is same-origin and no cross-origin request is permitted.
+
+## Hashed API keys
+
+API keys are stored only as SHA-256 hashes. A database compromise cannot recover usable tokens. Lost a key? Revoke it and generate a new one — there is no recovery of the raw value.

@@ -1,54 +1,79 @@
 ---
 title: "Layer 6: Security Metadata"
-description: "Monitors TLS certificates, security headers, and domain hijacking indicators."
+description: "Monitors TLS certificates, security headers, and robots.txt — independent of the HTML body."
 icon: "shield-check"
 ---
 
-The **Security Metadata Layer** runs entirely independent of the page's HTML body. It focuses on the network transport and server configuration. Even if the `layer1_hash` is completely identical, this layer will still execute because metadata changes are invisible to content hashing.
+The **Security Metadata Layer** runs on the network transport and server configuration, not the page body. Even when the content hash is identical, this layer still executes — metadata changes are invisible to content hashing. It combines three weak, independent signals so that metadata alone pushes a scan toward "worth a look" rather than "confirmed defacement".
 
+<Info>
+  Source: `backend/worker/detection/metadata.py` (`layer6_security_metadata`, `_tls_diff`, `_header_diff`, `_robots_diff`). Inputs are captured by the metadata prober (`worker/probe.py`) and compared against what the baseline stored.
+</Info>
 
-## TLS Certificate Auditing
+## Signal fusion
 
 ```mermaid
-graph LR
-    PROBER[HTTPX Async Prober] --> REQ[Target Server]
-    REQ --> RESP[HTTP Response]
-    REQ --> HANDSHAKE[TLS Handshake Context]
-    
-    HANDSHAKE --> CERT[Extract Peer Certificate]
-    CERT --> ISSUER[Issuer / Expiry check]
-    CERT --> FINGERPRINT[Cryptographic Fingerprint]
-    
-    RESP --> HEADERS[Extract Security Headers]
-    HEADERS --> HSTS[HSTS / CSP / X-Frame-Options]
-    
-    ISSUER --> SCORE
-    FINGERPRINT --> SCORE
-    HSTS --> SCORE
-    SCORE --> OUT[Layer 6 Score 0.0 - 1.0]
+flowchart LR
+    PR[Metadata prober · httpx] --> TLS[TLS certificate diff]
+    PR --> HDR[Security header diff]
+    PR --> RB[robots.txt diff]
+    TLS --> SUM["score = min(1.0, tls + hdr + robots)"]
+    HDR --> SUM
+    RB --> SUM
+    SUM --> OUT[Layer 6 score · 0.0–1.0]
+
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
 ```
 
-Domain hijacks (e.g., DNS poisoning, BGP hijacking, or a rogue employee pointing the DNS to a fast-flux server) often result in the attacker serving the site over HTTP, or provisioning a new, unauthorized SSL certificate (like Let's Encrypt) to avoid browser warnings.
+The three sub-scores are **added** and clamped to `1.0`. Each is deliberately bounded so no single benign event maxes the layer.
 
-Wardress monitors the TLS handshake directly at the socket level:
-- **Issuer/Subject Shifts**: Detects if the Certificate Authority (CA) changes unexpectedly (e.g., shifting from DigiCert to Let's Encrypt).
-- **Fingerprint Tracking**: A legitimate certificate renewal (same CA, same subject, new expiry) is recognized as benign. However, a sudden shift in the certificate's cryptographic SHA-256 fingerprint *without* a corresponding expiry update raises a high-risk flag.
-- **Downgrades**: Dropping from HTTPS to HTTP triggers an absolute maximum alert (`1.0`), as it implies the secure transport layer has been completely stripped.
+## TLS certificate audit
 
-## HTTP Security Headers
+The prober captures the peer certificate's fingerprint, issuer, subject, and validity window. `_tls_diff` grades the change:
 
-Attackers who gain partial server access (but cannot alter the database or static files) may strip security headers to facilitate secondary attacks (like XSS or Clickjacking). Wardress tracks changes to:
-- `Strict-Transport-Security` (HSTS)
-- `Content-Security-Policy` (CSP)
-- `X-Frame-Options`
-- `X-Content-Type-Options`
-
-If these headers are removed or weakened compared to the baseline, the layer contributes a moderate risk score.
-
-## `robots.txt` Poisoning
-
-Defacers or SEO spammers will often alter `robots.txt` to instruct search engines to index their injected spam pages, or to drop the legitimate site from search indexes entirely. Layer 6 fetches `/robots.txt` alongside the main request and tracks its exact hash for unapproved modifications.
+| Situation | Score |
+| :--- | :---: |
+| No TLS data on either side (HTTP site or probe unavailable) | 0.0 |
+| TLS data newly available, no baseline to compare | 0.0 |
+| Fingerprint changed — **routine reissue** (same issuer, same subject) | 0.1 |
+| Fingerprint changed — **different issuer or subject** (MITM / hijack / migration) | 0.55 |
+| Certificate reported `expired` | ≥ 0.5 |
+| Baseline had TLS but current probe returned **none** | 0.6 |
 
 <Warning>
-  **Evasion Mitigation**: Because Layer 6 executes independently of the Layer 1 Content Hash, an attacker cannot hide a DNS hijack by mirroring the legitimate HTML perfectly. The moment they serve that HTML using a different TLS certificate, Layer 6 alerts the fusion engine.
+  **Correction on transport downgrades.** A lost TLS handshake where the baseline previously had one (`baseline TLS present, current absent`) scores **0.6**, not an automatic `1.0`. This is a strong signal but is fused with the other layers rather than unilaterally maxing the risk score. The prior docs' claim of a hard `1.0` HTTPS→HTTP alert does not match the code.
+</Warning>
+
+The key distinction the layer draws is between a *legitimate renewal* (same CA and subject, new fingerprint and expiry — scored 0.1) and a *suspicious swap* (new issuer or subject — scored 0.55), which is the signature of a hijack or unauthorized re-provisioning.
+
+## HTTP security headers
+
+`_header_diff` tracks six headers:
+
+- `Content-Security-Policy`
+- `Strict-Transport-Security` (HSTS)
+- `X-Frame-Options`
+- `X-Content-Type-Options`
+- `Referrer-Policy`
+- `Permissions-Policy`
+
+Headers **disappearing or weakening** is a downgrade; headers **appearing** is an improvement and is recorded but not penalized.
+
+```python
+score = min(0.8, 0.3 * len(removed) + 0.1 * len(weakened))
+```
+
+<Note>
+  If either side has no captured headers (an HTTP-only site, a degraded probe, or a Phase 1-era baseline), the comparison is **skipped** with a note rather than reporting every header as "removed" — a false positive the layer explicitly avoids.
+</Note>
+
+## robots.txt
+
+The prober fetches `/robots.txt` alongside the main request. Defacers and SEO spammers alter it to index injected spam or drop the legitimate site from search. Any change scores a flat `0.15`, with added and removed lines recorded (capped at 30 each). Identical or absent-on-both-sides scores `0.0`.
+
+## Independence from the content hash
+
+<Warning>
+  **Evasion mitigation.** Because Layer 6 runs regardless of the Layer 1 gate, an attacker cannot hide a DNS or BGP hijack by mirroring the legitimate HTML perfectly. The moment the mirrored content is served under a certificate with a different issuer or subject, `_tls_diff` contributes 0.55 to the fusion engine — even though the content hash matched.
 </Warning>

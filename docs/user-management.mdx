@@ -35,7 +35,11 @@ User sessions are secured using JWT (JSON Web Tokens) with robust rotation mecha
 Users can generate API keys for automated scripting against the Wardress REST API.
 
 <Warning>
-  **RBAC Inheritance**: API keys strictly inherit the role of the user who created them. If an Analyst creates an API key, that key cannot be used to modify global SMTP settings. If a user is deactivated, all of their API keys immediately stop functioning.
+  **RBAC inheritance**: API keys strictly inherit the role of the user who created them. An Analyst's key cannot modify global SMTP settings. If a user is deactivated, all of their API keys immediately stop functioning.
 </Warning>
 
-API keys are also stored as SHA-256 hashes. The raw key is shown exactly once upon creation.
+<Note>
+  **Keys cannot manage credentials.** The credential-management endpoints (creating/revoking API keys, logout) require an interactive JWT session and reject API keys outright — a leaked key can never mint or manage other credentials, regardless of its owner's role.
+</Note>
+
+API keys are stored only as SHA-256 hashes (`wk_` prefix + 43 URL-safe characters). The raw key is shown exactly once upon creation, and revoked keys are retained as rows so the audit trail and last-used history survive and the hash can never be re-issued.

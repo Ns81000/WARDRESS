@@ -22,7 +22,7 @@ Because automated infrastructure changes are highly destructive (and a false pos
 
 <Steps>
   <Step title="Pending Confirm">
-    When a scan exceeds the site's `flag_threshold`, the webhook is queued in a `pending_confirm` state. It will **not execute**.
+    When a flagged scan's risk score meets or exceeds the **hook's own `trigger_threshold`**, an execution row is created in the `pending_confirm` state. It will **not execute**. Each `(hook, scan)` pair is unique, so an alert redelivery never double-fires a hook.
   </Step>
   <Step title="Operator Approval">
     An operator (Admin or Analyst) must log into the dashboard or use the Telegram Bot to explicitly approve the pending remediation.
@@ -31,7 +31,7 @@ Because automated infrastructure changes are highly destructive (and a false pos
     Once confirmed, the hook transitions to `queued` and is dispatched to a Celery worker.
   </Step>
   <Step title="Succeeded / Failed">
-    The worker executes the HTTP POST. If the destination server returns a non-2xx status, it transitions to `failed` and records the HTTP response in the audit logs, but *it never crashes the primary scan*.
+    A **separate** Celery task (never the scan body) executes the HTTP POST with a 20-second timeout. A non-2xx or unreachable destination transitions the row to `failed` with a user-safe detail. The webhook URL is never echoed into that detail because it may embed a credential — and a broken hook *never* affects scanning.
   </Step>
 </Steps>
 

@@ -1,52 +1,78 @@
 ---
 title: "Layer 8: Semantics"
-description: "NLP-based semantic drift detection using local embeddings."
+description: "Local NLP: aggression lexicon, topic shift, and MiniLM semantic drift."
 icon: "brain"
 ---
 
-The **Semantics Layer** goes beyond exact string matching (like Layer 5) and attempts to understand the *meaning* of the text on the page. If a corporate homepage is replaced with political propaganda, the underlying DOM structure might look similar, but the semantics have completely drifted.
+The **Semantics Layer** goes beyond exact string matching. If a corporate homepage is rewritten into propaganda, the markup may barely move but the *meaning* has drifted entirely. Layer 8 measures that with a neural sentence embedder, alongside a graded aggression lexicon and defacement topic keywords.
 
+<Info>
+  Source: `backend/worker/detection/semantics.py` (`layer8_semantics`, `embed_text`, `cosine_similarity`). It reuses Layer 5's `extract_visible_text` and `_new_text`.
+</Info>
 
-## Local, CPU-Bound Processing
+## Local, CPU-bound, private
 
-Wardress performs all semantic analysis **locally on the worker node**. It does not send page text to external APIs (like OpenAI) during the high-throughput scanning phase. This ensures privacy, zero API costs, and compliance with strict data sovereignty requirements.
+All semantic analysis runs **locally on the worker**, CPU-only. Page text is never sent to an external API during scanning — zero API cost, and data stays on your infrastructure. The MiniLM model is process-cached after first load.
 
-## Evaluation Mechanisms
+<Note>
+  Optional Gemini/Ollama escalation (§8) is a separate path invoked by the scan task only for scans in an ambiguous risk band. The local pass never depends on it: the `escalation` evidence key records when it was not evaluated, and its absence never blocks scoring.
+</Note>
+
+## Three signals, take the max
 
 ```mermaid
-graph LR
-    TEXT[Extracted New Text] --> TOPIC[Topic Keyword Shift]
-    TEXT --> AGGRESSION[Aggression Lexicon]
-    TEXT --> MINILM[MiniLM L6 Neural Network]
-    
-    MINILM --> EMB_C[Current Scan Vector 384D]
-    BASELINE_TEXT[Baseline Text] --> MINILM_B[MiniLM L6 Neural Network]
-    MINILM_B --> EMB_B[Baseline Vector 384D]
-    
-    EMB_C --> COSINE{Cosine Similarity}
-    EMB_B --> COSINE
-    
-    TOPIC --> MAX{Max Value}
-    AGGRESSION --> MAX
-    COSINE --> MAX
-    
-    MAX --> OUT[Layer 8 Score 0.0 - 1.0]
+flowchart LR
+    HTML[Suppressed HTML] --> VT[Extract visible text]
+    VT --> NT[New text vs baseline]
+    NT --> AG[Aggression lexicon · weighted]
+    NT --> TP[Topic keywords]
+    VT --> EMB[MiniLM 384-d embeddings]
+    EMB --> COS[Cosine · baseline vs current]
+    AG --> M[max]
+    TP --> M
+    COS --> M
+    M --> OUT[Layer 8 score · 0.0–1.0]
+
+    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class OUT out;
 ```
 
-This layer evaluates the visible text using three distinct methods, taking the `max()` of the three scores as the final layer output:
+### 1. Aggression lexicon (new text)
 
-### 1. Topic Keyword Shift
-It scans the *newly added text* against categorized threat topics (e.g., `breach_bragging`, `credential_theft`, `defacement_meta`). If words like "infiltrated", "database dumped", or "mirrored on zone" appear where they didn't exist before, the topic score spikes.
+A graded lexicon scores threatening language on the new text — for example `no one is safe` (0.5), `you can't stop us` (0.5), `death to` (0.6), `pay the price` (0.4), `traitors` (0.3). The total weight saturates through an exponential:
 
-### 2. Aggression Lexicon
-It applies a graded weight lexicon to the new text to measure aggression. Phrases like "pay the price", "no one is safe", or "traitors" carry high weights. The score is calculated using an exponential decay function based on the total aggression weight found.
+```python
+aggression_score = 1 - math.exp(-1.2 * aggression_weight)
+```
 
-### 3. Semantic Drift (MiniLM-L6-v2)
-Wardress loads the `all-MiniLM-L6-v2` neural network model into memory (optimized for CPU execution).
-1. It generates a 384-dimensional vector embedding for the entire Baseline visible text.
-2. It generates a 384-dimensional vector embedding for the Current scan's visible text.
-3. It calculates the **Cosine Similarity** between the two vectors.
+### 2. Topic keywords (new text)
+
+Four categories of defacement-adjacent vocabulary are matched: `breach_bragging` (breached, compromised, infiltrated), `credential_theft` (database dumped, leaked credentials), `defacement_meta` (index.html replaced, mirrored on zone), and `contact_defacer` (contact us on telegram, `t.me/...`). The score scales with the number of categories hit:
+
+```python
+topic_score = min(0.7, 0.35 * len(topic_hits))
+```
+
+### 3. Semantic drift (MiniLM-L6-v2)
+
+Wardress loads `sentence-transformers/all-MiniLM-L6-v2` (CPU). It embeds the **full** baseline visible text and the full current visible text into 384-dimensional vectors and computes their cosine similarity. The drift score rises linearly as similarity falls below `0.85`:
+
+```python
+drift_score = max(0.0, min(1.0, (0.85 - semantic_similarity) / 0.85))
+```
+
+A cosine of `1.0` is identical meaning; meaning-level rewrites typically drop well below `0.8`.
 
 <Tip>
-  **Cosine Similarity Thresholds**: A cosine similarity of `1.0` means identical semantic meaning. If the similarity drops below `0.85`, it indicates a severe shift in meaning (semantic drift). The layer score scales up linearly as the cosine similarity drops below this threshold.
+  The drift score is computed only when both sides have non-empty visible text. If the MiniLM model cannot be loaded (a fresh container without the baked model and no network), `embed_text` returns `None`, similarity is unavailable, and drift contributes `0.0` — the scan still runs on the other two signals and the remaining layers. The model failing must never kill a scan.
 </Tip>
+
+### Final score
+
+```python
+score = max(aggression_score, topic_score, drift_score)
+```
+
+## Evidence recorded
+
+Aggression hits with weights, the aggression weight sum, topic hits per category, the rounded semantic similarity (or `null` when unavailable), the drift score, new-text character count, and the escalation status.
