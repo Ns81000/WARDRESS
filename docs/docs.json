@@ -47,6 +47,14 @@
         ]
       },
       {
+        "group": "Frontend SPA",
+        "pages": [
+          "frontend/architecture",
+          "frontend/scan-detail",
+          "frontend/components"
+        ]
+      },
+      {
         "group": "Administration",
         "pages": [
           "configuration",

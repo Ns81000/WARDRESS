@@ -5,12 +5,12 @@ icon: "shield-halved"
 ---
 
 <img
-  className="block dark:hidden"
+  className="h-32 block dark:hidden"
   src="/images/wardress-logo.svg"
   alt="Wardress Logo Light"
 />
 <img
-  className="hidden dark:block"
+  className="h-32 hidden dark:block"
   src="/images/wardress-logo.svg"
   alt="Wardress Logo Dark"
 />
@@ -55,6 +55,16 @@ Unlike simple page monitors, Wardress uses a **fused risk model** that aggregate
 ## System Architecture
 
 Wardress is modularly designed as a set of containerized services coordinated via **Docker Compose**.
+
+```mermaid
+graph TD
+    UI[Frontend SPA<br>React/Vite] <--> API[FastAPI Web Server]
+    API <--> DB[(PostgreSQL)]
+    API <--> REDIS[(Redis Cache / Broker)]
+    REDIS <--> CELERY[Celery Beat & Workers]
+    CELERY --> PLAYWRIGHT[Playwright/Chromium]
+    PLAYWRIGHT --> TARGET((Target Website))
+```
 
 <Frame>
   <img src="/screenshots/Scan_Reoprt (1).png" alt="Scan Report Visual Diff" />
