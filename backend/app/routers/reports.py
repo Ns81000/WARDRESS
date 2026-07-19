@@ -11,9 +11,11 @@ the artifacts volume (mounted read-only in the app container).
 
 import asyncio
 import base64
+import io
 import logging
 import re
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Annotated
 
@@ -28,6 +30,7 @@ from app.db import get_db
 from app.deps import CurrentUser
 from app.reporting import (
     LAYER_TITLES,
+    ReportAsset,
     ReportData,
     evidence_rows,
     load_report_data,
@@ -94,6 +97,52 @@ def _screenshot_data_uri(rel_path: str | None) -> str | None:
     except OSError:
         return None
     return f"data:image/png;base64,{payload}"
+
+
+def _screenshot_bytes(rel_path: str | None) -> bytes | None:
+    """Raw PNG bytes for a stored screenshot (confined to the artifacts
+    root), or None — used to bundle images into the Markdown ZIP."""
+    if not rel_path:
+        return None
+    root = Path(get_settings().artifacts_dir).resolve()
+    candidate = (root / rel_path).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    try:
+        return candidate.read_bytes()
+    except OSError:
+        return None
+
+
+def _markdown_assets(data: ReportData) -> list[ReportAsset]:
+    """Screenshots + timeline chart to bundle beside a Markdown export.
+    Only images that actually exist on disk are included; the timeline is
+    always available (generated from numeric data)."""
+    assets: list[ReportAsset] = []
+    baseline_png = _screenshot_bytes(
+        data.baseline.screenshot_path if data.baseline else None
+    )
+    if baseline_png:
+        assets.append(
+            ReportAsset("baseline.png", "Trusted baseline", baseline_png, kind="image")
+        )
+    scan_png = _screenshot_bytes(data.scan.screenshot_path)
+    if scan_png:
+        assets.append(
+            ReportAsset("current-scan.png", "This scan", scan_png, kind="image")
+        )
+    if assets:
+        # Only bundle the chart when there's already an assets/ dir to
+        # justify the ZIP; a screenshot-free report stays a single file.
+        assets.append(
+            ReportAsset(
+                "timeline.svg",
+                "Incident timeline",
+                timeline_svg(data).encode("utf-8"),
+                kind="chart",
+            )
+        )
+    return assets
 
 
 def _fmt_dt(dt) -> str:
@@ -169,13 +218,34 @@ async def report_markdown(scan_id: uuid.UUID, user: CurrentUser, db: DB) -> Resp
             status.HTTP_404_NOT_FOUND,
             "Scan not found or not completed — reports need a finished scan",
         )
-    markdown = render_markdown(data)
+    assets = _markdown_assets(data)
+    if not assets:
+        # No screenshots on disk — a single portable Markdown file.
+        markdown = render_markdown(data)
+        return Response(
+            content=markdown,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{_filename(data.site.name, scan_id, "md")}"'
+                )
+            },
+        )
+
+    # Screenshots present — bundle report.md + assets/ into a ZIP so the
+    # image links resolve when the report is opened.
+    markdown = render_markdown(data, assets)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("report.md", markdown)
+        for asset in assets:
+            zf.writestr(f"assets/{asset.filename}", asset.data)
     return Response(
-        content=markdown,
-        media_type="text/markdown; charset=utf-8",
+        content=buffer.getvalue(),
+        media_type="application/zip",
         headers={
             "Content-Disposition": (
-                f'attachment; filename="{_filename(data.site.name, scan_id, "md")}"'
+                f'attachment; filename="{_filename(data.site.name, scan_id, "zip")}"'
             )
         },
     )

@@ -532,6 +532,53 @@ async def test_report_requires_auth(client, db_factory):
     assert resp.status_code == 401
 
 
+async def test_markdown_report_bundles_zip_with_assets(
+    client, auth_headers, db_factory, tmp_path, monkeypatch
+):
+    """When screenshots exist on disk, the Markdown export is a ZIP with
+    report.md + an assets/ directory the image links resolve into."""
+    import io
+    import zipfile
+
+    from app.config import get_settings
+
+    # Point the artifacts root at a tmp dir and write real screenshot files.
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32  # minimal PNG-ish payload
+
+    site = await _mk_site(db_factory)
+    scan = await _mk_completed_scan(db_factory, site.id)
+    async with db_factory() as db:
+        s = await db.scalar(select(Scan).where(Scan.id == scan.id))
+        baseline = await db.scalar(select(Baseline).where(Baseline.id == s.baseline_id))
+        base_dir = tmp_path / "baselines" / str(baseline.id)
+        scan_dir = tmp_path / "scans" / str(s.id)
+        base_dir.mkdir(parents=True)
+        scan_dir.mkdir(parents=True)
+        (base_dir / "screenshot.png").write_bytes(png)
+        (scan_dir / "screenshot.png").write_bytes(png)
+        baseline.screenshot_path = f"baselines/{baseline.id}/screenshot.png"
+        s.screenshot_path = f"scans/{s.id}/screenshot.png"
+        await db.commit()
+
+    resp = await client.get(f"/api/reports/{scan.id}/markdown", headers=auth_headers)
+    get_settings.cache_clear()
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/zip")
+    assert resp.headers["content-disposition"].endswith('.zip"')
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    names = set(zf.namelist())
+    assert "report.md" in names
+    assert "assets/baseline.png" in names
+    assert "assets/current-scan.png" in names
+    assert "assets/timeline.svg" in names
+    body = zf.read("report.md").decode("utf-8")
+    assert "![Trusted baseline](assets/baseline.png)" in body
+    assert "![This scan](assets/current-scan.png)" in body
+
+
 async def test_markdown_report_escapes_pipes_in_evidence(client, auth_headers, db_factory):
     """Evidence containing markdown table syntax must not corrupt the
     table layout."""

@@ -380,8 +380,13 @@ export function SiteDetailPage() {
     }
   }, [sData?.baseline_status, siteId])
 
+  // Only request the screenshot once the capture is ready: baseline_id
+  // exists while the capture is still running, and useArtifact refetches
+  // only when the path changes — fetching early would 404 and never retry.
   const { url: screenshotUrl, loading: screenshotLoading } = useArtifact(
-    sData?.baseline_id ? apiClient.baselineScreenshotPath(sData.baseline_id) : null
+    sData?.baseline_id && sData.baseline_status === "ready"
+      ? apiClient.baselineScreenshotPath(sData.baseline_id)
+      : null
   )
 
   if (site.isLoading) {

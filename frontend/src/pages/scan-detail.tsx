@@ -444,9 +444,9 @@ export function ScanDetailPage() {
       <section className="mb-12">
         <h2 className="mb-4 text-heading-sm font-display text-ink">Detection layers</h2>
         {s.findings.length > 0 ? (
-          <div className="flex flex-col lg:flex-row items-stretch gap-6 lg:h-[600px]">
-            {/* Sidebar (Left Panel) */}
-            <div className="w-full lg:w-5/12 xl:w-4/12 flex flex-col gap-2 shrink-0 lg:h-full lg:overflow-y-auto pr-1">
+          <div className="flex flex-col lg:flex-row items-start gap-6">
+            {/* Sidebar (Left Panel) — natural height, sticks while a tall detail pane scrolls */}
+            <div className="w-full lg:w-5/12 xl:w-4/12 flex flex-col gap-2 shrink-0 lg:sticky lg:top-6">
               {s.findings.map((finding) => {
                 const isSelected = activeLayerKey === finding.layer_key
                 const title = LAYER_TITLES[finding.layer_key] ?? finding.layer_key
@@ -484,8 +484,8 @@ export function ScanDetailPage() {
               })}
             </div>
 
-            {/* Detail Pane (Right Panel) */}
-            <div className="flex-1 min-w-0 flex flex-col bg-surface-card border border-hairline-strong rounded-lg overflow-hidden lg:h-full">
+            {/* Detail Pane (Right Panel) — sized by its content, capped so rich layers scroll */}
+            <div className="flex-1 min-w-0 w-full flex flex-col bg-surface-card border border-hairline-strong rounded-lg overflow-hidden lg:max-h-[600px]">
               {(() => {
                 const activeFinding = s.findings.find(f => f.layer_key === activeLayerKey)
                 if (!activeFinding) {
@@ -502,12 +502,12 @@ export function ScanDetailPage() {
                 const evidence = activeFinding.evidence ?? {}
 
                 return (
-                  <div 
+                  <div
                     key={activeFinding.layer_key} // Triggers re-mounting and runs the blur animation
-                    className="flex flex-col h-full animate-detail-in"
+                    className="flex flex-col min-h-0 animate-detail-in"
                   >
                     {/* Header bar */}
-                    <div className="px-6 py-4 border-b border-hairline bg-surface-elevated/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="shrink-0 px-6 py-4 border-b border-hairline bg-surface-elevated/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-caption text-mute font-mono">L{activeFinding.layer}</span>

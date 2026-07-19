@@ -7,12 +7,29 @@ worker thread in the API process, per the header rationale there).
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Baseline, Scan, ScanFinding, Site
+
+
+@dataclass
+class ReportAsset:
+    """A file bundled alongside a Markdown export (screenshot or chart).
+
+    ``filename`` is the name inside the ZIP's ``assets/`` directory,
+    ``caption`` labels it in the Markdown, ``data`` is the raw bytes, and
+    ``kind`` is ``"image"`` for screenshots or ``"chart"`` for the timeline.
+    """
+
+    filename: str
+    caption: str
+    data: bytes
+    kind: str = "image"
+
 
 LAYER_TITLES = {
     1: "Layer 1 — Cryptographic hash",
@@ -123,9 +140,16 @@ def _fmt_dt(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else "-"
 
 
-def render_markdown(data: ReportData) -> str:
-    """The §7 /api/reports/{scan_id}/markdown export."""
+def render_markdown(data: ReportData, assets: list[ReportAsset] | None = None) -> str:
+    """The §7 /api/reports/{scan_id}/markdown export.
+
+    When ``assets`` is provided (the ZIP bundle path), captured screenshots
+    and the timeline chart are referenced as relative image links into the
+    ``assets/`` directory; without them the export stays a single portable
+    Markdown file.
+    """
     scan, site = data.scan, data.site
+    assets = assets or []
     lines = [
         f"# Wardress incident report — {site.name}",
         "",
@@ -142,6 +166,13 @@ def render_markdown(data: ReportData) -> str:
     ]
     if scan.explanation:
         lines += ["", "## Analyst summary", "", scan.explanation.strip()]
+
+    image_assets = [a for a in assets if a.kind == "image"]
+    if image_assets:
+        lines += ["", "## Captured evidence", ""]
+        for asset in image_assets:
+            img = f"![{asset.caption}](assets/{asset.filename})"
+            lines += [f"**{asset.caption}**", "", img, ""]
 
     lines += ["", "## Per-layer findings", ""]
     for finding in data.findings:
@@ -164,6 +195,9 @@ def render_markdown(data: ReportData) -> str:
 
     if data.history:
         lines += ["## Incident timeline (recent scans)", ""]
+        chart = next((a for a in assets if a.kind == "chart"), None)
+        if chart:
+            lines += [f"![{chart.caption}](assets/{chart.filename})", ""]
         lines += ["| Scan time | Verdict | Risk |", "| --- | --- | --- |"]
         for h in data.history:
             verdict = h.verdict.value if h.verdict else "-"
