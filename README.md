@@ -1,218 +1,375 @@
 <p align="center">
-  <img src="assets/brand/wardress-logo.svg" alt="Wardress" width="96">
+  <img src="assets/brand/wardress-logo.svg" alt="Wardress" width="128">
 </p>
 
 <h1 align="center">Wardress</h1>
 
 <p align="center">
-  Self-hosted website defacement detection and response.<br>
-  Nine detection layers, fused risk scoring, alerting, and guarded remediation — on your own machine.
+  <strong>Self-hosted website defacement detection and automated response orchestration.</strong><br>
+  Nine distinct detection layers, dynamic risk fusion, multi-channel alerting, and guarded remediation — fully localized on your own infrastructure.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/github/license/Ns81000/WARDRESS?style=for-the-badge&color=2e7d32" alt="License">
+  <img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/react-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19">
+  <img src="https://img.shields.io/badge/tailwind-v4-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white" alt="Tailwind v4">
+  <img src="https://img.shields.io/badge/FastAPI-0.139-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/docker-%3E%3D24-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
 </p>
 
 ---
 
-Wardress watches the websites you care about, compares every scan against a
-trusted baseline capture, and tells you the moment a page stops looking like
-itself — with the evidence to prove it: a visual diff, a DOM change tree,
-per-layer scores, and a plain-English incident explanation.
+## Overview
 
-![Sites dashboard](docs/screenshots/sites.png)
+**Wardress** is a production-grade, self-hosted security tool built to protect website integrity. It captures and freezes a trusted **baseline** of your target website (DOM structure, network references, visual layout, and textual semantics) and continuously monitors the site for malicious defacements, script injections, metadata tampering, and domain hijacking. 
 
-## How it works
+Unlike simple page monitors, Wardress uses a **fused risk model** that aggregates results from 9 independent detection layers to calculate a single, highly accurate risk score. This filters out false positives caused by minor dynamic elements while raising immediate alarms when a site has been compromised.
 
-Every site gets a **baseline**: a full-page screenshot and HTML capture taken
-by a real browser (Playwright/Chromium). Scans re-capture the page and run it
-through nine detection layers:
+---
 
-| Layer | What it checks |
-|---|---|
-| 1. Content hash | Byte-level change of the normalized page |
-| 2. DOM structure | Added/removed/modified elements, injected scripts and iframes |
-| 3. Visual diff | Screenshot comparison with altered-region highlighting |
-| 4. Text semantics | Sentence-embedding drift of visible copy (MiniLM, fully local) |
-| 5. Defacement vocabulary | Known defacement phrasing and patterns |
-| 6. Resource integrity | New external scripts, forms, and resource origins |
-| 7. Metadata | Title, charset, redirects, status codes, security headers |
-| 8. Error/parked heuristics | Error pages and parked-domain swaps that fake a 200 |
-| 9. Fusion | Weighted fusion of all layers into one 0–100% risk score |
+## Installation Guide (`install.ps1`)
 
-A scan whose fused risk crosses the site's flag threshold is **flagged**: an
-alert goes out on your channels, remediation hooks queue up (manual-confirm by
-default), and the incident is preserved with artifacts for review.
+Wardress provides automated PowerShell installation scripts for Windows hosts running Docker Desktop. You can run the setup in a single command without cloning the repository manually first.
 
-![Scan report with visual diff and DOM changes](docs/screenshots/scan-drilldown.png)
+### Prerequisites
+*   **Operating System**: Windows 10 or 11 (64-bit).
+*   **Virtualization**: [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed with the **WSL 2 backend** activated and running.
+*   **Hardware**: At least 6 GB of free disk space (to store backend, database, and Chromium browser containers).
 
-## Features
+> [!IMPORTANT]
+> Ensure Docker Desktop is running before launching the installation command. The installer will query the Docker daemon and fail if it cannot connect.
 
-- **SOC-style dashboard** — dark, keyboard-friendly React SPA: risk gauges,
-  scan timelines, visual/DOM diff viewers, incident drilldowns.
-- **Adaptive scheduling** — scans tighten to every few minutes right after a
-  change and relax back while the site is stable. A Celery Beat dispatcher
-  survives restarts with no state of its own.
-- **Alerting that fails safe** — email (SMTP), Telegram, and 100+ services via
-  Apprise URLs. A dead channel never blocks a scan or another channel.
-  Deliveries are tracked per alert with status and error detail.
-- **Guarded remediation** — per-site webhooks (maintenance page, cache purge,
-  your own rollback endpoint) that trigger on a risk threshold. Manual-confirm
-  by default: nothing fires until an analyst approves it in the queue.
-- **Explain this incident** — optional plain-English incident summaries from
-  Gemini (free tier) or a fully local Ollama model. Optional: everything works
-  without it.
-- **Bulk import** — paste CSV or point at a sitemap; up to 500 sites per
-  batch with automatic baseline capture.
-- **RBAC + API keys** — admin / analyst / viewer roles enforced server-side
-  on every endpoint; per-user API keys for scripting (`wk_…`, SHA-256 at
-  rest, revocable, honored at the owner's role).
-- **Audit log** — every configuration change and remediation decision, with
-  actor, before/after snapshots, and automatic secret redaction.
-- **Reports** — one-click PDF and Markdown incident reports per scan.
-- **Health page** — queue depth, worker liveness, Beat heartbeat, scan
-  throughput. The watcher, watched.
+### One-Command Quick Start
 
-![System health](docs/screenshots/health.png)
+Choose one of the following commands, paste it into PowerShell, and hit Enter. The commands automatically handle cloning/downloading, directory navigation, and script execution:
 
-## Requirements
+*   **Option A: No-Git Installation (ZIP Download)**
+    *Use this if you do not have Git installed. It downloads the repository ZIP archive, extracts it, and executes the installer:*
+    ```powershell
+    Invoke-WebRequest -Uri "https://github.com/Ns81000/WARDRESS/archive/refs/heads/main.zip" -OutFile "wardress.zip"; Expand-Archive "wardress.zip" -DestinationPath "."; cd WARDRESS-main; powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+    ```
 
-- Windows 10/11 with [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-  (WSL 2 backend), running.
-- ~6 GB free disk for images and data (Chromium worker image is the largest).
-- No GPU needed. Nothing leaves your machine unless you configure alerts or
-  the optional Gemini explainer.
+*   **Option B: Git-Based Installation**
+    *Use this if you have Git installed. It clones the repository and starts the installer:*
+    ```powershell
+    git clone https://github.com/Ns81000/WARDRESS.git; cd WARDRESS; powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+    ```
 
-The stack is plain Docker Compose (Postgres 16, Redis, FastAPI app, Playwright
-worker, Celery Beat), so it also runs on Linux/macOS — only the installer
-script is Windows-specific.
-
-## Install
-
-One command from a checkout:
-
+*Optional Parameter*: You can override the default administrator email during installation by running the script manually with the `-AdminEmail` flag:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -AdminEmail security@yourdomain.com
 ```
 
-The installer:
+### What the Installer Does (Behind the Scenes)
 
-1. Verifies Docker Desktop is installed and the engine is running.
-2. Generates `.env` from `.env.example`, replacing every `CHANGE_ME` with a
-   cryptographically random secret (the DB password is kept in sync inside
-   `DATABASE_URL`). An existing `.env` is never touched.
-3. Builds the images serially, runs database migrations, starts the stack.
-4. Seeds the admin user and creates a Desktop shortcut.
-5. Prints the dashboard URL and — on first install only, exactly once — the
-   generated admin credentials.
-
-Then open **http://localhost:8321** (or the Desktop shortcut), sign in, and
-add your first site. Optional flag: `-AdminEmail you@example.com`.
-
-Optional services:
-
-```powershell
-docker compose --profile telegram up -d   # two-way Telegram bot
-docker compose --profile ollama up -d     # fully local LLM for explanations
+```mermaid
+sequenceDiagram
+    participant OS as PowerShell Script
+    participant Docker as Docker Engine
+    participant DB as Postgres & Redis
+    participant App as FastAPI App
+    
+    OS->>Docker: 1. Confirm Docker engine & Compose plugin are running
+    OS->>OS: 2. Parse .env.example & generate .env with cryptographically random secrets
+    OS->>Docker: 3. Rebuild app, worker, and beat images serially in the foreground
+    OS->>Docker: 4. Spin up PostgreSQL and Redis containers
+    OS->>App: 5. Execute database migrations (Alembic upgrade head)
+    OS->>Docker: 6. Spin up API, worker, and beat containers
+    OS->>App: 7. Wait for live endpoint, then seed the first admin user
+    OS->>OS: 8. Create a Desktop shortcut using WScript.Shell and assets/brand/wardress.ico
+    OS->>OS: 9. Display the generated admin email and password (exactly once)
 ```
 
-## Update
+1.  **Environment Setup**: Creates your `.env` configuration file from `.env.example`. It automatically swaps placeholder tags with cryptographically secure random strings for the PostgreSQL database password, JWT secret, Fernet credentials key, and the admin password.
+2.  **Serial Container Builds**: Builds the primary services (`app`, `worker`, `beat`) sequentially to prevent high CPU or RAM spikes on standard workstations.
+3.  **Database Migration**: Starts Postgres and Redis and executes Alembic database upgrades to build the relational schemas.
+4.  **Admin Seeding**: Seeds the database with your admin account (`admin@example.com` or your custom address).
+5.  **Desktop Integration**: Hooks into Windows Script Host to create a desktop shortcut named **Wardress.lnk** that opens `http://localhost:8321` and references the official application icon.
+6.  **Admin Summary**: Displays the generated administrator password.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\update.ps1
+> [!WARNING]
+> **The generated admin credentials are shown exactly once** during first installation. They are stored locally in your `.env` file (`ADMIN_PASSWORD`) and are not saved or transmitted anywhere else. Keep your `.env` file secure.
+
+Once completed, log into **[http://localhost:8321](http://localhost:8321)** using the printed credentials.
+
+---
+
+## Update Guide (`update.ps1`)
+
+To update Wardress to the latest release while maintaining all database records, baselines, and configuration parameters, use the update script.
+
+### How to Update
+
+*   **For Git Checkouts**:
+    Open PowerShell in the `WARDRESS` folder and run the updater. It will pull new code and rebuild the stack:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\update.ps1
+    ```
+*   **For Non-Git Checkouts (ZIP Downloads)**:
+    If you downloaded the code as a ZIP archive (meaning no `.git` folder exists), you can update Wardress by simply downloading the new ZIP, extracting it, replacing the old files (your databases, configurations, and baselines are safely preserved in Docker volumes and your local `.env`), and running the script with the `-NoGitPull` switch:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\update.ps1 -NoGitPull
+    ```
+
+### What the Updater Does (Behind the Scenes)
+1.  **Code Check**: Performs a fast-forward Git pull (`git pull --ff-only`) if a git remote is active.
+2.  **Changelog**: Reads and prints the first 40 lines of `CHANGELOG.md` to inform you of recent changes.
+3.  **Container Upgrades**: Rebuilds the application and worker images using the `--pull` parameter to grab base updates, sharing local cache layers where possible.
+4.  **Database Migrations**: Runs Alembic migrations to apply any structural changes to the database.
+5.  **Force Re-Creation**: Restarts the services. It specifically passes the `--force-recreate` flag to the Celery Beat and Telegram-bot containers.
+
+> [!NOTE]
+> Re-creating the Celery Beat scheduler container is mandatory. Since it shares images with the worker container, Docker Compose would otherwise ignore image updates and keep running the old code in Celery Beat.
+
+6.  **Liveness Verification**: Monitors `/api/health/live` for 120 seconds to confirm services are online and responding.
+
+---
+
+## Table of Contents
+- [Overview](#overview)
+- [Installation Guide (`install.ps1`)](#installation-guide-installps1)
+- [Update Guide (`update.ps1`)](#update-guide-updateps1)
+- [System Features & Heuristics](#system-features--heuristics)
+- [System Architecture](#system-architecture)
+- [The 9-Layer Detection Pipeline](#the-9-layer-detection-pipeline)
+  - [Gating and Optimizations](#gating-and-optimizations)
+  - [Pipeline Breakdown](#pipeline-breakdown)
+- [Visual Walkthrough](#visual-walkthrough)
+- [Uninstall Guide](#uninstall-guide)
+- [Configuration Reference (`.env`)](#configuration-reference-env)
+- [Role-Based Access Control (RBAC)](#role-based-access-control-rbac)
+- [API Reference](#api-reference)
+- [Security Features](#security-features)
+- [Development and Testing](#development-and-testing)
+- [License](#license)
+
+---
+
+## System Features & Heuristics
+
+*   **Adaptive Cadence Scanning**: To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies. If a scan crosses the material change threshold (`fused_risk >= 0.15`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).
+*   **Guarded Remediation Hooks**: Flagged scans can trigger outbound webhooks (e.g. rollback endpoints or maintenance pages). By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator. A webhook endpoint timeout of 20 seconds is enforced, and execution tasks are isolated in a separate Celery queue so that slow/broken endpoints never block the scan engine.
+*   **AI Incident Assistant Cache**: The plain-English analysis of an incident is generated via a structured prompt built from active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences) and requested from Gemini or a local Ollama model. The final description is cached directly in the `scans` table column to eliminate duplicate API requests.
+
+---
+
+## System Architecture
+
+Wardress is modularly designed as a set of containerized services coordinated via **Docker Compose**:
+
+```mermaid
+graph TD
+    User([Security Operator]) <--> |HTTPS / Port 8321| SPA[React 19 Frontend SPA]
+    TelegramUser([Telegram Bot Interface]) <--> |Polling / Direct Chat| TelegramBot[Telegram Bot Worker]
+    
+    SPA <--> |REST API / JWT Auth| API[FastAPI Web Server]
+    TelegramBot <--> |Internal API Calls| API
+    
+    API <--> |Transactions / States| DB[(PostgreSQL 16)]
+    API <--> |Task Queuing / Cache| Redis[(Redis Key-Value Cache)]
+    
+    Beat[Celery Beat Dispatcher] --> |Schedule Scans| Redis
+    Worker[Celery Task Worker] <--> |Poll Tasks| Redis
+    
+    Worker <--> |Read / Write| DB
+    Worker --> |Playwright Headless Chrome| TargetSite([Monitored Websites])
+    Worker --> |Apprise / SMTP| AlertService([Alerting Integrations])
+    Worker --> |Webhooks| Remediation([Remediation Endpoints])
 ```
 
-Pulls the latest code (`-NoGitPull` to skip), rebuilds, migrates the database,
-and restarts services in the right order. Data, artifacts, and `.env` are
-preserved.
+- **Frontend SPA**: React 19 single-page application built with Vite and styled using Tailwind CSS v4. Includes visual diffing elements, full audit logs, and interactive controls.
+- **FastAPI Web Server**: High-performance asynchronous REST API that implements JWT session management, RBAC, and cryptographically hashed API keys.
+- **Celery & Redis**: An asynchronous task execution engine. **Celery Beat** schedules periodic probes, while **Celery Workers** perform parallel scans, alert dispatches, and webhooks.
+- **Playwright / Chromium Worker**: A headless browser instance running within the Celery worker that executes full DOM compilation, resource tracking, and screenshot captures.
 
-## Uninstall
+---
 
-```powershell
-docker compose down          # stop the stack (keeps data)
-docker compose down -v       # stop AND delete all data volumes
-```
+## The 9-Layer Detection Pipeline
 
-Then delete the checkout folder and the Desktop shortcut. Secrets only ever
-lived in `.env` inside the checkout.
+Each scan drives the target page through 9 specialized analysis layers designed to catch different defacement styles.
 
-## Configuration (`.env`)
+### Gating and Optimizations
+To preserve system resources and prevent false alarms from dynamic rendering variations, the pipeline implements **intelligent gating rules**:
+*   **Layer 1 (Content Hash) Gating**: If the byte-level hash of the page is identical to the baseline, the engine skips Layers 2, 3, 4, 5, and 8. If nothing changed at the byte level, DOM trees, text semantics, visual pixels, and signatures are guaranteed to be identical.
+*   **Persistent Probes**: Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan. TLS cert details, response headers, and UA-rotated fetches are invisible to the primary DOM content hash and could indicate high-impact MITM attacks or crawler-specific cloaking.
+*   **Crash Isolation**: Each layer is isolated inside try/except enclosures. A parser failure in one layer records the error as evidence, assigns a `None` score, and allows the remaining eight layers to continue functioning.
 
-Generated by the installer; edit and `docker compose up -d` to apply.
+### Pipeline Breakdown
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `WARDRESS_HTTP_PORT` | `8321` | Dashboard/API port on localhost |
-| `PUBLIC_BASE_URL` | `http://localhost:8321` | Link target used in alert messages |
-| `POSTGRES_PASSWORD`, `DATABASE_URL` | generated | Database credentials (password embedded in the URL) |
-| `JWT_SECRET` | generated | Signs access/refresh tokens (≥ 32 bytes enforced) |
-| `CREDENTIALS_ENCRYPTION_KEY` | generated | Encrypts SMTP/Telegram/API credentials at rest (Fernet) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | generated | First admin (seed is idempotent; never resets a password) |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | empty | Optional incident explanations via Gemini |
-| `ENABLE_OLLAMA`, `OLLAMA_BASE_URL` | off | Optional fully local explanations |
-| `TELEGRAM_BOT_TOKEN` | empty | Optional Telegram bot (with `--profile telegram`) |
-| `RATE_LIMIT_PER_IP` | `300` | API requests per window per client IP (0 disables) |
-| `RATE_LIMIT_PER_USER` | `240` | API requests per window per authenticated user |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window length |
-| `TRUST_PROXY_HEADERS` | `false` | Honor `X-Forwarded-For` — only behind a trusted proxy |
-| `CORS_ALLOWED_ORIGINS` | empty | Extra origins if you host the SPA elsewhere (same-origin by default) |
-| `COOKIE_SECURE` | `false` | Secure-flag the refresh cookie — set `true` behind HTTPS |
+| Layer | Stable Key | Input Scope | Core Detection Heuristics |
+| :--- | :--- | :--- | :--- |
+| **1. Content Hash** | `layer1_hash` | Original HTML | Byte-level MD5/SHA comparison of normalized, whitespace-stripped HTML. |
+| **2. DOM Structure** | `layer2_dom_structure` | Suppressed HTML | Inspects structural tree depth, element counts, script tags, iframe insertions, and style attributes that force element hiding. |
+| **3. Link Audit** | `layer3_link_audit` | Suppressed HTML | Audits newly introduced external hyperlinks, stylesheets, script references, and HTML form target domains. |
+| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | Compares page screenshots using `scikit-image` and `imagehash`. Evaluates differences across color, structural similarity index (SSIM), and pixel variance while masking out designated dynamic boxes. |
+| **5. Signatures** | `layer5_signatures` | New visible text | Scans newly added visible text for defacement keywords ("hacked by", "owned by"), profanity frequency, and dominant Unicode script changes (e.g. Latin to Cyrillic/Arabic). |
+| **6. Security Metadata** | `layer6_security_metadata` | Network headers | Audits TLS certificate validity, fingerprints (distinguishes CA reissues from subject shifts), security header policies (HSTS, CSP, CORS), and `robots.txt` changes. |
+| **7. Cloaking** | `layer7_cloaking` | HTTP variant fetches | Rotates the User-Agent (Googlebot, Mobile Safari, Desktop Chrome) and compares raw HTML content similarities to identify content cloaked specifically for search engines. |
+| **8. Text Semantics** | `layer8_semantics` | Suppressed text | Computes the sentence embeddings of visible text using a local **MiniLM-L6-v2** neural network, measuring semantic cosine distance from the baseline. |
+| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | Fuses the active layer signals using a weighted heuristic matrix into a final, normalized **0% to 100% Risk Score**. |
 
-**HTTPS:** Wardress serves plain HTTP for the localhost self-hosted case. For
-anything beyond localhost, front it with an HTTPS reverse proxy (Caddy, nginx,
-Traefik) and set `PUBLIC_BASE_URL` to the `https://` address,
-`TRUST_PROXY_HEADERS=true`, and `COOKIE_SECURE=true`.
+---
 
-## Roles
+## Visual Walkthrough
 
-| Capability | Admin | Analyst | Viewer |
-|---|:---:|:---:|:---:|
-| View sites, scans, alerts, health, reports, artifacts | yes | yes | yes |
-| Add/edit sites, scan now, rebaseline, suppression rules | yes | yes | – |
-| Acknowledge alerts, confirm/dismiss remediation | yes | yes | – |
-| Bulk import | yes | yes | – |
-| Manage own API keys | yes | yes | yes |
-| Notification channels, SMTP/Telegram/LLM settings | yes | – | – |
-| Remediation hooks (create/edit) | yes | – | – |
-| User management, audit log | yes | – | – |
+### 1. Secure Access Portal
+An authentication interface enforcing session durations and strict server-side rate limits.
+![Authentication Screen](docs/screenshots/login.png)
 
-Enforcement is server-side on every endpoint; hiding UI is only a courtesy.
+### 2. Main Site Directory
+The central operations deck showing configured sites, active alerts, current status, and quick-action run keys.
+![Sites Dashboard](docs/screenshots/sites.png)
 
-## API
+### 3. Site Detail Panel
+Per-site configuration dashboard where operators manage baselines, schedule scanning intervals, and define flag thresholds.
+![Site Detail](docs/screenshots/site-detail.png)
 
-Interactive OpenAPI docs at `http://localhost:8321/docs`. Create an API key
-in **Settings → API keys** (shown once, `wk_…`), then:
+### 4. Primary Scan Report & Visual Diff
+Shows side-by-side screenshot comparisons with pixel-level highlights marking changed visual regions.
+![Scan Report Visual Diff](docs/screenshots/Scan_Reoprt%20(1).png)
 
+### 5. DOM Structural Comparison
+Highlights tag alterations, script inclusions, and iframe injections directly within the HTML tree.
+![Scan Report DOM Structure](docs/screenshots/Scan_Reoprt%20(2).png)
+
+### 6. Semantic and Header Analytics
+Shows the exact differences in HTTP response headers, SSL certificates, outgoing link profiles, and semantic embeddings.
+![Scan Report Analytics](docs/screenshots/Scan_Reoprt%20(3).png)
+
+### 7. AI Incident Assistant
+Leverages Gemini or local Ollama models to translate deep cryptographic and technical diff signatures into plain-English incident summaries.
+![Incident Assistant](docs/screenshots/assitant.png)
+
+### 8. Alerts Registry
+A historical timeline of all triggered alerts, displaying delivery logs, channel pathways, and dispatcher statuses.
+![Alerts Logs](docs/screenshots/alerts.png)
+
+### 9. System Audit Logs
+A immutable ledger tracking every system change, user access, settings update, and remediation action. Sensitive credentials and secrets are automatically redacted.
+![Audit Logs](docs/screenshots/audit.png)
+
+### 10. Integrations & System Settings
+Consolidated interface to configure SMTP channels, Telegram bot credentials, AI keys, and role-based API tokens.
+![Settings Configuration](docs/screenshots/settings.png)
+
+### 11. Diagnostic System Health
+Real-time health statistics charting Celery queue depth, worker heartbeats, and average scan execution throughput.
+![Health Indicators](docs/screenshots/health.png)
+
+---
+
+## Uninstall Guide
+
+To stop and completely remove Wardress from your system:
+
+1. Stop the active container stack (this preserves the database volume and your scan history):
+   ```bash
+   docker compose down
+   ```
+2. **OR** stop the stack and completely delete all stored data volumes:
+   ```bash
+   docker compose down -v
+   ```
+
+> [!CAUTION]
+> Running `docker compose down -v` permanently deletes all database records and screenshot baselines. Back up your `.env` configuration file if you plan to reinstall later.
+
+3. Delete the repository folder and the desktop shortcut. No extra system files are created outside this path.
+
+---
+
+## Configuration Reference (`.env`)
+
+These environment variables are written to `.env` during installation.
+
+| Variable | Default Value | Description |
+| :--- | :--- | :--- |
+| `WARDRESS_HTTP_PORT` | `8321` | The local port the FastAPI server and React dashboard bind to. |
+| `PUBLIC_BASE_URL` | `http://localhost:8321` | The root URL used in email and Telegram alert linkages. |
+| `POSTGRES_USER` | `wardress` | Database username. |
+| `POSTGRES_PASSWORD` | *generated* | Cryptographically random database password. |
+| `DATABASE_URL` | *generated* | Database connection string containing the generated password. |
+| `JWT_SECRET` | *generated* | Used to sign user session cookies (enforces >= 32 characters). |
+| `CREDENTIALS_ENCRYPTION_KEY` | *generated* | A Fernet key used to encrypt SMTP and API integration credentials at rest. |
+| `ADMIN_EMAIL` | `admin@example.com` | Default email for the first administrator. |
+| `ADMIN_PASSWORD` | *generated* | The seeded administrator password. |
+| `GEMINI_API_KEY` | *empty* | Optional. API key for Gemini models to generate incident explanations. |
+| `GEMINI_MODEL` | `gemini-flash-latest` | The model variation used for explaining incidents. |
+| `ENABLE_OLLAMA` | `false` | Set to `true` to start the local-LLM container for offline AI explanations. |
+| `TELEGRAM_BOT_TOKEN` | *empty* | Optional. Telegram bot token for interactive system queries. |
+| `RATE_LIMIT_PER_IP` | `300` | Pre-auth API rate limits per client IP per window. Set to `0` to disable. |
+| `RATE_LIMIT_PER_USER` | `240` | Post-auth rate limits per authenticated user account. |
+| `RATE_LIMIT_WINDOW_SECONDS`| `60` | Time window length for rate-limit evaluations. |
+| `TRUST_PROXY_HEADERS` | `false` | Enable this *only* if Wardress is fronted by a reverse proxy. |
+| `COOKIE_SECURE` | `false` | Forces session cookies to be transmitted via HTTPS only. |
+
+---
+
+## Role-Based Access Control (RBAC)
+
+Wardress implements strict role enforcement across all endpoints.
+
+| Access Permission | Admin | Analyst | Viewer |
+| :--- | :---: | :---: | :---: |
+| Read sites, scan records, alerts, system health, and PDF reports | ✓ | ✓ | ✓ |
+| Add/modify sites, execute manual scans, rebaseline pages, and add suppression rules | ✓ | ✓ | — |
+| Acknowledge alerts, handle manual remediation confirmation queues | ✓ | ✓ | — |
+| Manage personal API keys | ✓ | ✓ | ✓ |
+| Configure system settings, SMTP properties, and AI API integrations | ✓ | — | — |
+| Create or modify remediation webhooks | ✓ | — | — |
+| Perform user management operations and inspect system audit logs | ✓ | — | — |
+
+---
+
+## API Reference
+
+Interactive OpenAPI documentation is available locally at **`http://localhost:8321/docs`**.
+
+### Authenticating API Requests
+1.  Navigate to **Settings → API Keys** in the dashboard.
+2.  Generate a new API Token (tokens follow the `wk_...` prefix format and are displayed only once).
+3.  Include this token in the `Authorization` header of your HTTP requests:
+    ```bash
+    curl -H "Authorization: Bearer wk_your_api_key_here" http://localhost:8321/api/sites
+    ```
+
+---
+
+## Security Features
+
+*   **SSRF Protection & Redirect Validation**: Monitored scan targets must resolve to public IP addresses by default. Probing internal, loopback, or link-local targets (`127.0.0.1`, `192.168.x.x`) is blocked unless explicitly enabled via the per-site configuration flag `allow_private_networks`. To prevent SSRF bypasses via open redirects or DNS rebinding, redirect locations are checked hop-by-hop before fetching.
+*   **ReDoS Protection in Suppression Engine**: When filtering dynamic parts of pages using Regex-based suppression rules, the regex parser enforces a strict **2.0 second timeout limit** (`_REGEX_TIMEOUT_SECONDS`) on match evaluations to safeguard worker nodes against Catastrophic Backtracking Denial of Service attacks.
+*   **Fernet Encryption at Rest**: Integration secrets (like SMTP passwords, Telegram bot tokens, API keys, and Apprise Webhook URLs) are encrypted in the PostgreSQL database using a Fernet key (`CREDENTIALS_ENCRYPTION_KEY`). They are never exposed via the API.
+*   **Hashed API Keys**: API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted.
+*   **Audit Logging**: The system records every administrative change, settings edit, user creation, and manual remediation step. Sensitive variables and secrets are automatically redacted from the audit history.
+
+---
+
+## Development and Testing
+
+The backend is built with **FastAPI** and managed via **uv**. The frontend is built with **React 19** and managed via **pnpm**.
+
+### Backend Development
+Run migrations and execute the unit-test suite (uses an in-memory SQLite database via `aiosqlite` so no Postgres instance is required):
 ```bash
-curl -H "Authorization: Bearer wk_YOUR_KEY" http://localhost:8321/api/sites
+cd backend
+uv sync
+uv run pytest
 ```
 
-Keys act with their owner's role, can be revoked any time, and cannot manage
-other keys or credentials — those require a real session.
-
-## Security notes
-
-- **SSRF policy** — scan targets resolve to public addresses only by
-  default. Private/loopback/link-local targets require an explicit per-site
-  opt-in (`allow_private_networks`), marked in the UI. Redirects are
-  re-validated hop by hop, and webhook/Apprise deliveries go through the same
-  guard.
-- **Secrets at rest** — SMTP passwords, bot tokens, service URLs, and LLM
-  keys are Fernet-encrypted with `CREDENTIALS_ENCRYPTION_KEY` before they
-  reach the database and are never returned by the API (redacted hints only).
-  API keys are stored as SHA-256 hashes. Audit entries redact secret fields.
-- **Fail-safe alerting** — a broken channel, revoked key, or dead webhook
-  endpoint can never break scanning. Failures are recorded per delivery and
-  shown on the alert; remediation hooks default to manual confirmation.
-- **Rate limiting** — per-IP and per-user API limits blunt floods and
-  credential-stuffing; tune or disable via `.env`.
-
-## Development
-
-Backend: FastAPI + SQLAlchemy (async) + Alembic + Celery, managed with `uv`.
-Frontend: React 19 + Vite + Tailwind v4, managed with `pnpm`.
-
+### Frontend Development
+Install dependencies, run component-level tests, check types, and run the linter:
 ```bash
-cd backend && uv sync && uv run pytest          # 383 tests
-cd frontend && pnpm install && pnpm test        # component tests
-pnpm exec tsc --noEmit && pnpm exec oxlint src  # typecheck + lint
+cd frontend
+pnpm install
+pnpm test
+pnpm exec tsc --noEmit
+pnpm exec oxlint src
 ```
 
-`PROGRESS.md` documents the build phases, architecture decisions, and QA
-history end to end.
+---
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the full text.
