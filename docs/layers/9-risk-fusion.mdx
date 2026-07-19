@@ -14,24 +14,28 @@ The **Risk Fusion Layer** is the final step. It flattens the scores from Layers 
 
 ```mermaid
 flowchart LR
-    subgraph V[Feature vector · fixed order]
+    subgraph V["8-feature vector · fixed order"]
       direction TB
-      L1[layer1_hash] --- L2[layer2_dom]
-      L2 --- L3[layer3_link]
-      L3 --- L4[layer4_visual]
-      L4 --- L5[layer5_sig]
-      L5 --- L6[layer6_meta]
-      L6 --- L7[layer7_cloak]
-      L7 --- L8[layer8_sem]
+      L1["layer1_hash"]:::feat --- L2["layer2_dom"]:::feat
+      L2 --- L3["layer3_link"]:::feat
+      L3 --- L4["layer4_visual"]:::feat
+      L4 --- L5["layer5_sig"]:::feat
+      L5 --- L6["layer6_meta"]:::feat
+      L6 --- L7["layer7_cloak"]:::feat
+      L7 --- L8["layer8_sem"]:::feat
     end
-    V --> MODEL["LogisticRegression · C=50 · lbfgs · seed-fitted"]
-    MODEL -->|predict_proba| PROB[Calibrated probability]
-    PROB --> OUT[Risk score · 0.0–1.0]
-    MODEL -.->|exception| MAX["Fallback: max sub-score"]
+    V ==> MODEL{{"LogisticRegression<br/>C=50 · lbfgs · seed-fitted"}}:::model
+    MODEL -->|"predict_proba"| PROB["Calibrated<br/>probability"]:::node
+    PROB --> OUT[/"Risk score<br/>0.0 – 1.0"/]:::out
+    MODEL -.->|"exception"| MAX(["Fallback<br/>max sub-score"]):::fallback
     MAX -.-> OUT
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef feat fill:#33691e,stroke:#9ccc65,color:#fff;
+    classDef model fill:#e65100,stroke:#ffb74d,color:#fff;
+    classDef node fill:#f9a825,stroke:#fff59d,color:#3b1f00;
+    classDef fallback fill:#616161,stroke:#bdbdbd,color:#fff,stroke-dasharray:4 3;
+    classDef out fill:#f57f17,stroke:#ffe082,color:#fff,stroke-width:4px;
+    style V fill:#1b2e12,stroke:#558b2f,color:#dcedc8;
 ```
 
 Rather than a brittle hand-tuned weighted average, fusion uses a `LogisticRegression(C=50.0, solver="lbfgs", max_iter=5000)`. The feature order (`FEATURE_KEYS`, layers 1–8) is fixed forever so that findings rows and any future retraining stay compatible. The fitted model is cached per worker process; fitting is deterministic (fixed seed data, fixed solver).

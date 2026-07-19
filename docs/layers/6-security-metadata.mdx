@@ -13,17 +13,20 @@ The **Security Metadata Layer** runs on the network transport and server configu
 ## Signal fusion
 
 ```mermaid
-flowchart LR
-    PR[Metadata prober · httpx] --> TLS[TLS certificate diff]
-    PR --> HDR[Security header diff]
-    PR --> RB[robots.txt diff]
-    TLS --> SUM["score = min(1.0, tls + hdr + robots)"]
-    HDR --> SUM
-    RB --> SUM
-    SUM --> OUT[Layer 6 score · 0.0–1.0]
+flowchart TD
+    PR[/"Metadata prober · httpx<br/>runs every scan"/]:::in
+    PR --> TLS["TLS cert diff<br/>fingerprint · CA · subject"]:::probe
+    PR --> HDR["Header diff<br/>HSTS · CSP · CORS"]:::probe
+    PR --> RB["robots.txt<br/>diff"]:::probe
+    TLS -->|"+"| SUM["min(1.0, tls + hdr + robots)<br/>additive, not max"]:::pick
+    HDR -->|"+"| SUM
+    RB -->|"+"| SUM
+    SUM --> OUT["Layer 6<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#263238,stroke:#78909c,color:#fff;
+    classDef probe fill:#37474f,stroke:#90a4ae,color:#fff;
+    classDef pick fill:#455a64,stroke:#b0bec5,color:#fff;
+    classDef out fill:#546e7a,stroke:#cfd8dc,color:#fff,stroke-width:3px;
 ```
 
 The three sub-scores are **added** and clamped to `1.0`. Each is deliberately bounded so no single benign event maxes the layer.

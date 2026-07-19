@@ -13,21 +13,24 @@ The **Visual Diff Layer** evaluates what a visitor actually sees. Image-based de
 ## Three measurements, one score
 
 ```mermaid
-flowchart LR
-    BS[Baseline PNG] --> GL[Grayscale · Pillow]
-    CS[Current PNG] --> GL
-    GL --> MK[Mask bbox regions · mid-gray 128]
-    MK --> RS[Scale to 683px width · crop shared top]
-    RS --> SSIM["SSIM · scikit-image"]
-    MK --> PH["pHash + dHash · 16×16 = 256-bit"]
-    SSIM --> SS[ssim_score = 1 − SSIM]
-    PH --> HS[hash_score = pHash + dHash norm]
-    SS --> F["score = 0.7·ssim + 0.3·hash"]
-    HS --> F
-    F --> OUT[Layer 4 score · 0.0–1.0]
+flowchart TD
+    BS["Baseline PNG"]:::in --> GL
+    CS["Current PNG"]:::in --> GL["Grayscale · Pillow"]:::node
+    GL --> MK["Mask bbox regions<br/>mid-gray 128"]:::node
+    MK --> RS["Scale 683 px<br/>crop shared top"]:::node
+    RS ==>|"structural track"| SSIM["SSIM<br/>scikit-image"]:::track
+    RS ==>|"perceptual track"| PH["pHash + dHash<br/>16×16 · 256-bit"]:::track
+    SSIM --> SS["1 − SSIM"]:::node
+    PH --> HS["hash norm"]:::node
+    SS -->|"× 0.7"| F(("weighted<br/>sum")):::pick
+    HS -->|"× 0.3"| F
+    F --> OUT["Layer 4<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#e65100,stroke:#ffb74d,color:#fff;
+    classDef node fill:#ef6c00,stroke:#ffcc80,color:#3b1f00;
+    classDef track fill:#f9a825,stroke:#fff59d,color:#3b1f00;
+    classDef pick fill:#ff6f00,stroke:#ffe082,color:#fff;
+    classDef out fill:#f57c00,stroke:#ffe0b2,color:#fff,stroke-width:3px;
 ```
 
 <Steps>

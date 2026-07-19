@@ -22,19 +22,21 @@ All semantic analysis runs **locally on the worker**, CPU-only. Page text is nev
 
 ```mermaid
 flowchart LR
-    HTML[Suppressed HTML] --> VT[Extract visible text]
-    VT --> NT[New text vs baseline]
-    NT --> AG[Aggression lexicon · weighted]
-    NT --> TP[Topic keywords]
-    VT --> EMB[MiniLM 384-d embeddings]
-    EMB --> COS[Cosine · baseline vs current]
-    AG --> M[max]
-    TP --> M
-    COS --> M
-    M --> OUT[Layer 8 score · 0.0–1.0]
+    HTML["Suppressed<br/>HTML"]:::in --> VT["Visible<br/>text"]:::node
+    VT --> NT["New text<br/>vs baseline"]:::node
+    NT --> AG["Aggression lexicon<br/>weighted"]:::lex
+    NT --> TP["Topic<br/>keywords"]:::lex
+    VT ==> EMB[["MiniLM<br/>384-d embeddings"]]:::ml
+    EMB ==> COS(("cosine<br/>distance")):::ml
+    AG & TP & COS --> M(("max")):::pick
+    M --> OUT["Layer 8<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#1b5e20,stroke:#66bb6a,color:#fff;
+    classDef node fill:#2e7d32,stroke:#81c784,color:#fff;
+    classDef lex fill:#558b2f,stroke:#aed581,color:#fff;
+    classDef ml fill:#00695c,stroke:#4db6ac,color:#fff;
+    classDef pick fill:#43a047,stroke:#c8e6c9,color:#fff;
+    classDef out fill:#388e3c,stroke:#c8e6c9,color:#fff,stroke-width:3px;
 ```
 
 ### 1. Aggression lexicon (new text)

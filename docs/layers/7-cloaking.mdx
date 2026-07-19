@@ -24,20 +24,26 @@ The prober re-fetches the page over plain HTTP with **httpx (no JavaScript execu
 
 ```mermaid
 flowchart LR
-    REF[desktop_chrome · raw] --> RT[Reference visible text]
-    GB[googlebot · raw] --> C1{usable 2xx?}
-    MS[mobile_safari · raw] --> C2{usable 2xx?}
-    C1 -->|yes| J1[Jaccard vs reference]
-    C2 -->|yes| J2[Jaccard vs reference]
-    C1 -->|403/429/fail| SKIP1[Record · not scored]
-    C2 -->|403/429/fail| SKIP2[Record · not scored]
-    J1 --> WD[worst divergence]
-    J2 --> WD
-    WD --> SK["soft knee at 0.5"]
-    SK --> OUT[Layer 7 score · 0.0–1.0]
+    REF["desktop_chrome · raw"]:::ref --> RT[["Reference<br/>visible text"]]:::ref
+    GB["googlebot · raw"]:::ua --> C1{"usable<br/>2xx?"}:::gate
+    MS["mobile_safari · raw"]:::ua --> C2{"usable<br/>2xx?"}:::gate
+    C1 -->|"yes"| J1["Jaccard<br/>vs reference"]:::node
+    C2 -->|"yes"| J2["Jaccard<br/>vs reference"]:::node
+    C1 -->|"403/429/fail"| SKIP1(["Record<br/>not scored"]):::skip
+    C2 -->|"403/429/fail"| SKIP2(["Record<br/>not scored"]):::skip
+    RT -.-> J1
+    RT -.-> J2
+    J1 & J2 --> WD(("worst<br/>divergence")):::pick
+    WD --> SK["soft knee<br/>at 0.5"]:::node
+    SK --> OUT["Layer 7<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef ref fill:#4a148c,stroke:#ba68c8,color:#fff;
+    classDef ua fill:#6a1b9a,stroke:#ce93d8,color:#fff;
+    classDef gate fill:#00838f,stroke:#4dd0e1,color:#fff;
+    classDef node fill:#7b1fa2,stroke:#e1bee7,color:#fff;
+    classDef skip fill:#424242,stroke:#9e9e9e,color:#fff,stroke-dasharray:4 3;
+    classDef pick fill:#aa00ff,stroke:#ea80fc,color:#fff;
+    classDef out fill:#8e24aa,stroke:#e1bee7,color:#fff,stroke-width:3px;
 ```
 
 <Steps>

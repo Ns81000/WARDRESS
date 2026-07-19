@@ -55,16 +55,20 @@ A hash cannot grade *how much* a page changed — that is the job of the downstr
 Layer 1 is the pipeline's largest performance optimization. A byte-identical document cannot differ in its DOM tree, its links, its rendered pixels, its visible text, or its semantics — so an identical hash skips those layers entirely.
 
 ```mermaid
-flowchart TB
-    H[Normalized HTML] --> D[SHA-256 digest]
-    D --> C{Equals baseline?}
-    C -->|Identical · 0.0| SKIP[Skip layers 2 · 3 · 4 · 5 · 8]
-    C -->|Different · 1.0| RUN[Run layers 2 · 3 · 4 · 5 · 8]
-    SKIP --> ALWAYS[Layers 6 · 7 · 9 run regardless]
-    RUN --> ALWAYS
+flowchart TD
+    B[("Baseline<br/>SHA-256")]:::src
+    C[("Current<br/>SHA-256")]:::src
+    B --> EQ{"Digests<br/>equal?"}
+    C --> EQ
+    EQ -->|"Identical · 0.0"| SKIP(["Gate CLOSED<br/>skip 2·3·4·5·8"]):::cool
+    EQ -->|"Different · 1.0"| RUN(["Gate OPEN<br/>run 2·3·4·5·8"]):::hot
+    SKIP --> ALW[["6 · 7 · 9 run regardless"]]
+    RUN --> ALW
 
-    classDef gate fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class C gate;
+    classDef src fill:#006064,stroke:#00acc1,color:#fff;
+    classDef cool fill:#0d47a1,stroke:#42a5f5,color:#fff;
+    classDef hot fill:#b71c1c,stroke:#ef5350,color:#fff;
+    class EQ src;
 ```
 
 <AccordionGroup>

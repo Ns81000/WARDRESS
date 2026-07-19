@@ -28,20 +28,19 @@ A new external domain in a `<script>`, `<iframe>`, or `<form action>` is treated
 
 ```mermaid
 flowchart LR
-    HTML[Suppressed HTML] --> EX[Collect 5 reference kinds]
-    EX --> NM[Normalize · resolve · drop js:/data:/mailto:]
-    NM --> DM[Extract hostnames]
-    DM --> SD{Set difference vs baseline}
-    SD --> ND[New external domains × weight]
-    SD --> CH[Same-domain churn]
-    ND --> SC[domain_score]
-    CH --> CS[churn_score]
-    SC --> MX[max]
-    CS --> MX
-    MX --> OUT[Layer 3 score · 0.0–1.0]
+    HTML["Suppressed<br/>HTML"]:::in --> EX["Collect 5 ref kinds<br/>a · link · script · img · form"]:::node
+    EX --> NM["Normalize · resolve<br/>drop js: data: mailto:"]:::node
+    NM --> DM(["Hostname set"]):::node
+    DM --> SD{"Set difference<br/>vs baseline"}:::pick
+    SD -->|"added hosts"| ND["New external<br/>× weight"]:::node
+    SD -->|"same host"| CH["Same-domain<br/>churn"]:::node
+    ND & CH --> MX(("max")):::pick
+    MX --> OUT["Layer 3<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#004d40,stroke:#1de9b6,color:#fff;
+    classDef node fill:#00695c,stroke:#4db6ac,color:#fff;
+    classDef pick fill:#00bfa5,stroke:#a7ffeb,color:#00201b;
+    classDef out fill:#00897b,stroke:#b2dfdb,color:#fff,stroke-width:3px;
 ```
 
 <Steps>

@@ -14,18 +14,20 @@ The **Signatures Layer** is a fast, rule-based scanner for the "calling cards" o
 
 ```mermaid
 flowchart LR
-    HTML[Suppressed HTML] --> VT[Extract visible text · lxml]
-    VT --> NT[Isolate NEW text vs baseline]
-    NT --> SIG[Signature phrases · weighted]
-    NT --> PR[Profanity burst]
-    NT --> SF[Unicode script flip]
-    SIG --> M[max]
-    PR --> M
-    SF --> M
-    M --> OUT[Layer 5 score · 0.0–1.0]
+    HTML["Suppressed<br/>HTML"]:::in --> VT["Visible text<br/>lxml"]:::node
+    VT --> NT{{"Isolate NEW text<br/>vs baseline"}}:::gate
+    NT --> SIG["&quot;hacked by&quot; ·<br/>&quot;owned by&quot; · weighted"]:::probe
+    NT --> PR["Profanity<br/>burst"]:::probe
+    NT --> SF["Unicode script flip<br/>Latin → Cyrillic/Arabic"]:::probe
+    SIG & PR & SF --> M(("max")):::pick
+    M --> OUT["Layer 5<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#880e4f,stroke:#f06292,color:#fff;
+    classDef node fill:#ad1457,stroke:#f48fb1,color:#fff;
+    classDef gate fill:#c2185b,stroke:#f8bbd0,color:#fff;
+    classDef probe fill:#d81b60,stroke:#fce4ec,color:#fff;
+    classDef pick fill:#f50057,stroke:#ff80ab,color:#fff;
+    classDef out fill:#ad1457,stroke:#f8bbd0,color:#fff,stroke-width:3px;
 ```
 
 Visible text is extracted from the lxml tree, excluding `<script>`, `<style>`, `<noscript>`, and `<template>` nodes (with a tag-stripping regex fallback if no DOM builds). The baseline and current texts are split into lines and sentences; only pieces present now but absent from the baseline feed the signature and profanity checks.

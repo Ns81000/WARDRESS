@@ -24,17 +24,18 @@ If **both** sides fail to parse, the layer returns `0.0` with a note. If **one**
 ## Deep dive mechanism
 
 ```mermaid
-flowchart LR
-    HTML[Suppressed HTML] --> P[lxml recover parse]
-    P --> S[Tree statistics]
-    S --> CH[Tag churn score × 0.6]
-    S --> SN[Sensitive-tag score]
-    CH --> M[max]
-    SN --> M
-    M --> OUT[Layer 2 score · 0.0–1.0]
+flowchart TD
+    HTML["Suppressed HTML"]:::in --> P{{"lxml recover-parse<br/>→ element tree"}}
+    P --> S["Tree statistics<br/>depth · counts · attrs"]:::node
+    S --> CH["Tag churn<br/>× 0.6"]:::node
+    S --> SN["Sensitive tags<br/>script · iframe · hidden"]:::node
+    CH & SN --> M(("max")):::pick
+    M --> OUT["Layer 2<br/>0.0 – 1.0"]:::out
 
-    classDef out fill:#1b5e20,stroke:#2e7d32,color:#fff;
-    class OUT out;
+    classDef in fill:#311b92,stroke:#7c4dff,color:#fff;
+    classDef node fill:#4527a0,stroke:#9575cd,color:#fff;
+    classDef pick fill:#7c4dff,stroke:#b388ff,color:#fff;
+    classDef out fill:#5e35b1,stroke:#b39ddb,color:#fff,stroke-width:3px;
 ```
 
 The layer walks the tree once and extracts a statistics bundle for each side: total element count, maximum depth, per-tag counts, and dedicated counts for `<script>`, `<iframe>`, and hidden elements. It then computes two scores and takes the larger.
