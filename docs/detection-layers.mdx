@@ -13,7 +13,7 @@ Every scan drives the target page through nine specialized layers, each designed
 ## The pipeline at a glance
 
 ```mermaid
-flowchart TB
+flowchart LR
     F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
     L1 --> G{Identical?}
     G -->|Yes| GATE[Skip 2 · 3 · 4 · 5 · 8]
@@ -21,7 +21,7 @@ flowchart TB
     GATE --> ALWAYS
     CONTENT --> ALWAYS
     subgraph ALWAYS [Always run · independent of the gate]
-      direction LR
+      direction TB
       L6[6 · Security Metadata]
       L7[7 · Cloaking]
     end

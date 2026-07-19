@@ -13,7 +13,7 @@ The **Visual Diff Layer** evaluates what a visitor actually sees. Image-based de
 ## Three measurements, one score
 
 ```mermaid
-flowchart TD
+flowchart LR
     BS["Baseline PNG"]:::in --> GL
     CS["Current PNG"]:::in --> GL["Grayscale · Pillow"]:::node
     GL --> MK["Mask bbox regions<br/>mid-gray 128"]:::node

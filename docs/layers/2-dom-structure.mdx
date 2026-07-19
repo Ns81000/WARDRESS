@@ -24,7 +24,7 @@ If **both** sides fail to parse, the layer returns `0.0` with a note. If **one**
 ## Deep dive mechanism
 
 ```mermaid
-flowchart TD
+flowchart LR
     HTML["Suppressed HTML"]:::in --> P{{"lxml recover-parse<br/>→ element tree"}}
     P --> S["Tree statistics<br/>depth · counts · attrs"]:::node
     S --> CH["Tag churn<br/>× 0.6"]:::node

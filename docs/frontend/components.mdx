@@ -13,7 +13,7 @@ The frontend has two component tiers: low-level primitives in `src/components/ui
 ## Component layering
 
 ```mermaid
-flowchart TB
+flowchart LR
     RADIX["radix-ui primitives<br/>accessible · keyboard · a11y"] --> UI["ui/ · shadcn-style<br/>button · dialog · select · table · badge"]
     TW["Tailwind v4 tokens<br/>@theme in index.css"] --> UI
     RECHARTS[Recharts] --> WC

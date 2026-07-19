@@ -13,7 +13,7 @@ The **Security Metadata Layer** runs on the network transport and server configu
 ## Signal fusion
 
 ```mermaid
-flowchart TD
+flowchart LR
     PR[/"Metadata prober · httpx<br/>runs every scan"/]:::in
     PR --> TLS["TLS cert diff<br/>fingerprint · CA · subject"]:::probe
     PR --> HDR["Header diff<br/>HSTS · CSP · CORS"]:::probe
