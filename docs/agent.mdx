@@ -1,0 +1,47 @@
+---
+title: "AI Agent"
+description: "Interact with Wardress via a conversational AI interface."
+icon: "robot"
+---
+
+Wardress features a conversational AI agent designed to help operators analyze incidents and manage the system. The agent acts as an advanced interface to the platform, leveraging the underlying data models and RBAC permissions.
+
+## Operating Surfaces
+
+You can interact with the agent through two primary surfaces:
+
+1. **Web Dashboard**: An integrated chat interface inside the React frontend.
+2. **Telegram Bot**: If configured in the `.env` settings, the agent can converse securely via Telegram.
+
+Regardless of the surface used, the conversation history and context are synced and stored in the database.
+
+## Capabilities
+
+The agent can perform operations on your behalf, including:
+- Querying the health of the system.
+- Explaining defacement evidence in plain English.
+- Fetching scan histories and active alerts.
+- Acknowledging alerts and interacting with remediation hooks.
+
+## Safety & Action Confirmation Loop
+
+Because an AI model can hallucinate or misinterpret a request, Wardress implements a strict **Action Confirmation Loop** for all high-impact actions. The agent model *never* executes state-changing actions directly.
+
+<Steps>
+  <Step title="Model Proposal">
+    The user asks the agent to perform a high-impact action (e.g., "Acknowledge the alert for example.com"). The model decides to call the internal API tool.
+  </Step>
+  <Step title="Frozen Pending State">
+    Instead of executing the action, the backend intercepts the tool call, freezes the arguments verbatim, and places it into a `pending` state.
+  </Step>
+  <Step title="Explicit User Confirmation">
+    The UI renders a confirmation card (or the Telegram Bot sends a confirmation prompt). The user must explicitly click "Confirm" or "Reject".
+  </Step>
+  <Step title="Execution">
+    Only after the user confirms does the system dispatch the action. At confirmation time, the system rigorously re-checks the user's RBAC permissions to ensure they are authorized to execute the action.
+  </Step>
+</Steps>
+
+<Warning>
+  **Safety Guarantee**: The LLM is never in the loop between the "propose" and "execute" phases. It cannot bypass the confirmation, modify the frozen arguments post-approval, or escalate its own privileges.
+</Warning>

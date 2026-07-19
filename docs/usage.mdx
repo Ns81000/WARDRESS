@@ -1,0 +1,114 @@
+---
+title: "Usage & Dashboard"
+description: "Navigate the Wardress platform to manage monitored sites, handle alerts, and orchestrate automated remediations."
+icon: "gauge"
+---
+
+## Authentication & Access
+
+Access the Wardress dashboard by navigating to `http://localhost:8321` (or your configured URL) in your web browser. 
+
+<Frame>
+  <img src="/screenshots/login.png" alt="Authentication Screen" />
+</Frame>
+
+Log in using the email and password generated during the installation process. The portal enforces session durations and strict server-side rate limits to prevent brute-force attacks.
+
+## Main Dashboard (Sites)
+
+Upon logging in, you are greeted by the Main Site Directory. This is your central operations deck.
+
+<Frame>
+  <img src="/screenshots/sites.png" alt="Sites Dashboard" />
+</Frame>
+
+From this view, you can:
+- View all configured sites and their current status (e.g., Healthy, Flagged, Scanning).
+- See active alerts at a glance.
+- Trigger immediate manual scans using the quick-action run keys.
+
+## Managing a Site
+
+Clicking on any site in the dashboard opens the **Site Detail Panel**.
+
+<Frame>
+  <img src="/screenshots/site-detail.png" alt="Site Detail" />
+</Frame>
+
+Here, operators can:
+- **Manage Baselines**: View when the last baseline was captured, or force a re-baseline to update the trusted state.
+- **Schedule Scanning Intervals**: Adjust the base interval for automated periodic scans. Note that Wardress utilizes *Adaptive Cadence Scanning*, tightening the interval dynamically if suspicious activity is detected.
+- **Define Thresholds**: Configure the sensitivity and risk score thresholds required to trigger an alert.
+- **Add Suppression Rules**: Define regex patterns to ignore specific dynamic elements on the page.
+
+## Scan Reports
+
+When a scan is completed, a detailed report is generated.
+
+### Visual Diff
+Wardress captures screenshots and highlights pixel-level changes.
+<Frame>
+  <img src="/screenshots/Scan_Reoprt (1).png" alt="Scan Report Visual Diff" />
+</Frame>
+
+### DOM Structural Comparison
+Understand exactly what changed in the underlying HTML tree, such as injected scripts or hidden iframes.
+<Frame>
+  <img src="/screenshots/Scan_Reoprt (2).png" alt="Scan Report DOM Structure" />
+</Frame>
+
+### Semantic and Header Analytics
+Review differences in HTTP headers, SSL certificates, external links, and semantic text embeddings.
+<Frame>
+  <img src="/screenshots/Scan_Reoprt (3).png" alt="Scan Report Analytics" />
+</Frame>
+
+## AI Incident Assistant
+
+If you have configured an AI integration (Gemini or local Ollama), Wardress can analyze complex cryptographic and technical diff signatures and translate them into a plain-English incident summary.
+
+<Frame>
+  <img src="/screenshots/assitant.png" alt="Incident Assistant" />
+</Frame>
+
+<Info>
+  The Assistant leverages active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences). To conserve API usage, summaries are cached in the database.
+</Info>
+
+## Remediation Hooks
+
+Wardress can orchestrate automated responses when a site is flagged.
+
+<Steps>
+  <Step title="Configure Webhook">
+    Define a webhook endpoint (e.g., a serverless function to enable a maintenance page or rollback a deployment).
+  </Step>
+  <Step title="Trigger Alert">
+    When a scan exceeds the configured risk threshold, the webhook is queued.
+  </Step>
+  <Step title="Manual Confirmation">
+    By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator.
+  </Step>
+</Steps>
+
+## Audit & Logs
+
+Wardress maintains comprehensive logs for operational transparency and security auditing.
+
+### Alerts Registry
+A historical timeline of all triggered alerts, displaying delivery logs, channel pathways, and dispatcher statuses.
+<Frame>
+  <img src="/screenshots/alerts.png" alt="Alerts Logs" />
+</Frame>
+
+### System Audit Logs
+An immutable ledger tracking every system change, user access, settings update, and remediation action. Sensitive credentials and secrets are automatically redacted.
+<Frame>
+  <img src="/screenshots/audit.png" alt="Audit Logs" />
+</Frame>
+
+### Diagnostic System Health
+Real-time health statistics charting Celery queue depth, worker heartbeats, and average scan execution throughput.
+<Frame>
+  <img src="/screenshots/health.png" alt="Health Indicators" />
+</Frame>

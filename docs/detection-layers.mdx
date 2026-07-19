@@ -1,0 +1,45 @@
+---
+title: "Detection Pipeline"
+description: "Understand the 9 specialized analysis layers that power Wardress's fused risk model."
+icon: "layer-group"
+---
+
+Each scan drives the target page through 9 specialized analysis layers designed to catch different defacement styles, ranging from simple script injections to complex semantic hijacking.
+
+## Gating and Optimizations
+
+To preserve system resources and prevent false alarms from dynamic rendering variations, the pipeline implements intelligent gating rules:
+
+<CardGroup cols={2}>
+  <Card title="Layer 1 Gating" icon="hashtag">
+    If the byte-level hash of the page is identical to the baseline, the engine skips Layers 2, 3, 4, 5, and 8. If nothing changed at the byte level, DOM trees, text semantics, visual pixels, and signatures are guaranteed to be identical.
+  </Card>
+  <Card title="Persistent Probes" icon="rotate">
+    Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan. TLS cert details, response headers, and UA-rotated fetches are invisible to the primary DOM content hash and could indicate high-impact MITM attacks or crawler-specific cloaking.
+  </Card>
+  <Card title="Crash Isolation" icon="shield-xmark">
+    Each layer is isolated inside `try/except` enclosures. A parser failure in one layer records the error as evidence, assigns a `None` score, and allows the remaining layers to continue functioning.
+  </Card>
+</CardGroup>
+
+---
+
+## Pipeline Breakdown
+
+| Layer | Stable Key | Input Scope | Core Detection Heuristics |
+| :--- | :--- | :--- | :--- |
+| **1. Content Hash** | `layer1_hash` | Original HTML | Byte-level MD5/SHA comparison of normalized, whitespace-stripped HTML. |
+| **2. DOM Structure** | `layer2_dom_structure` | Suppressed HTML | Inspects structural tree depth, element counts, script tags, iframe insertions, and style attributes that force element hiding. |
+| **3. Link Audit** | `layer3_link_audit` | Suppressed HTML | Audits newly introduced external hyperlinks, stylesheets, script references, and HTML form target domains. |
+| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | Compares page screenshots using `scikit-image` and `imagehash`. Evaluates differences across color, structural similarity index (SSIM), and pixel variance while masking out designated dynamic boxes. |
+| **5. Signatures** | `layer5_signatures` | New visible text | Scans newly added visible text for defacement keywords ("hacked by", "owned by"), profanity frequency, and dominant Unicode script changes (e.g. Latin to Cyrillic/Arabic). |
+| **6. Security Metadata** | `layer6_security_metadata` | Network headers | Audits TLS certificate validity, fingerprints (distinguishes CA reissues from subject shifts), security header policies (HSTS, CSP, CORS), and `robots.txt` changes. |
+| **7. Cloaking** | `layer7_cloaking` | HTTP variant fetches | Rotates the User-Agent (Googlebot, Mobile Safari, Desktop Chrome) and compares raw HTML content similarities to identify content cloaked specifically for search engines. |
+| **8. Text Semantics** | `layer8_semantics` | Suppressed text | Computes the sentence embeddings of visible text using a local **MiniLM-L6-v2** neural network, measuring semantic cosine distance from the baseline. |
+| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | Fuses the active layer signals using a weighted heuristic matrix into a final, normalized **0% to 100% Risk Score**. |
+
+## Adaptive Cadence Scanning
+
+To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies based on the Risk Fusion score.
+
+If a scan crosses the material change threshold (e.g., `fused_risk >= 0.15`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).

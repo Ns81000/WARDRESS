@@ -1,0 +1,122 @@
+---
+title: "Installation"
+description: "Deploy Wardress in minutes using our automated installation scripts."
+icon: "download"
+---
+
+Wardress provides automated PowerShell installation scripts for Windows hosts running Docker Desktop. You can run the setup in a single command without cloning the repository manually first.
+
+## Prerequisites
+
+Before starting the installation, ensure your system meets the following requirements:
+
+<CardGroup cols={2}>
+  <Card title="Operating System" icon="windows">
+    Windows 10 or 11 (64-bit).
+  </Card>
+  <Card title="Virtualization" icon="docker">
+    Docker Desktop installed with the **WSL 2 backend** activated and running.
+  </Card>
+  <Card title="Hardware" icon="hard-drive">
+    At least 6 GB of free disk space for containers and data.
+  </Card>
+</CardGroup>
+
+<Warning>
+  **Important**: Ensure Docker Desktop is running before launching the installation command. The installer will query the Docker daemon and fail if it cannot connect.
+</Warning>
+
+## One-Command Quick Start
+
+Choose one of the following commands, paste it into PowerShell, and hit Enter. The commands automatically handle cloning/downloading, directory navigation, and script execution.
+
+<Tabs>
+  <Tab title="Option A: No-Git Installation (ZIP)">
+    Use this if you do not have Git installed. It downloads the repository ZIP archive, extracts it, and executes the installer:
+
+    ```powershell
+    Invoke-WebRequest -Uri "https://github.com/Ns81000/WARDRESS/archive/refs/heads/main.zip" -OutFile "wardress.zip"; Expand-Archive "wardress.zip" -DestinationPath "."; cd WARDRESS-main; powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+    ```
+  </Tab>
+  <Tab title="Option B: Git-Based Installation">
+    Use this if you have Git installed. It clones the repository and starts the installer:
+
+    ```powershell
+    git clone https://github.com/Ns81000/WARDRESS.git; cd WARDRESS; powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+    ```
+  </Tab>
+</Tabs>
+
+### Customizing the Admin Email
+
+You can override the default administrator email during installation by running the script manually with the `-AdminEmail` flag:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -AdminEmail security@yourdomain.com
+```
+
+## What the Installer Does
+
+When you run the installation script, Wardress automatically handles the full setup process:
+
+<Steps>
+  <Step title="Environment Setup">
+    Creates your `.env` configuration file from `.env.example`. It automatically swaps placeholder tags with cryptographically secure random strings for passwords and keys.
+  </Step>
+  <Step title="Serial Container Builds">
+    Builds the primary services (`app`, `worker`, `beat`) sequentially to prevent high CPU or RAM spikes on standard workstations.
+  </Step>
+  <Step title="Database Migration">
+    Starts Postgres and Redis and executes Alembic database upgrades to build the relational schemas.
+  </Step>
+  <Step title="Admin Seeding">
+    Seeds the database with your admin account.
+  </Step>
+  <Step title="Desktop Integration">
+    Creates a desktop shortcut named **Wardress.lnk** that opens `http://localhost:8321`.
+  </Step>
+</Steps>
+
+<Check>
+  Once completed, the script will output a generated admin password. Log into **[http://localhost:8321](http://localhost:8321)** using the printed credentials.
+</Check>
+
+<Warning>
+  **The generated admin credentials are shown exactly once** during first installation. They are stored locally in your `.env` file (`ADMIN_PASSWORD`) and are not saved or transmitted anywhere else. Keep your `.env` file secure.
+</Warning>
+
+## Updating Wardress
+
+To update Wardress to the latest release while maintaining all database records, baselines, and configuration parameters, use the update script.
+
+<Tabs>
+  <Tab title="Git Checkouts">
+    Open PowerShell in the `WARDRESS` folder and run:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\update.ps1
+    ```
+  </Tab>
+  <Tab title="Non-Git Checkouts (ZIP)">
+    Download the new ZIP, extract it, replace the old files, and run:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\update.ps1 -NoGitPull
+    ```
+  </Tab>
+</Tabs>
+
+## Uninstall Guide
+
+To stop and completely remove Wardress from your system:
+
+1. Stop the active container stack (this preserves the database volume and your scan history):
+   ```bash
+   docker compose down
+   ```
+2. **OR** stop the stack and completely delete all stored data volumes:
+   ```bash
+   docker compose down -v
+   ```
+
+<Caution>
+  Running `docker compose down -v` permanently deletes all database records and screenshot baselines. Back up your `.env` configuration file if you plan to reinstall later.
+</Caution>

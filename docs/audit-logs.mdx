@@ -1,0 +1,26 @@
+---
+title: "Audit Logs"
+description: "Review the immutable ledger of system actions and modifications."
+icon: "clipboard-list"
+---
+
+The **Audit Log** is Wardress's central mechanism for operational transparency and accountability. It tracks who changed what, and when.
+
+## Immutable Tracking
+
+Every configuration change, baseline capture, suppression-rule addition, settings edit, alert acknowledgment, site muting, and user-management action writes a row to the Audit Log.
+
+<Warning>
+  **Immutability Guarantee**: By design, the Wardress REST API does not expose any endpoint to `UPDATE` or `DELETE` audit log rows. Once an action is recorded, it remains permanently in the database ledger.
+</Warning>
+
+## Redaction of Sensitive Data
+
+To assist with debugging, the Audit Log captures "Before" and "After" JSON snapshots of the modified rows. 
+
+However, Wardress enforces a strict redaction policy. Before the snapshot is written to the database, sensitive keys (such as `password_hash`, `token_hash`, and encrypted settings blobs) are actively filtered out. The Audit Log will *never* leak an API key or an SMTP password.
+
+## Surviving Deletions
+
+The Audit Log heavily denormalizes display fields. 
+For example, it stores the `actor_email` and a human-readable `target_label` (e.g., "SMTP settings" or the name of a deleted site). If an Admin deletes a user account, the historical actions taken by that user remain perfectly readable in the Audit Log, even though the foreign key reference is nulled.

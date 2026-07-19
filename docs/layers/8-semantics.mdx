@@ -1,0 +1,28 @@
+---
+title: "Layer 8: Semantics"
+description: "NLP-based semantic drift detection using local embeddings."
+icon: "brain"
+---
+
+The **Semantics Layer** goes beyond exact string matching (like Layer 5) and attempts to understand the *meaning* of the text on the page. If a corporate homepage is replaced with political propaganda, the underlying DOM structure might look similar, but the semantics have completely drifted.
+
+## Local, CPU-Bound Processing
+
+Wardress performs all semantic analysis **locally on the worker node**. It does not send page text to external APIs (like OpenAI) during the high-throughput scanning phase, ensuring privacy, zero API costs, and compliance with strict data sovereignty requirements.
+
+## Evaluation Mechanisms
+
+This layer evaluates the visible text using three distinct methods, taking the `max()` of the three scores as the final layer output:
+
+### 1. Topic Keyword Shift
+It scans the *newly added text* against categorized threat topics (e.g., `breach_bragging`, `credential_theft`, `defacement_meta`). If words like "infiltrated", "database dumped", or "mirrored on zone" appear where they didn't exist before, the topic score spikes.
+
+### 2. Aggression Lexicon
+It applies a graded weight lexicon to the new text to measure aggression. Phrases like "pay the price", "no one is safe", or "traitors" carry high weights. The score is calculated using an exponential decay function based on the total aggression weight found.
+
+### 3. Semantic Drift (MiniLM)
+Wardress loads the `all-MiniLM-L6-v2` neural network model into memory (CPU-only).
+1. It generates a 384-dimensional vector embedding for the Baseline visible text.
+2. It generates an embedding for the Current scan's visible text.
+3. It calculates the **Cosine Similarity** between the two vectors.
+4. If the similarity drops below `0.85`, it indicates a severe shift in meaning (semantic drift) and the score scales up.

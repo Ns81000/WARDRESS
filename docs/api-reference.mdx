@@ -1,0 +1,46 @@
+---
+title: "API Reference"
+description: "Integrate Wardress with external tools using our REST API."
+icon: "code"
+---
+
+Wardress is built API-first. Everything you can do in the dashboard, you can do via the REST API. 
+
+The interactive OpenAPI documentation (Swagger UI) is available locally at **`http://localhost:8321/docs`**.
+
+## Authenticating API Requests
+
+All external API requests to Wardress must be authenticated using a Bearer token.
+
+<Steps>
+  <Step title="Generate API Key">
+    Navigate to **Settings → API Keys** in the dashboard and click "Generate Key". The key will only be shown to you once.
+  </Step>
+  <Step title="Include in Request Header">
+    Include this token in the `Authorization` header of your HTTP requests:
+    
+    ```bash
+    curl -H "Authorization: Bearer wk_your_api_key_here" http://localhost:8321/api/sites
+    ```
+  </Step>
+</Steps>
+
+## Example: Managing Sites
+
+<CodeGroup>
+
+```bash List Sites
+curl -X GET "http://localhost:8321/api/sites" \
+  -H "Authorization: Bearer wk_your_api_key_here"
+```
+
+```bash Trigger Manual Scan
+curl -X POST "http://localhost:8321/api/sites/123/scan" \
+  -H "Authorization: Bearer wk_your_api_key_here"
+```
+
+</CodeGroup>
+
+## Hashed API Keys
+
+For security, API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted or reused. If you lose your API key, you must revoke it and generate a new one via the dashboard.

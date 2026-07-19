@@ -1,0 +1,38 @@
+---
+title: "Layer 2: DOM Structure"
+description: "Detects structural tampering, script injections, and iframe hijacks."
+icon: "code"
+---
+
+The **DOM Structure Layer** inspects the underlying HTML tree of the page, regardless of how it visually renders in the browser. Defacements often rely on injecting hidden elements, malicious scripts, or overriding style attributes to hide the original content.
+
+## What is Analyzed
+
+This layer compares the `baseline` DOM tree against the `current` DOM tree and evaluates several structural heuristics:
+
+- **Tree Depth & Element Counts**: Massive shifts in the total number of HTML tags or the depth of the document tree indicate a severe rewrite or replacement of the page.
+- **Script Tags**: Monitors for newly added `<script>` tags, especially those loading external resources not present in the baseline.
+- **Iframe Insertions**: Attackers frequently use hidden or absolutely-positioned `<iframe>` tags to overlay malicious content (clickjacking) or mine cryptocurrency silently.
+- **Style Overrides**: Detects inline `style=""` attributes that force structural elements to `display: none` or `visibility: hidden` unexpectedly.
+
+## False Positive Suppression
+
+Layer 2 receives the **Suppression-Filtered** copy of the HTML.
+
+If an operator defines a CSS Selector suppression rule (e.g., `#visitor-counter`), the engine strips that subtree from *both* the baseline and the current scan *before* Layer 2 runs. This ensures that a dynamic widget adding elements every second does not artificially inflate the structural risk score.
+
+<CodeGroup>
+```html Baseline (Stripped)
+<body>
+  <h1>Welcome</h1>
+  <!-- #visitor-counter removed by suppression engine -->
+</body>
+```
+
+```html Current (Stripped)
+<body>
+  <h1>Welcome</h1>
+  <!-- #visitor-counter removed by suppression engine -->
+</body>
+```
+</CodeGroup>

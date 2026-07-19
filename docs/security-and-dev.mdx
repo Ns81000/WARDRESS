@@ -1,0 +1,55 @@
+---
+title: "Security & Development"
+description: "Review Wardress's security mechanisms and learn how to run the platform locally for development."
+icon: "lock"
+---
+
+## Security Features
+
+Wardress incorporates robust security mechanisms to protect both the platform itself and the networks it is deployed on.
+
+<AccordionGroup>
+  <Accordion title="SSRF Protection & Redirect Validation">
+    Monitored scan targets must resolve to public IP addresses by default. Probing internal, loopback, or link-local targets (`127.0.0.1`, `192.168.x.x`) is blocked unless explicitly enabled via the per-site configuration flag `allow_private_networks`. To prevent SSRF bypasses via open redirects or DNS rebinding, redirect locations are checked hop-by-hop before fetching.
+  </Accordion>
+  <Accordion title="ReDoS Protection in Suppression Engine">
+    When filtering dynamic parts of pages using Regex-based suppression rules, the regex parser enforces a strict **2.0 second timeout limit** (`_REGEX_TIMEOUT_SECONDS`) on match evaluations to safeguard worker nodes against Catastrophic Backtracking Denial of Service attacks.
+  </Accordion>
+  <Accordion title="Fernet Encryption at Rest">
+    Integration secrets (like SMTP passwords, Telegram bot tokens, API keys, and Apprise Webhook URLs) are encrypted in the PostgreSQL database using a Fernet key (`CREDENTIALS_ENCRYPTION_KEY`). They are never exposed via the API.
+  </Accordion>
+  <Accordion title="Hashed API Keys">
+    API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted.
+  </Accordion>
+  <Accordion title="Audit Logging">
+    The system records every administrative change, settings edit, user creation, and manual remediation step. Sensitive variables and secrets are automatically redacted from the audit history.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Development and Testing
+
+The backend is built with **FastAPI** and managed via **uv**. The frontend is built with **React 19** and managed via **pnpm**.
+
+### Backend Development
+
+Run migrations and execute the unit-test suite. The test suite uses an in-memory SQLite database via `aiosqlite`, so no Postgres instance is required.
+
+```bash
+cd backend
+uv sync
+uv run pytest
+```
+
+### Frontend Development
+
+Install dependencies, run component-level tests, check types, and run the linter.
+
+```bash
+cd frontend
+pnpm install
+pnpm test
+pnpm exec tsc --noEmit
+pnpm exec oxlint src
+```

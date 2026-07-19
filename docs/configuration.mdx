@@ -1,0 +1,96 @@
+---
+title: "Configuration Reference"
+description: "Configure Wardress using environment variables and understand Role-Based Access Control."
+icon: "gear"
+---
+
+## Environment Variables (`.env`)
+
+These environment variables are written to `.env` during the installation process. You can manually modify them later by stopping the stack, editing `.env`, and restarting the stack (`docker compose up -d`).
+
+<ParamField path="WARDRESS_HTTP_PORT" type="integer" default="8321">
+  The local port the FastAPI server and React dashboard bind to.
+</ParamField>
+
+<ParamField path="PUBLIC_BASE_URL" type="string" default="http://localhost:8321">
+  The root URL used in email and Telegram alert linkages.
+</ParamField>
+
+<ParamField path="POSTGRES_USER" type="string" default="wardress">
+  Database username.
+</ParamField>
+
+<ParamField path="POSTGRES_PASSWORD" type="string" default="(generated)">
+  Cryptographically random database password.
+</ParamField>
+
+<ParamField path="DATABASE_URL" type="string" default="(generated)">
+  Database connection string containing the generated password.
+</ParamField>
+
+<ParamField path="JWT_SECRET" type="string" default="(generated)">
+  Used to sign user session cookies (enforces >= 32 characters).
+</ParamField>
+
+<ParamField path="CREDENTIALS_ENCRYPTION_KEY" type="string" default="(generated)">
+  A Fernet key used to encrypt SMTP and API integration credentials at rest.
+</ParamField>
+
+<ParamField path="ADMIN_EMAIL" type="string" default="admin@example.com">
+  Default email for the first administrator account.
+</ParamField>
+
+<ParamField path="ADMIN_PASSWORD" type="string" default="(generated)">
+  The seeded administrator password (shown exactly once during installation).
+</ParamField>
+
+<ParamField path="GEMINI_API_KEY" type="string" default="(empty)">
+  Optional. API key for Gemini models to generate incident explanations.
+</ParamField>
+
+<ParamField path="GEMINI_MODEL" type="string" default="gemini-flash-latest">
+  The model variation used for explaining incidents.
+</ParamField>
+
+<ParamField path="ENABLE_OLLAMA" type="boolean" default="false">
+  Set to `true` to start the local-LLM container for offline AI explanations.
+</ParamField>
+
+<ParamField path="TELEGRAM_BOT_TOKEN" type="string" default="(empty)">
+  Optional. Telegram bot token for interactive system queries.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_PER_IP" type="integer" default="300">
+  Pre-auth API rate limits per client IP per window. Set to `0` to disable.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_PER_USER" type="integer" default="240">
+  Post-auth rate limits per authenticated user account.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_WINDOW_SECONDS" type="integer" default="60">
+  Time window length for rate-limit evaluations.
+</ParamField>
+
+<ParamField path="TRUST_PROXY_HEADERS" type="boolean" default="false">
+  Enable this *only* if Wardress is fronted by a reverse proxy (like NGINX).
+</ParamField>
+
+<ParamField path="COOKIE_SECURE" type="boolean" default="false">
+  Forces session cookies to be transmitted via HTTPS only. Set to `true` if serving Wardress over HTTPS.
+</ParamField>
+
+
+## Role-Based Access Control (RBAC)
+
+Wardress implements strict role enforcement across all endpoints. Use the dashboard to create and manage users, assigning them to one of three roles.
+
+| Access Permission | Admin | Analyst | Viewer |
+| :--- | :---: | :---: | :---: |
+| Read sites, scan records, alerts, system health, and PDF reports | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> |
+| Add/modify sites, execute manual scans, rebaseline pages, and add suppression rules | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — |
+| Acknowledge alerts, handle manual remediation confirmation queues | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — |
+| Manage personal API keys | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> | <Icon icon="check" iconType="solid" color="#2e7d32" /> |
+| Configure system settings, SMTP properties, and AI API integrations | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |
+| Create or modify remediation webhooks | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |
+| Perform user management operations and inspect system audit logs | <Icon icon="check" iconType="solid" color="#2e7d32" /> | — | — |

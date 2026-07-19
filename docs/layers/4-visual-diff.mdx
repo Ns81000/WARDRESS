@@ -1,0 +1,32 @@
+---
+title: "Layer 4: Visual Diff"
+description: "Pixel-perfect computer vision analysis using Structural Similarity."
+icon: "image"
+---
+
+The **Visual Diff Layer** evaluates what the user actually sees. Some defacements bypass the DOM and semantic layers by simply uploading a massive image that covers the entire screen (an image-based defacement). Layer 4 catches this immediately.
+
+## Mechanism
+
+Wardress utilizes a headless Chromium instance (via Playwright) to capture a full-page screenshot of the target site. The baseline screenshot is compared against the current screenshot using `scikit-image` and `numpy`.
+
+<Steps>
+  <Step title="Image Normalization">
+    Both images are converted to grayscale arrays.
+  </Step>
+  <Step title="Masking (BBox Suppression)">
+    If the operator has defined any Bounding Box (`bbox`) suppression rules (e.g., hiding an ad banner), those specific coordinate regions are blacked out on *both* images so they are ignored during comparison.
+  </Step>
+  <Step title="Structural Similarity Index (SSIM)">
+    The images are compared using the SSIM algorithm, which mimics human visual perception by measuring changes in structural information, luminance, and contrast (rather than raw pixel-by-pixel subtraction, which is highly prone to rendering noise).
+  </Step>
+  <Step title="Scoring">
+    The resulting SSIM float (0.0 to 1.0) is inverted (1.0 - SSIM). A score of `0.0` means visually identical; `1.0` means entirely different.
+  </Step>
+</Steps>
+
+## Bounding Box Rules
+
+Because visual rendering is highly sensitive (even a 1px shift in a font can trigger a difference), Wardress allows operators to draw boxes over dynamic regions via the dashboard.
+
+These rules are stored as normalized fractions `(x, y, w, h)` (e.g., `0.1, 0.2, 0.5, 0.1`). This makes them resolution-independent. If the site is captured at a different height tomorrow, the masked region proportionally scales to cover the exact same relative area.

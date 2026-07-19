@@ -1,0 +1,72 @@
+---
+title: "Introduction"
+description: "Self-hosted website defacement detection and automated response orchestration."
+icon: "shield-halved"
+---
+
+<img
+  className="block dark:hidden"
+  src="../assets/brand/wardress-logo.svg"
+  alt="Wardress Logo Light"
+/>
+<img
+  className="hidden dark:block"
+  src="../assets/brand/wardress-logo.svg"
+  alt="Wardress Logo Dark"
+/>
+
+## Overview
+
+**Wardress** is a production-grade, self-hosted security tool built to protect website integrity. It captures and freezes a trusted **baseline** of your target website (DOM structure, network references, visual layout, and textual semantics) and continuously monitors the site for malicious defacements, script injections, metadata tampering, and domain hijacking.
+
+Unlike simple page monitors, Wardress uses a **fused risk model** that aggregates results from 9 independent detection layers to calculate a single, highly accurate risk score. This filters out false positives caused by minor dynamic elements while raising immediate alarms when a site has been compromised.
+
+<CardGroup cols={2}>
+  <Card
+    title="9-Layer Pipeline"
+    icon="layer-group"
+    href="/detection-layers"
+  >
+    Deep analysis using DOM, visual, semantic, and metadata layers.
+  </Card>
+  <Card
+    title="Automated Response"
+    icon="bolt"
+    href="/usage#remediation-hooks"
+  >
+    Trigger webhooks to isolate or rollback compromised systems automatically.
+  </Card>
+  <Card
+    title="AI Incident Assistant"
+    icon="robot"
+    href="/usage#ai-incident-assistant"
+  >
+    Get plain-English incident summaries from Gemini or a local Ollama model.
+  </Card>
+  <Card
+    title="Self-Hosted & Private"
+    icon="server"
+    href="/installation"
+  >
+    Run everything on your own infrastructure via Docker Compose.
+  </Card>
+</CardGroup>
+
+## System Architecture
+
+Wardress is modularly designed as a set of containerized services coordinated via **Docker Compose**.
+
+<Frame>
+  <img src="/screenshots/Scan_Reoprt (1).png" alt="Scan Report Visual Diff" />
+</Frame>
+
+### Components
+
+- **Frontend SPA**: React 19 single-page application built with Vite and styled using Tailwind CSS v4. Includes visual diffing elements, full audit logs, and interactive controls.
+- **FastAPI Web Server**: High-performance asynchronous REST API that implements JWT session management, RBAC, and cryptographically hashed API keys.
+- **Celery & Redis**: An asynchronous task execution engine. **Celery Beat** schedules periodic probes, while **Celery Workers** perform parallel scans, alert dispatches, and webhooks.
+- **Playwright / Chromium Worker**: A headless browser instance running within the Celery worker that executes full DOM compilation, resource tracking, and screenshot captures.
+
+<Card title="Ready to get started?" icon="rocket" href="/installation">
+  Head over to the Installation guide to deploy Wardress on your local machine or server.
+</Card>

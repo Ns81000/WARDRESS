@@ -1,0 +1,34 @@
+---
+title: "Layer 9: Risk Fusion"
+description: "The machine-learning classifier that calculates the final, unified risk score."
+icon: "chart-network"
+---
+
+The **Risk Fusion Layer** is the final step in the pipeline. It takes the individual scores from Layers 1-8 and fuses them into a single, calibrated `risk_score` ranging from `0.0` to `1.0`.
+
+## The Logistic Regression Model
+
+Rather than relying on a hardcoded weighted-average formula, Wardress utilizes a **Scikit-Learn Logistic Regression** model (`lbfgs` solver). 
+
+At first boot, the model is deterministically fitted on a **Seed Dataset**. This dataset contains mathematically plotted layer-score vectors representing known real-world scenarios, such as:
+
+- Clean rescans
+- Dynamic content noise (hash flips, tiny visual wiggles)
+- Benign deploys (real structural changes, but no hostile signatures)
+- Heavy site redesigns
+- Classic full defacements
+- Stealthy script injections
+- Visual-only takeovers
+
+By passing the layer scores through this trained classifier, Wardress can output a *calibrated probability* that the current scan represents a hostile defacement, expertly filtering out false positives caused by noisy, dynamic websites.
+
+<Info>
+  **Future Upgrade Path**: By building the fusion layer on Scikit-Learn now, Wardress is architected for a drop-in upgrade path. Once enough scan history accumulates in the database, the seed dataset can be replaced with real, user-labeled historical data, stepping up to a Gradient Boosting model without requiring any changes to the pipeline itself.
+</Info>
+
+## Missing Data Handling
+
+The fusion layer is designed to be incredibly robust (Fail-Safe Principle). 
+- If a specific layer was skipped (e.g., due to identical content hashing), it contributes `0.0` to the feature vector.
+- If a layer crashed unexpectedly due to a parsing bug, it also contributes `0.0`.
+- If the Logistic Regression model itself fails to load or execute, Layer 9 automatically degrades to a simple `max()` function across all available sub-scores, ensuring the scan is still evaluated.

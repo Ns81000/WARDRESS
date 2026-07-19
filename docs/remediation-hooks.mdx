@@ -1,0 +1,50 @@
+---
+title: "Remediation Hooks"
+description: "Orchestrate automated incident response when a site is flagged."
+icon: "bolt"
+---
+
+**Remediation Hooks** allow Wardress to take active measures when a defacement is detected, rather than just sending an alert. 
+
+You can configure an outbound webhook URL that Wardress will POST an incident payload to. This allows you to integrate Wardress with serverless functions, CI/CD pipelines, or edge proxies to automatically isolate the affected system.
+
+## Supported Action Types
+
+While Wardress simply POSTs the payload to the URL you provide, you must assign an **Action Type** label to the hook to drive UI clarity:
+- `git_rollback`: Rollback the deployment via a CI provider.
+- `docker_restart`: Restart the container via a Portainer webhook.
+- `maintenance_page_swap`: Swap the load balancer to a static maintenance page.
+- `custom_webhook`: Generic payload delivery.
+
+## Execution Lifecycle
+
+Because automated infrastructure changes are highly destructive (and a false positive could accidentally take a healthy site offline), Wardress implements a strict **Fail-Safe** confirmation queue by default.
+
+<Steps>
+  <Step title="Pending Confirm">
+    When a scan exceeds the site's `flag_threshold`, the webhook is queued in a `pending_confirm` state. It will **not execute**.
+  </Step>
+  <Step title="Operator Approval">
+    An operator (Admin or Analyst) must log into the dashboard or use the Telegram Bot to explicitly approve the pending remediation.
+  </Step>
+  <Step title="Queued">
+    Once confirmed, the hook transitions to `queued` and is dispatched to a Celery worker.
+  </Step>
+  <Step title="Succeeded / Failed">
+    The worker executes the HTTP POST. If the destination server returns a non-2xx status, it transitions to `failed` and records the HTTP response in the audit logs, but *it never crashes the primary scan*.
+  </Step>
+</Steps>
+
+## Auto-Execute (Opt-In)
+
+If you are absolutely confident in your suppression rules and wish to achieve zero-minute response times, an Admin can edit the hook and disable `requires_manual_confirm`. 
+
+When this is disabled, flagged scans skip the `pending_confirm` state entirely and immediately enter the `queued` state for execution.
+
+<Caution>
+  Only disable `requires_manual_confirm` if you have thoroughly tested your baseline and suppression rules. Auto-executing a rollback on a false positive will cause an unnecessary outage.
+</Caution>
+
+## Security
+
+Webhook URLs routinely contain embedded secrets (like API tokens in query parameters: `?token=abc1234`). For this reason, all webhook URLs are **Fernet-encrypted** at rest in the PostgreSQL database.

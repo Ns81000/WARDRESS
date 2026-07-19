@@ -1,0 +1,47 @@
+---
+title: "Layer 1: Content Hash"
+description: "The foundational byte-level integrity check that gates the rest of the pipeline."
+icon: "hashtag"
+---
+
+The **Content Hash Layer** is the first and fastest layer in the pipeline. It compares the raw HTML bytes of the baseline against the current scan.
+
+## Mechanism
+
+<Steps>
+  <Step title="Fetch Content">
+    The worker fetches the target URL.
+  </Step>
+  <Step title="Normalize Bytes">
+    The HTML is normalized to remove insignificant whitespace variations that may occur during transit or parsing.
+  </Step>
+  <Step title="Cryptographic Hash">
+    A SHA-256 hash digest is generated from the normalized bytes.
+  </Step>
+  <Step title="Comparison">
+    The hash is compared against the `content_hash` stored in the active Baseline record.
+  </Step>
+</Steps>
+
+## Pipeline Gating
+
+Because a byte-identical page cannot possibly differ in DOM structure, visual layout, or semantic meaning, **an identical Layer 1 hash automatically skips downstream layers**.
+
+<AccordionGroup>
+  <Accordion title="Layers Skipped (If Identical)">
+    - **Layer 2** (DOM Structure)
+    - **Layer 3** (Link Audit)
+    - **Layer 4** (Visual Diff)
+    - **Layer 5** (Signatures)
+    - **Layer 8** (Semantics)
+  </Accordion>
+  <Accordion title="Layers Never Skipped">
+    - **Layer 6** (Security Metadata): TLS certificates and HTTP headers can change even if the HTML body remains identical.
+    - **Layer 7** (Cloaking): Bot-specific rendering differences (User-Agent rotation) are invisible to a standard fetch.
+    - **Layer 9** (Risk Fusion): The fusion model always runs to emit the final `risk_score`, but skipped layers simply contribute `0.0` to the feature vector.
+  </Accordion>
+</AccordionGroup>
+
+<Info>
+  **Performance Optimization**: Gating prevents Wardress from unnecessarily spinning up CPU-heavy image comparison (`scikit-image`) and NLP models (`MiniLM`) when a page is definitively unchanged.
+</Info>

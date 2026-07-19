@@ -1,0 +1,32 @@
+---
+title: "Layer 7: Cloaking"
+description: "Detects SEO spam and targeted evasion via User-Agent rotation."
+icon: "user-secret"
+---
+
+The **Cloaking Layer** identifies attacks designed to hide from the site owner while simultaneously poisoning search engine results (SEO Spam).
+
+A cloaked page inspects the incoming request (specifically the `User-Agent` header) and serves a completely different HTML document to a search engine crawler (like Googlebot) than it does to a standard browser. Because Wardress normally scans using a standard Desktop Chrome profile, a cloaked defacement would remain completely invisible to layers 1-5.
+
+## Mechanism
+
+Like Layer 6, this layer runs independently of the `layer1_hash` gate. It operates purely as an **intra-scan comparison**:
+
+<Steps>
+  <Step title="Parallel Fetches">
+    The metadata prober re-fetches the target URL concurrently using three distinct HTTP requests, each with a different User-Agent:
+    - Desktop Chrome (The Reference)
+    - Googlebot
+    - Mobile Safari
+  </Step>
+  <Step title="Jaccard Token Comparison">
+    The visible text is extracted from all three raw HTTP responses. The text of the Googlebot and Mobile Safari responses are compared against the Desktop Chrome response using a Jaccard set-overlap algorithm.
+  </Step>
+  <Step title="Scoring">
+    Mild dynamic variations between UAs (like responsive navigation labels) result in a low score due to an algorithmic "soft knee" at `0.5` overlap. If the token divergence exceeds 50% (indicating entirely different content was served to the bot), the layer score scales rapidly toward `1.0`.
+  </Step>
+</Steps>
+
+<Info>
+  **Bot Blocking Handling**: If a site employs WAF rules that block `Googlebot` (returning 403 Forbidden or a CAPTCHA challenge), Layer 7 recognizes this as legitimate bot-blocking, notes it in the evidence, and returns a `0.0` risk score. It only penalizes readable `2xx` responses that heavily diverge.
+</Info>

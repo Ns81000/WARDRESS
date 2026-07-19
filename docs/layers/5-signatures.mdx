@@ -1,0 +1,27 @@
+---
+title: "Layer 5: Signatures"
+description: "Scans newly added text for known defacement keywords, profanity, and script shifts."
+icon: "font"
+---
+
+The **Signatures Layer** acts as a fast, rule-based text scanner. It extracts only the *visible text* (stripping all HTML markup, scripts, and styles) and isolates the *newly added text* by comparing it against the baseline.
+
+## What is Analyzed
+
+This layer specifically targets the calling cards of "script kiddies" and hacktivists. It evaluates the new text against several distinct heuristics:
+
+<AccordionGroup>
+  <Accordion title="Defacement Keywords">
+    Scans for classic bragging phrases using pre-compiled regex arrays (e.g., `"hacked by"`, `"owned by"`, `"pwned"`). Matches immediately drive the layer score toward `1.0`.
+  </Accordion>
+  <Accordion title="Profanity & Aggression Frequency">
+    Counts the frequency of profanity or highly aggressive terms. A single swear word on a forum might be benign, but a sudden spike in profanity density is a strong indicator of compromise.
+  </Accordion>
+  <Accordion title="Unicode Script Shifts">
+    Analyzes the dominant Unicode script of the new text. If a site that historically uses 99% Latin characters suddenly injects massive blocks of Cyrillic, Arabic, or Han characters, this layer flags a severe anomaly.
+  </Accordion>
+</AccordionGroup>
+
+## The "New Text" Extraction
+
+To prevent false alarms on sites that legitimately contain keywords (e.g., a cybersecurity blog discussing "how sites are hacked by attackers"), Layer 5 *only* scores text that was **not present in the baseline**. If the baseline already contained the word "hacked", it is ignored in subsequent scans.

@@ -1,0 +1,41 @@
+---
+title: "User Management & RBAC"
+description: "Control platform access using strict Role-Based Access Control."
+icon: "users"
+---
+
+Wardress supports multi-user environments with strict Role-Based Access Control (RBAC) enforced securely at the API boundary.
+
+## Roles
+
+Every user account in Wardress is assigned one of three roles, which dictates what actions they can perform.
+
+<CardGroup cols={3}>
+  <Card title="Admin" icon="shield-halved">
+    Full system access. Can modify global settings, manage users, edit notification channels, and configure remediation hooks.
+  </Card>
+  <Card title="Analyst" icon="magnifying-glass-chart">
+    Operational access. Can add/modify sites, execute manual scans, define suppression rules, and acknowledge alerts. Cannot view audit logs or manage users.
+  </Card>
+  <Card title="Viewer" icon="eye">
+    Read-only access. Can view sites, scan histories, alerts, and system health metrics. Cannot acknowledge alerts or modify any configuration.
+  </Card>
+</CardGroup>
+
+## Session Security
+
+User sessions are secured using JWT (JSON Web Tokens) with robust rotation mechanisms:
+
+- **Refresh Tokens**: Stored as SHA-256 hashes in the database. If the database is leaked, the active refresh tokens cannot be used by the attacker.
+- **Token Rotation**: Every time a refresh token is used, it is rotated and a successor UUID is tracked (`replaced_by`). If a stolen refresh token is reused, the system detects the anomaly and instantly revokes the entire session chain.
+- **Absolute Expiry**: Sessions cannot slide infinitely. They have an absolute maximum Time-To-Live (TTL) tied to `session_started_at`.
+
+## API Keys
+
+Users can generate API keys for automated scripting against the Wardress REST API.
+
+<Warning>
+  **RBAC Inheritance**: API keys strictly inherit the role of the user who created them. If an Analyst creates an API key, that key cannot be used to modify global SMTP settings. If a user is deactivated, all of their API keys immediately stop functioning.
+</Warning>
+
+API keys are also stored as SHA-256 hashes. The raw key is shown exactly once upon creation.

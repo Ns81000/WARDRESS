@@ -1,0 +1,29 @@
+---
+title: "Layer 3: Link Audit"
+description: "Identifies hijacked traffic and unauthorized external resources."
+icon: "link"
+---
+
+The **Link Audit Layer** parses all network references embedded in the HTML tree. Attackers often alter links to siphon traffic to phishing domains or inject unauthorized tracking pixels.
+
+## What is Analyzed
+
+The layer extracts and compares specific HTML attributes that dictate network behavior:
+
+- `<a href="...">`: Hyperlinks pointing outward.
+- `<link href="...">`: External stylesheets and fonts.
+- `<script src="...">`: External JavaScript files.
+- `<form action="...">`: Data submission endpoints.
+- `<img src="...">`: Image sources.
+
+## Core Detection Heuristics
+
+1. **Domain Extraction**: The parser normalizes relative URLs against the site's base URL and extracts the fully-qualified domain names (FQDN) for every link on the page.
+2. **Set Difference**: It subtracts the baseline's known domains from the current scan's domains.
+3. **Scoring**:
+   - The introduction of *entirely new domains* (especially in `<script>` or `<form>` tags) drastically spikes the risk score.
+   - Removing links or changing URLs while staying within previously trusted domains results in a very low (or zero) risk score.
+
+<Card title="Traffic Hijacking" icon="triangle-exclamation">
+  A classic defacement technique involves modifying `<form action="/login">` to point to `https://evil.com/capture`. Layer 3 immediately catches this domain shift and flags the scan.
+</Card>
