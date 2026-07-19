@@ -18,6 +18,12 @@
   <img src="https://img.shields.io/badge/docker-%3E%3D24-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
 </p>
 
+<p align="center">
+  <a href="https://wardress.mintlify.site/introduction">
+    <img src="https://img.shields.io/badge/Read%20The%20Docs-View%20Documentation-blue?style=for-the-badge&logo=mintlify&logoColor=white" alt="Read the documentation">
+  </a>
+</p>
+
 ---
 
 ## Overview
