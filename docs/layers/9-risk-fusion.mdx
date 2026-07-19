@@ -6,7 +6,8 @@ icon: "chart-network"
 
 The **Risk Fusion Layer** is the final and most critical step in the pipeline. It takes the individual scores from Layers 1-8 and fuses them into a single, calibrated `risk_score` ranging from `0.0` to `1.0`.
 
-## Architecture
+
+## The Logistic Regression Model
 
 ```mermaid
 graph LR
@@ -26,8 +27,6 @@ graph LR
     MODEL -.-> |Exception/Crash| MAX[Fallback Max Score]
     MAX -.-> OUT
 ```
-
-## The Logistic Regression Model
 
 Rather than relying on a hardcoded, brittle weighted-average formula, Wardress utilizes a **Scikit-Learn Logistic Regression** model (using the `lbfgs` solver) to calculate the final risk. 
 

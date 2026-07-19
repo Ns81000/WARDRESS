@@ -6,7 +6,8 @@ icon: "shield-check"
 
 The **Security Metadata Layer** runs entirely independent of the page's HTML body. It focuses on the network transport and server configuration. Even if the `layer1_hash` is completely identical, this layer will still execute because metadata changes are invisible to content hashing.
 
-## Architecture
+
+## TLS Certificate Auditing
 
 ```mermaid
 graph LR
@@ -26,8 +27,6 @@ graph LR
     HSTS --> SCORE
     SCORE --> OUT[Layer 6 Score 0.0 - 1.0]
 ```
-
-## TLS Certificate Auditing
 
 Domain hijacks (e.g., DNS poisoning, BGP hijacking, or a rogue employee pointing the DNS to a fast-flux server) often result in the attacker serving the site over HTTP, or provisioning a new, unauthorized SSL certificate (like Let's Encrypt) to avoid browser warnings.
 

@@ -6,7 +6,8 @@ icon: "image"
 
 The **Visual Diff Layer** evaluates what the user actually sees. Some defacements bypass the DOM and semantic layers by simply uploading a massive image that covers the entire screen (an image-based defacement). Layer 4 catches this immediately.
 
-## Architecture
+
+## Deep Dive Mechanism
 
 ```mermaid
 graph LR
@@ -22,8 +23,6 @@ graph LR
     SSIM --> |1.0 - SSIM| SCORE[Scoring]
     SCORE --> OUT[Layer 4 Score 0.0 - 1.0]
 ```
-
-## Deep Dive Mechanism
 
 Wardress utilizes a headless Chromium instance (orchestrated via Playwright inside the Celery worker) to capture a full-page screenshot of the target site. The baseline screenshot is compared against the current screenshot using the `scikit-image` computer vision library.
 

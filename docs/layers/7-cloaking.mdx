@@ -8,7 +8,8 @@ The **Cloaking Layer** identifies attacks designed to hide from the site owner w
 
 A cloaked page inspects the incoming request (specifically the `User-Agent` HTTP header) and serves a completely different HTML document to a search engine crawler (like Googlebot) than it does to a standard browser. Because Wardress normally scans using a standard Desktop Chrome profile, a cloaked defacement would remain completely invisible to layers 1-5.
 
-## Architecture
+
+## Deep Dive Mechanism
 
 ```mermaid
 graph LR
@@ -28,8 +29,6 @@ graph LR
     
     SCORE_CALC --> OUT[Layer 7 Score 0.0 - 1.0]
 ```
-
-## Deep Dive Mechanism
 
 Like Layer 6, this layer runs independently of the `layer1_hash` gate. It operates purely as an **intra-scan comparison**. It doesn't even use the baseline! It compares the responses of the *current* scan against each other.
 

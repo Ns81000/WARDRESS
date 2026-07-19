@@ -6,7 +6,8 @@ icon: "font"
 
 The **Signatures Layer** acts as a fast, rule-based text scanner. It targets the "calling cards" of script kiddies and hacktivist groups by analyzing only the newly added, visible text on the page.
 
-## Architecture
+
+## Deep Dive Mechanism
 
 ```mermaid
 graph LR
@@ -23,8 +24,6 @@ graph LR
     UNICODE --> SCORE
     SCORE --> OUT[Layer 5 Score 0.0 - 1.0]
 ```
-
-## Deep Dive Mechanism
 
 This layer specifically targets classic vandalism. It strips all HTML markup, scripts, CSS, and metadata, leaving only the human-readable text. It then performs a diff against the baseline text to isolate the *newly added* sentences.
 

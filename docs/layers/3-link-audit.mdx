@@ -6,7 +6,8 @@ icon: "link"
 
 The **Link Audit Layer** parses all network references embedded in the HTML tree. Attackers often alter links to siphon traffic to phishing domains or inject unauthorized tracking pixels.
 
-## Architecture
+
+## Deep Dive Mechanism
 
 ```mermaid
 graph LR
@@ -18,8 +19,6 @@ graph LR
     SET_DIFF --> |New Domains Found| SCORE_HIGH[Spike Risk Score]
     SET_DIFF --> |Only Trusted Domains| SCORE_LOW[Keep Score Zero]
 ```
-
-## Deep Dive Mechanism
 
 This layer extracts and compares specific HTML attributes that dictate network behavior. It does not execute the links; it statically analyzes the intent of the HTML references.
 

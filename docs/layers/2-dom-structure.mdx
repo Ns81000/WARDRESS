@@ -6,7 +6,8 @@ icon: "code"
 
 The **DOM Structure Layer** inspects the underlying HTML tree of the page, completely independent of how it visually renders in the browser. Defacements often rely on injecting hidden elements, malicious scripts, or overriding style attributes to hide the original content.
 
-## Architecture
+
+## Deep Dive Mechanism
 
 ```mermaid
 graph LR
@@ -23,8 +24,6 @@ graph LR
     DIFF_NODES --> SCORE
     SCORE --> OUT[Layer 2 Score 0.0 - 1.0]
 ```
-
-## Deep Dive Mechanism
 
 Layer 2 receives the **Suppression-Filtered** copy of the HTML. It parses the document into a tree using Python's `BeautifulSoup4` library and evaluates several structural heuristics:
 

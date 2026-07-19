@@ -6,17 +6,6 @@ icon: "hashtag"
 
 The **Content Hash Layer** is the first, fastest, and most fundamental layer in the Wardress detection pipeline. It performs a raw cryptographic comparison of the HTML bytes of the baseline against the current scan.
 
-## Architecture
-
-```mermaid
-graph LR
-    FETCH[Worker HTTP Fetch] --> HTML[Raw HTML Bytes]
-    HTML --> NORM[Whitespace Normalizer]
-    NORM --> HASH[SHA-256 Hasher]
-    HASH --> CMP{Compare to Baseline}
-    CMP -- "Match (0.0)" --> SKIP[Skip Downstream Content Layers]
-    CMP -- "Mismatch (1.0)" --> RUN[Execute Downstream Content Layers]
-```
 
 ## Deep Dive Mechanism
 
@@ -38,6 +27,16 @@ The Wardress backend executes Layer 1 before instantiating any NLP models (`Mini
 </Steps>
 
 ## Pipeline Gating (The Fail-Safe Bypass)
+
+```mermaid
+graph LR
+    FETCH[Worker HTTP Fetch] --> HTML[Raw HTML Bytes]
+    HTML --> NORM[Whitespace Normalizer]
+    NORM --> HASH[SHA-256 Hasher]
+    HASH --> CMP{Compare to Baseline}
+    CMP -- "Match (0.0)" --> SKIP[Skip Downstream Content Layers]
+    CMP -- "Mismatch (1.0)" --> RUN[Execute Downstream Content Layers]
+```
 
 Layer 1 acts as a massive performance optimization via **gating**. Because a byte-identical HTML document cannot possibly differ in its DOM tree, external links, visual rendering, or textual semantics, an identical hash automatically skips several downstream layers.
 

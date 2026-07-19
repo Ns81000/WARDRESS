@@ -6,7 +6,12 @@ icon: "brain"
 
 The **Semantics Layer** goes beyond exact string matching (like Layer 5) and attempts to understand the *meaning* of the text on the page. If a corporate homepage is replaced with political propaganda, the underlying DOM structure might look similar, but the semantics have completely drifted.
 
-## Architecture
+
+## Local, CPU-Bound Processing
+
+Wardress performs all semantic analysis **locally on the worker node**. It does not send page text to external APIs (like OpenAI) during the high-throughput scanning phase. This ensures privacy, zero API costs, and compliance with strict data sovereignty requirements.
+
+## Evaluation Mechanisms
 
 ```mermaid
 graph LR
@@ -27,12 +32,6 @@ graph LR
     
     MAX --> OUT[Layer 8 Score 0.0 - 1.0]
 ```
-
-## Local, CPU-Bound Processing
-
-Wardress performs all semantic analysis **locally on the worker node**. It does not send page text to external APIs (like OpenAI) during the high-throughput scanning phase. This ensures privacy, zero API costs, and compliance with strict data sovereignty requirements.
-
-## Evaluation Mechanisms
 
 This layer evaluates the visible text using three distinct methods, taking the `max()` of the three scores as the final layer output:
 
