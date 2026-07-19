@@ -151,7 +151,7 @@ function AlertRow({ alert }: { alert: Alert }) {
       "relative overflow-hidden rounded-lg border bg-surface-card p-3.5 transition-all duration-150 border-hairline-strong mb-2.5",
       alert.acknowledged_at 
         ? "border-l-4 border-l-stone/30 bg-surface-card/60" 
-        : "border-l-4 border-l-accent-red bg-surface-card hover:bg-surface-elevated/20 shadow-md shadow-accent-red/2"
+        : "border-l-4 border-l-accent-red bg-surface-card hover:bg-surface-elevated/20"
     )}>
       <div className="flex flex-wrap items-center justify-between gap-4">
         {/* Left main info */}
@@ -160,7 +160,7 @@ function AlertRow({ alert }: { alert: Alert }) {
             <StatusDot state={alert.acknowledged_at ? "idle" : "threat"} />
             <Link
               to={`/sites/${alert.site_id}/scans/${alert.scan_id}`}
-              className="truncate text-body-sm font-semibold text-ink hover:underline"
+              className="truncate text-body-sm font-medium text-ink hover:underline"
             >
               {alert.site_name ?? "Unknown site"}
             </Link>

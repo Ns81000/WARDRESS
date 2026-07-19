@@ -129,7 +129,7 @@ function ExecutionRow({
     <li className={cn(
       "relative overflow-hidden rounded-lg border bg-surface-card p-3.5 transition-all duration-150 border-hairline-strong mb-2.5",
       execution.status === "pending_confirm" 
-        ? "border-l-4 border-l-accent-orange bg-surface-card shadow-md shadow-accent-orange/2" 
+        ? "border-l-4 border-l-accent-orange bg-surface-card" 
         : execution.status === "succeeded" 
         ? "border-l-4 border-l-accent-green bg-surface-card/65" 
         : execution.status === "failed" 
@@ -142,7 +142,7 @@ function ExecutionRow({
           <div className="flex items-center gap-2.5">
             <StatusDot state={statusDot(execution.status)} />
             {getActionTypeIcon(execution.action_type, "size-4.5")}
-            <span className="text-body-sm font-semibold text-ink">{execution.hook_name}</span>
+            <span className="text-body-sm font-medium text-ink">{execution.hook_name}</span>
             <Badge variant="secondary" className="h-[22px] inline-flex items-center text-[11px] leading-none select-none">
               {ACTION_LABELS[execution.action_type] ?? execution.action_type}
             </Badge>
@@ -165,7 +165,7 @@ function ExecutionRow({
             Flagged {new Date(execution.created_at).toLocaleDateString()} at {new Date(execution.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
 
-          <span className="font-mono text-xs text-charcoal bg-surface-deep px-1.5 py-0.5 rounded border border-hairline select-none">
+          <span className="font-mono text-xs text-charcoal bg-surface-card px-1.5 py-0.5 rounded border border-hairline-strong select-none">
             {execution.id.slice(0, 8)}
           </span>
         </div>
@@ -186,7 +186,7 @@ function ExecutionRow({
                   confirm.mutate()
                 }
               }}
-              className="h-8 hover:-translate-y-[1px] active:scale-[0.97] transition-all px-2.5 text-caption font-semibold"
+              className="h-8 hover:-translate-y-[1px] active:scale-[0.97] transition-all px-2.5 text-caption font-medium"
             >
               <Check className="mr-1.5 size-3.5 shrink-0 text-accent-green" />
               Confirm & Fire
@@ -196,7 +196,7 @@ function ExecutionRow({
               size="sm"
               disabled={confirm.isPending || dismiss.isPending}
               onClick={() => dismiss.mutate()}
-              className="h-8 hover:bg-surface-elevated active:scale-[0.97] transition-all px-2.5 text-caption text-mute hover:text-ink font-semibold"
+              className="h-8 hover:bg-surface-elevated active:scale-[0.97] transition-all px-2.5 text-caption text-mute hover:text-ink font-medium"
             >
               <X className="mr-1.5 size-3.5 shrink-0 text-accent-red" />
               Dismiss
@@ -274,7 +274,7 @@ export function RemediationPage() {
             <div className="rounded-full bg-surface-deep border border-hairline p-4 mb-2">
               <Inbox className="size-8 text-mute/50" />
             </div>
-            <p className="text-heading-sm font-semibold text-ink">
+            <p className="text-heading-sm font-medium text-ink">
               {pendingOnly ? "Nothing awaiting confirmation" : "No remediation history"}
             </p>
             <p className="max-w-md text-body-sm text-charcoal leading-relaxed">

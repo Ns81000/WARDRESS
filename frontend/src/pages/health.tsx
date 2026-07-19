@@ -419,7 +419,7 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
       `}</style>
 
       <div className="mb-3 flex items-center justify-between border-b border-hairline pb-2">
-        <div className="flex items-center gap-2 text-caption font-semibold tracking-wider text-ink uppercase">
+        <div className="flex items-center gap-2 text-caption font-medium tracking-wider text-ink uppercase">
           <Network className="size-4 text-accent-blue" />
           <span>Active Service Topology</span>
         </div>
@@ -830,7 +830,7 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                      <h3 className="text-body-sm font-medium text-ink flex items-center gap-1.5">
                         {getServiceLogo("database", "size-4 text-[#336791]")}
                         <span>PostgreSQL</span>
                       </h3>
@@ -876,7 +876,7 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                      <h3 className="text-body-sm font-medium text-ink flex items-center gap-1.5">
                         {getServiceLogo("redis", "size-4")}
                         <span>Redis Broker</span>
                       </h3>
@@ -922,7 +922,7 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                      <h3 className="text-body-sm font-medium text-ink flex items-center gap-1.5">
                         {getServiceLogo("worker", "size-4")}
                         <span>Scan Worker Pool</span>
                       </h3>
@@ -980,7 +980,7 @@ export function HealthPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                      <h3 className="text-body-sm font-medium text-ink flex items-center gap-1.5">
                         {getServiceLogo("scheduler", "size-4")}
                         <span>Beat Scheduler</span>
                       </h3>
@@ -1016,7 +1016,7 @@ export function HealthPage() {
             
             {/* Detailed Activity Block */}
             <SpotlightCard className="p-5">
-              <h3 className="mb-4 text-body-sm font-semibold tracking-tight text-ink flex items-center gap-2">
+              <h3 className="mb-4 text-body-sm font-medium tracking-tight text-ink flex items-center gap-2">
                 <Workflow className="size-4 text-accent-blue" />
                 <span>Monitoring Activity</span>
               </h3>

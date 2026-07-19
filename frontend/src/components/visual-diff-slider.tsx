@@ -220,7 +220,7 @@ export function VisualDiffSlider({
           Baseline
         </span>
         {imagesReady && (
-          <span className="font-display text-xs font-medium text-ink bg-surface-card px-3 py-1 rounded-full border border-hairline-strong shadow-sm select-none">
+          <span className="font-display-sans text-xs font-medium text-ink bg-surface-card px-3 py-1 rounded-full border border-hairline-strong select-none">
             {regions.length === 0
               ? "No changes detected"
               : `${regions.length} altered region${regions.length === 1 ? "" : "s"} highlighted`}
@@ -317,11 +317,11 @@ export function VisualDiffSlider({
             }}
           >
           {/* Vertical divider line - dual colored (white line, dark shadow glow) to remain visible on all image backgrounds */}
-          <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-white shadow-[0_0_3px_rgba(0,0,0,0.8),0_0_1px_rgba(0,0,0,1)]" />
+          <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-white" />
           
           {/* Sticky Knob wrapper - floats in the vertical center of the scroll container viewport */}
           <div className="sticky top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center h-0 w-full">
-            <div className="pointer-events-auto size-8 rounded-full border-2 border-primary bg-surface-elevated text-ink shadow-[0_2px_10px_rgba(0,0,0,0.55)] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150">
+            <div className="pointer-events-auto size-8 rounded-full border-2 border-primary bg-surface-elevated text-ink flex items-center justify-center hover:scale-105 active:scale-95 transition-transform duration-150">
               <ChevronLeft className="size-4 -mr-0.5 shrink-0 text-ink/90" />
               <ChevronRight className="size-4 -ml-0.5 shrink-0 text-ink/90" />
             </div>

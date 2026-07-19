@@ -231,7 +231,7 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                       {selectOpen && (
                         <>
                           <div className="fixed inset-0 z-40" onClick={() => setSelectOpen(false)} />
-                          <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-md border border-hairline-strong bg-surface-elevated p-1 shadow-2xl animate-in fade-in-0 zoom-in-95 duration-100">
+                          <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-md border border-hairline-strong bg-surface-elevated p-1 animate-in fade-in-0 zoom-in-95 duration-100">
                             {ACTION_TYPES.map((a) => (
                               <button
                                 key={a.value}

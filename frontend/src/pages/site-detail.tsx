@@ -218,7 +218,7 @@ function SettingsCard({ site }: { site: Site }) {
           >
             <span
               className={cn(
-                "pointer-events-none inline-block size-5 transform rounded-full bg-canvas shadow-lg ring-0 transition duration-200 ease-in-out",
+                "pointer-events-none inline-block size-5 transform rounded-full bg-canvas border border-hairline-strong ring-0 transition duration-200 ease-in-out",
                 autoScan ? "translate-x-5" : "translate-x-0"
               )}
             />
@@ -419,9 +419,9 @@ export function SiteDetailPage() {
   const totalScans = scans.data?.total ?? 0
   const pageCount = Math.max(1, Math.ceil(totalScans / SCANS_PAGE_SIZE))
   const titleClassName = s.name.length > 40
-    ? "text-3xl font-semibold text-ink tracking-tight break-all"
+    ? "text-3xl font-display-sans font-normal text-ink tracking-tight break-all"
     : s.name.length > 20
-      ? "text-4xl font-semibold text-ink tracking-tight break-all"
+      ? "text-4xl font-display-sans font-normal text-ink tracking-tight break-all"
       : "text-display-lg text-ink break-all"
 
   return (
@@ -493,7 +493,7 @@ export function SiteDetailPage() {
           className={cn(
             "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
             activeTab === "overview"
-              ? "text-ink font-semibold"
+              ? "text-ink"
               : "text-mute hover:text-ink"
           )}
         >
@@ -507,7 +507,7 @@ export function SiteDetailPage() {
           className={cn(
             "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
             activeTab === "scans"
-              ? "text-ink font-semibold"
+              ? "text-ink"
               : "text-mute hover:text-ink"
           )}
         >
@@ -521,7 +521,7 @@ export function SiteDetailPage() {
           className={cn(
             "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
             activeTab === "suppression"
-              ? "text-ink font-semibold"
+              ? "text-ink"
               : "text-mute hover:text-ink"
           )}
         >
@@ -535,7 +535,7 @@ export function SiteDetailPage() {
           className={cn(
             "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
             activeTab === "hooks"
-              ? "text-ink font-semibold"
+              ? "text-ink"
               : "text-mute hover:text-ink"
           )}
         >

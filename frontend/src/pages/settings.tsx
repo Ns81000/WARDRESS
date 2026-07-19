@@ -78,7 +78,7 @@ function CustomSelect({ id, value, onChange, options, className }: CustomSelectP
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 shadow-2xl z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
+          <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
             {options.map((opt) => (
               <button
                 key={opt.value}
@@ -89,7 +89,7 @@ function CustomSelect({ id, value, onChange, options, className }: CustomSelectP
                 }}
                 className={cn(
                   "w-full text-left px-3 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",
-                  opt.value === value && "text-ink bg-white/[0.02] font-semibold"
+                  opt.value === value && "text-ink bg-white/[0.02] font-medium"
                 )}
               >
                 <span className="truncate">{opt.label}</span>
@@ -1222,7 +1222,7 @@ function ChannelsCard() {
                     {getChannelIcon(getChannelIconKey(c.type, c.target_hint), "size-6.5")}
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-body-sm font-semibold text-ink">
+                    <p className="truncate text-body-sm font-medium text-ink">
                       {c.name}
                     </p>
                     <p className="text-caption text-mute flex items-center gap-1.5 mt-0.5 flex-wrap">

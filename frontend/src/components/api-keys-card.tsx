@@ -84,7 +84,7 @@ export function ApiKeysCard() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <svg className="size-4 shrink-0 text-yellow-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg className="size-4 shrink-0 text-accent-yellow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
               </svg>
               API keys
@@ -147,7 +147,7 @@ export function ApiKeysCard() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="flex items-center gap-2">
-                    <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-hairline bg-surface-elevated p-3 text-code-md text-body">
+                    <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-hairline-strong bg-surface-card p-3 text-code-md text-body">
                       {newKey}
                     </code>
                     <Button

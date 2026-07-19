@@ -80,7 +80,7 @@ function RoleSelect({
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 shadow-2xl z-50 animate-detail-in font-mono text-code-md">
+          <div className="absolute right-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 animate-detail-in font-mono text-code-md">
             {options.map((opt) => (
               <button
                 key={opt.value}
@@ -91,7 +91,7 @@ function RoleSelect({
                 }}
                 className={cn(
                   "w-full text-left px-2.5 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",
-                  opt.value === value && "text-ink bg-white/[0.02] font-semibold"
+                  opt.value === value && "text-ink bg-white/[0.02] font-medium"
                 )}
               >
                 <span className="truncate">{opt.label}</span>

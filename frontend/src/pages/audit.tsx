@@ -100,7 +100,7 @@ function getTargetIcon(type: string, action: string, label: string) {
       )
     case "api_key":
       return (
-        <svg className={cn(baseClass, "text-yellow-400")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg className={cn(baseClass, "text-accent-yellow")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
         </svg>
       )
@@ -170,7 +170,7 @@ function SnapshotBlock({
 
       {/* Code window content */}
       <pre className="overflow-x-auto p-4 text-code-md text-body leading-relaxed font-mono scrollbar-thin">
-        <code>{JSON.stringify(data, null, 2)}</code>
+        <code className="font-mono text-code-md bg-surface-card px-1.5 py-0.5 rounded border border-hairline-strong">{JSON.stringify(data, null, 2)}</code>
       </pre>
     </div>
   )
@@ -318,7 +318,7 @@ export function AuditPage() {
               <>
                 {/* Backdrop to close list when clicking outside */}
                 <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 shadow-2xl z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
+                <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
                   {TARGET_TYPES.map((t) => (
                     <button
                       key={t}
@@ -330,7 +330,7 @@ export function AuditPage() {
                       }}
                       className={cn(
                         "w-full text-left px-3 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",
-                        t === targetType && "text-ink bg-white/[0.02] font-semibold"
+                        t === targetType && "text-ink bg-white/[0.02]"
                       )}
                     >
                       <span>{t === "" ? "All targets" : t.replaceAll("_", " ")}</span>

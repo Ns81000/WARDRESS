@@ -327,7 +327,7 @@ export function SitesPage() {
           <DialogHeader>
             <DialogTitle className="text-accent-red">Remove Site?</DialogTitle>
             <DialogDescription>
-              This will permanently remove <span className="text-ink font-semibold">{siteToDelete?.name}</span> and all of its associated scan history. This action cannot be undone.
+              This will permanently remove <span className="text-ink font-normal">{siteToDelete?.name}</span> and all of its associated scan history. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
