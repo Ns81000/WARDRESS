@@ -283,9 +283,7 @@ async def test_telegram_test_requires_capture(client, auth_headers):
 async def test_telegram_acting_user_link(client, auth_headers, admin_user):
     """The bot's assistant acts as a real RBAC user; linking one round-trips
     the id + email, and an unknown/cleared link reads back as unset."""
-    await client.put(
-        "/api/settings/telegram", json={"bot_token": "111:aaa"}, headers=auth_headers
-    )
+    await client.put("/api/settings/telegram", json={"bot_token": "111:aaa"}, headers=auth_headers)
     # Link the admin as the acting user.
     resp = await client.put(
         "/api/settings/telegram",

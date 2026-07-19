@@ -24,9 +24,7 @@ _json = sa.JSON().with_variant(JSONB(), "postgresql")
 
 _surface = sa.Enum("web", "telegram", name="agent_surface")
 _role = sa.Enum("user", "assistant", "tool", name="agent_message_role")
-_action_status = sa.Enum(
-    "pending", "confirmed", "cancelled", "expired", name="agent_action_status"
-)
+_action_status = sa.Enum("pending", "confirmed", "cancelled", "expired", name="agent_action_status")
 
 
 def upgrade() -> None:

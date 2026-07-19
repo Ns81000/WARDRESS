@@ -229,9 +229,7 @@ async def put_telegram(body: TelegramSettingsIn, user: AdminUser, db: DB) -> Tel
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_CONTENT, "That is not a valid user id"
                 ) from None
-            linked = await db.scalar(
-                select(User).where(User.id == uid, User.is_active.is_(True))
-            )
+            linked = await db.scalar(select(User).where(User.id == uid, User.is_active.is_(True)))
             if linked is None:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_CONTENT, "No active user with that id"

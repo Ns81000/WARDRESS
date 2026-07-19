@@ -119,18 +119,12 @@ def _markdown_assets(data: ReportData) -> list[ReportAsset]:
     Only images that actually exist on disk are included; the timeline is
     always available (generated from numeric data)."""
     assets: list[ReportAsset] = []
-    baseline_png = _screenshot_bytes(
-        data.baseline.screenshot_path if data.baseline else None
-    )
+    baseline_png = _screenshot_bytes(data.baseline.screenshot_path if data.baseline else None)
     if baseline_png:
-        assets.append(
-            ReportAsset("baseline.png", "Trusted baseline", baseline_png, kind="image")
-        )
+        assets.append(ReportAsset("baseline.png", "Trusted baseline", baseline_png, kind="image"))
     scan_png = _screenshot_bytes(data.scan.screenshot_path)
     if scan_png:
-        assets.append(
-            ReportAsset("current-scan.png", "This scan", scan_png, kind="image")
-        )
+        assets.append(ReportAsset("current-scan.png", "This scan", scan_png, kind="image"))
     if assets:
         # Only bundle the chart when there's already an assets/ dir to
         # justify the ZIP; a screenshot-free report stays a single file.
