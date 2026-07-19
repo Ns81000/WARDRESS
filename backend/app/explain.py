@@ -30,30 +30,37 @@ def _findings_notes(findings: list[ScanFinding]) -> list[str]:
         ev = f.evidence or {}
         if f.skipped or not ev:
             continue
-            
+
         if f.layer_key == "layer1_hash":
             if not ev.get("identical"):
                 notes.append("HTML content SHA-256 hash changed against the baseline")
-                
+
         elif f.layer_key == "layer2_dom_structure":
             # Check script_count, iframe_count, hidden_count, elements
-            for k, label in [("script_count", "script"), ("iframe_count", "iframe"), ("hidden_count", "hidden element")]:
+            for k, label in [
+                ("script_count", "script"),
+                ("iframe_count", "iframe"),
+                ("hidden_count", "hidden element"),
+            ]:
                 c = ev.get(k)
                 if isinstance(c, dict):
                     base = c.get("baseline", 0)
                     curr = c.get("current", 0)
                     diff = curr - base
                     if diff != 0:
-                        notes.append(f"{label} count changed: {base} → {curr} ({'+' if diff > 0 else ''}{diff})")
+                        sign = "+" if diff > 0 else ""
+                        notes.append(f"{label} count changed: {base} → {curr} ({sign}{diff})")
             base_el = ev.get("baseline_elements")
             curr_el = ev.get("current_elements")
             if base_el is not None and curr_el is not None and base_el != curr_el:
                 diff = curr_el - base_el
-                notes.append(f"total DOM elements changed: {base_el} → {curr_el} ({'+' if diff > 0 else ''}{diff})")
+                sign = "+" if diff > 0 else ""
+                notes.append(f"total DOM elements changed: {base_el} → {curr_el} ({sign}{diff})")
             added_tags = ev.get("tags_added") or {}
             if isinstance(added_tags, dict) and added_tags:
-                notes.append(f"added HTML tags: {', '.join(f'<{tag}>' for tag in added_tags.keys())}")
-                
+                tags_str = ", ".join(f"<{tag}>" for tag in added_tags.keys())
+                notes.append(f"added HTML tags: {tags_str}")
+
         elif f.layer_key == "layer3_link_audit":
             added_domains = []
             for kind in ("script_src", "iframe_src", "form_action", "link_href", "a_href"):
@@ -62,25 +69,28 @@ def _findings_notes(findings: list[ScanFinding]) -> list[str]:
                     new_doms = kind_data.get("added_new_domains") or []
                     for u in new_doms:
                         from urllib.parse import urlparse
+
                         dom = (urlparse(u).hostname or "").lower()
                         if dom and dom not in added_domains:
                             added_domains.append(dom)
             if added_domains:
                 notes.append(f"new external domains referenced: {', '.join(added_domains[:5])}")
-                
+
         elif f.layer_key == "layer4_visual_diff":
             ssim = ev.get("ssim")
             if ssim is not None:
                 notes.append(f"visual similarity (SSIM) is {ssim} (1.0 is identical)")
-                
+
         elif f.layer_key == "layer5_signatures":
             matches = ev.get("signature_matches") or []
             phrases = [m.get("matched", "") for m in matches[:5] if isinstance(m, dict)]
             if phrases:
                 notes.append(f"matched known defacement phrasing: {', '.join(phrases)}")
             if ev.get("script_flip"):
-                notes.append(f"dominant text script flipped: {ev.get('baseline_dominant_script')} → {ev.get('current_dominant_script')}")
-                
+                b_script = ev.get("baseline_dominant_script")
+                c_script = ev.get("current_dominant_script")
+                notes.append(f"dominant text script flipped: {b_script} → {c_script}")
+
         elif f.layer_key == "layer6_security_metadata":
             headers = ev.get("headers") or {}
             removed = headers.get("security_headers_removed") or []
@@ -94,21 +104,29 @@ def _findings_notes(findings: list[ScanFinding]) -> list[str]:
                 notes.append("TLS certificate fingerprint changed")
             if tls.get("expired"):
                 notes.append("TLS certificate is expired")
-                
+
         elif f.layer_key == "layer7_cloaking":
             variants = ev.get("variants") or []
-            divergent = [v.get("ua", "") for v in variants if isinstance(v, dict) and (v.get("similarity") or 1.0) < 0.8]
+            divergent = [
+                v.get("ua", "")
+                for v in variants
+                if isinstance(v, dict) and (v.get("similarity") or 1.0) < 0.8
+            ]
             if divergent:
-                notes.append(f"cloaking content divergence detected for User-Agents: {', '.join(divergent[:3])}")
-                
+                ua_list = ", ".join(divergent[:3])
+                notes.append(f"cloaking content divergence detected for User-Agents: {ua_list}")
+
         elif f.layer_key == "layer8_semantics":
             sim = ev.get("semantic_similarity")
             if sim is not None:
                 notes.append(f"semantic similarity score is {sim}")
             aggression = ev.get("aggression_hits") or []
             if aggression:
-                notes.append(f"aggression lexicon hits: {', '.join(a.get('matched', '') for a in aggression[:5] if isinstance(a, dict))}")
-                
+                hits = ", ".join(
+                    a.get("matched", "") for a in aggression[:5] if isinstance(a, dict)
+                )
+                notes.append(f"aggression lexicon hits: {hits}")
+
     return notes[:12]
 
 
