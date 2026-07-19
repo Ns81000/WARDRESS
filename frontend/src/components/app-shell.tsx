@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { LogOut, Menu, X } from "lucide-react"
-import { NavLink, Outlet } from "react-router"
+import { NavLink, Outlet, useLocation } from "react-router"
 
 import { StatusDot } from "@/components/status-dot"
 import { WardressMark } from "@/components/wardress-mark"
@@ -19,6 +19,11 @@ export function AppShell() {
   const { user, logout } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const isAdmin = user?.role === "admin"
+  const location = useLocation()
+  // The assistant is a full-bleed, full-height chat surface (ChatGPT/Gemini
+  // style): it owns the viewport below the nav bar instead of sitting inside
+  // the centered, padded content column every other page uses.
+  const fullBleed = location.pathname === "/assistant"
 
   const items = [
     { to: "/", label: "Sites", end: true },
@@ -31,8 +36,8 @@ export function AppShell() {
   ]
 
   return (
-    <div className="min-h-screen bg-canvas">
-      <header className="border-b border-hairline">
+    <div className={cn("bg-canvas", fullBleed ? "flex h-screen flex-col overflow-hidden" : "min-h-screen")}>
+      <header className="shrink-0 border-b border-hairline">
         <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4 sm:px-6 lg:px-8">
           <NavLink to="/" className="flex items-center gap-3 text-ink">
             <WardressMark size={22} />
@@ -130,9 +135,15 @@ export function AppShell() {
         )}
       </header>
 
-      <main className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 sm:py-12 lg:px-8">
-        <Outlet />
-      </main>
+      {fullBleed ? (
+        <main className="min-h-0 flex-1">
+          <Outlet />
+        </main>
+      ) : (
+        <main className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 sm:py-12 lg:px-8">
+          <Outlet />
+        </main>
+      )}
     </div>
   )
 }

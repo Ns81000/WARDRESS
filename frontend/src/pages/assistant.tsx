@@ -4,9 +4,10 @@ import {
   AlertTriangle,
   Check,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   SendHorizonal,
-  Sparkles,
   Trash2,
   Wrench,
   X,
@@ -14,6 +15,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { WardressMark } from "@/components/wardress-mark"
 import { cn } from "@/lib/utils"
 import * as apiClient from "@/lib/api"
 import {
@@ -25,12 +27,15 @@ import {
 } from "@/lib/api"
 
 /*
- * Assistant — the conversational surface (§ agent, Task B). A sidebar of
- * threads on the left, a streamed transcript on the right. Follows
- * DESIGN-resend.md: true-black canvas, hairline borders, surface-card
- * panels, one bright primary action, accents as text washes only. The turn
- * streams over a fetch-stream reader (streamAgentTurn) because the access
- * token lives in module memory — native EventSource can't set the header.
+ * Assistant — a full-bleed, full-height chat surface (ChatGPT/Gemini style).
+ * The app shell drops its centered content column for /assistant so this
+ * page owns the viewport below the nav: a collapsible thread rail on the
+ * left, a centered reading column of messages that scrolls, and a composer
+ * pinned to the bottom. Follows DESIGN-resend.md — true-black canvas,
+ * hairline borders, one bright primary action, accents as text washes only.
+ * The turn streams over a fetch-stream reader (streamAgentTurn) because the
+ * access token lives in module memory — native EventSource can't set the
+ * header.
  */
 
 // A tool-activity chip shown inline while the turn runs.
@@ -62,6 +67,14 @@ const TOOL_LABELS: Record<string, string> = {
   delete_site: "Deleting site",
 }
 
+// Starter prompts shown on an empty thread — one tap to get going.
+const SUGGESTIONS = [
+  "What's the status of all my sites?",
+  "Which sites have unacknowledged alerts?",
+  "Scan my most recently changed site now",
+  "Explain the latest incident in plain English",
+]
+
 function toolLabel(tool: string): string {
   return TOOL_LABELS[tool] ?? tool.replace(/_/g, " ")
 }
@@ -73,6 +86,7 @@ function errMessage(err: unknown, fallback: string): string {
 export function AssistantPage() {
   const queryClient = useQueryClient()
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [railOpen, setRailOpen] = useState(true)
 
   const conversations = useQuery({
     queryKey: ["agent", "conversations"],
@@ -105,44 +119,37 @@ export function AssistantPage() {
   })
 
   return (
-    <div className="relative">
-      {/* Ambient background glow — a single blue wash, per the design's
-          "one glow per section" rule. */}
-      <div className="pointer-events-none absolute top-[-120px] left-1/2 h-[360px] w-full max-w-[820px] -translate-x-1/2 rounded-full bg-glow-blue opacity-[0.07] blur-[150px]" />
+    <div className="relative flex h-full min-h-0 overflow-hidden">
+      {/* Ambient background glow — a single blue wash anchored top-centre. */}
+      <div className="pointer-events-none absolute top-[-160px] left-1/2 h-[420px] w-full max-w-[900px] -translate-x-1/2 rounded-full bg-glow-blue opacity-[0.06] blur-[160px]" />
 
-      <div className="relative z-10 mb-8">
-        <h1 className="text-display-lg text-ink">Assistant</h1>
-        <p className="mt-2 max-w-2xl text-body-md text-charcoal">
-          Ask Wardress in plain language — check status, run a scan, mute a
-          noisy site. High-impact actions pause for your confirmation before
-          anything changes.
-        </p>
-      </div>
+      <ConversationRail
+        open={railOpen}
+        conversations={conversations.data ?? []}
+        loading={conversations.isLoading}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNew={() => createConv.mutate()}
+        onDelete={(id) => deleteConv.mutate(id)}
+        creating={createConv.isPending}
+      />
 
-      <div className="relative z-10 grid gap-4 lg:grid-cols-[280px_1fr]">
-        <ConversationSidebar
-          conversations={conversations.data ?? []}
-          loading={conversations.isLoading}
-          activeId={activeId}
-          onSelect={setActiveId}
-          onNew={() => createConv.mutate()}
-          onDelete={(id) => deleteConv.mutate(id)}
-          creating={createConv.isPending}
-        />
-        <ChatPanel
-          key={activeId ?? "empty"}
-          conversationId={activeId}
-          onStartFirst={() => createConv.mutate()}
-          creating={createConv.isPending}
-        />
-      </div>
+      <ChatPanel
+        key={activeId ?? "empty"}
+        conversationId={activeId}
+        railOpen={railOpen}
+        onToggleRail={() => setRailOpen((v) => !v)}
+        onStartFirst={() => createConv.mutate()}
+        creating={createConv.isPending}
+      />
     </div>
   )
 }
 
-// --- Conversation sidebar ---
+// --- Conversation rail ---
 
-function ConversationSidebar({
+function ConversationRail({
+  open,
   conversations,
   loading,
   activeId,
@@ -151,6 +158,7 @@ function ConversationSidebar({
   onDelete,
   creating,
 }: {
+  open: boolean
   conversations: AgentConversation[]
   loading: boolean
   activeId: string | null
@@ -160,14 +168,26 @@ function ConversationSidebar({
   creating: boolean
 }) {
   return (
-    <aside className="flex max-h-[70vh] flex-col rounded-lg border border-hairline-strong bg-surface-card">
-      <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
-        <span className="text-caption tracking-wide text-mute uppercase">Conversations</span>
-        <Button size="icon-sm" variant="outline" onClick={onNew} disabled={creating} aria-label="New conversation">
+    <aside
+      className={cn(
+        "relative z-10 flex h-full shrink-0 flex-col border-r border-hairline bg-surface-card/40 transition-[width] duration-200 ease-out",
+        open ? "w-72" : "w-0 overflow-hidden border-r-0"
+      )}
+    >
+      <div className="flex items-center gap-2 px-3 py-3">
+        <Button
+          className="flex-1 justify-start"
+          variant="outline"
+          size="sm"
+          onClick={onNew}
+          disabled={creating}
+        >
           {creating ? <Loader2 className="animate-spin" /> : <Plus />}
+          New chat
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {loading ? (
           <p className="px-2 py-3 text-body-sm text-mute">Loading…</p>
         ) : conversations.length === 0 ? (
@@ -175,7 +195,7 @@ function ConversationSidebar({
             No conversations yet. Start one to chat with Wardress.
           </p>
         ) : (
-          <ul className="space-y-1">
+          <ul className="space-y-0.5">
             {conversations.map((conv) => (
               <li key={conv.id}>
                 <div
@@ -230,10 +250,14 @@ interface DraftState {
 
 function ChatPanel({
   conversationId,
+  railOpen,
+  onToggleRail,
   onStartFirst,
   creating,
 }: {
   conversationId: string | null
+  railOpen: boolean
+  onToggleRail: () => void
   onStartFirst: () => void
   creating: boolean
 }) {
@@ -244,6 +268,15 @@ function ChatPanel({
   const [draft, setDraft] = useState<DraftState>({ text: "", tools: [], streaming: false })
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Auto-grow the composer up to its max-height as the user types.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = "0px"
+    el.style.height = `${Math.min(el.scrollHeight, 176)}px`
+  }, [input])
 
   const detail = useQuery({
     queryKey: ["agent", "conversation", conversationId],
@@ -394,104 +427,180 @@ function ChatPanel({
     void refreshList()
   }
 
-  if (!conversationId) {
-    return (
-      <section className="flex min-h-[60vh] flex-col items-center justify-center rounded-lg border border-hairline-strong bg-surface-card p-8 text-center">
-        <Sparkles className="size-6 text-accent-blue" />
-        <h2 className="mt-4 text-heading-sm text-ink">Start a conversation</h2>
-        <p className="mt-2 max-w-md text-body-sm text-charcoal">
-          The assistant can read status, run scans, and manage sites through the
-          same guarded actions the dashboard uses.
-        </p>
-        <Button className="mt-5" onClick={onStartFirst} disabled={creating}>
-          {creating ? <Loader2 className="animate-spin" /> : <Plus />}
-          New conversation
-        </Button>
-      </section>
-    )
-  }
+  const empty = messages.length === 0 && !draft.streaming
 
   return (
-    <section className="flex max-h-[70vh] min-h-[60vh] flex-col rounded-lg border border-hairline-strong bg-surface-card">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
-        {detail.isLoading ? (
-          <p className="text-body-sm text-mute">Loading…</p>
-        ) : messages.length === 0 && !draft.streaming ? (
-          <div className="flex h-full flex-col items-center justify-center text-center">
-            <Sparkles className="size-5 text-accent-blue" />
-            <p className="mt-3 max-w-sm text-body-sm text-charcoal">
-              Ask something like &ldquo;what&rsquo;s the status of my sites?&rdquo;
-              or &ldquo;scan the blog now&rdquo;.
-            </p>
-          </div>
-        ) : (
-          messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)
-        )}
+    <section className="relative z-10 flex h-full min-w-0 flex-1 flex-col">
+      {/* Slim header: rail toggle + thread title. */}
+      <header className="flex h-12 shrink-0 items-center gap-2 px-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onToggleRail}
+          aria-label={railOpen ? "Hide conversations" : "Show conversations"}
+        >
+          {railOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+        </Button>
+        <span className="truncate text-body-sm text-charcoal">
+          {detail.data?.title || "Assistant"}
+        </span>
+      </header>
 
-        {/* Live assistant draft: tool chips while working, then prose. */}
-        {draft.streaming && (
-          <div className="flex flex-col gap-2">
-            {draft.tools.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {draft.tools.map((chip) => (
-                  <ToolActivityChip key={chip.id} chip={chip} />
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-2 text-body-sm text-mute">
-              <Loader2 className="size-3.5 animate-spin" />
-              Thinking…
+      {!conversationId ? (
+        <EmptyState onStartFirst={onStartFirst} creating={creating} />
+      ) : (
+        <>
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
+              {detail.isLoading ? (
+                <p className="text-body-sm text-mute">Loading…</p>
+              ) : empty ? (
+                <WelcomeState onPick={(q) => void send(q)} />
+              ) : (
+                <div className="space-y-6">
+                  {messages.map((msg) => (
+                    <MessageRow key={msg.id} message={msg} />
+                  ))}
+                </div>
+              )}
+
+              {/* Live assistant draft: tool chips while working, then a
+                  thinking indicator. Final prose arrives on `done`. */}
+              {draft.streaming && (
+                <div className="mt-6 flex flex-col gap-2">
+                  {draft.tools.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {draft.tools.map((chip) => (
+                        <ToolActivityChip key={chip.id} chip={chip} />
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 text-body-sm text-mute">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Thinking…
+                  </div>
+                </div>
+              )}
+
+              {pending && (
+                <div className="mt-6">
+                  <ConfirmationCard action={pending} onResolve={resolvePending} />
+                </div>
+              )}
             </div>
           </div>
-        )}
 
-        {pending && <ConfirmationCard action={pending} onResolve={resolvePending} />}
-      </div>
-
-      <form onSubmit={onSubmit} className="border-t border-hairline p-3 sm:p-4">
-        <div className="flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                void send(input)
-              }
-            }}
-            rows={1}
-            placeholder={pending ? "Confirm or cancel the pending action above…" : "Message Wardress…"}
-            disabled={draft.streaming || !!pending}
-            className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-hairline-strong bg-surface-card px-3.5 py-2.5 text-body-sm text-ink outline-none transition-colors placeholder:text-mute focus-visible:border-ink disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!input.trim() || draft.streaming || !!pending}
-            aria-label="Send message"
-          >
-            {draft.streaming ? <Loader2 className="animate-spin" /> : <SendHorizonal />}
-          </Button>
-        </div>
-      </form>
+          {/* Composer pinned to the bottom, centered on the reading column. */}
+          <div className="shrink-0 px-4 pb-4 sm:px-6">
+            <form onSubmit={onSubmit} className="mx-auto w-full max-w-3xl">
+              <div className="flex items-end gap-2 rounded-2xl border border-hairline-strong bg-surface-card p-2 transition-colors focus-within:border-ink/50">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      void send(input)
+                    }
+                  }}
+                  rows={1}
+                  placeholder={
+                    pending ? "Confirm or cancel the pending action above…" : "Message Wardress…"
+                  }
+                  disabled={draft.streaming || !!pending}
+                  className="max-h-44 min-h-[36px] flex-1 resize-none self-center bg-transparent px-2.5 py-1.5 text-body-sm text-ink outline-none placeholder:text-mute disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="rounded-xl"
+                  disabled={!input.trim() || draft.streaming || !!pending}
+                  aria-label="Send message"
+                >
+                  {draft.streaming ? <Loader2 className="animate-spin" /> : <SendHorizonal />}
+                </Button>
+              </div>
+              <p className="mt-2 text-center text-caption text-mute">
+                Wardress acts with your role&rsquo;s permissions. High-impact actions ask first.
+              </p>
+            </form>
+          </div>
+        </>
+      )}
     </section>
   )
 }
 
-// --- Message bubble ---
+// --- Empty / welcome states ---
 
-function MessageBubble({ message }: { message: AgentMessage }) {
-  const isUser = message.role === "user"
+function EmptyState({
+  onStartFirst,
+  creating,
+}: {
+  onStartFirst: () => void
+  creating: boolean
+}) {
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[85%] whitespace-pre-wrap rounded-lg px-3.5 py-2.5 text-body-sm",
-          isUser
-            ? "bg-surface-elevated text-ink"
-            : "border border-hairline text-body"
-        )}
-      >
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+      <WardressMark size={40} />
+      <h2 className="mt-5 font-display text-heading-md text-ink">How can I help?</h2>
+      <p className="mt-2 max-w-md text-body-sm text-charcoal">
+        The assistant reads status, runs scans, and manages sites through the
+        same guarded actions the dashboard uses.
+      </p>
+      <Button className="mt-6" onClick={onStartFirst} disabled={creating}>
+        {creating ? <Loader2 className="animate-spin" /> : <Plus />}
+        New chat
+      </Button>
+    </div>
+  )
+}
+
+function WelcomeState({ onPick }: { onPick: (q: string) => void }) {
+  return (
+    <div className="flex flex-col items-center pt-[8vh] text-center">
+      <WardressMark size={40} />
+      <h2 className="mt-5 font-display text-heading-md text-ink">How can I help?</h2>
+      <p className="mt-2 max-w-md text-body-sm text-charcoal">
+        Ask about your sites, scans, or alerts — or pick a starting point.
+      </p>
+      <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-2">
+        {SUGGESTIONS.map((q) => (
+          <button
+            key={q}
+            type="button"
+            onClick={() => onPick(q)}
+            className="rounded-xl border border-hairline-strong bg-surface-card px-4 py-3 text-left text-body-sm text-charcoal transition-colors hover:border-ink/40 hover:text-ink"
+          >
+            {q}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// --- Message row ---
+
+function MessageRow({ message }: { message: AgentMessage }) {
+  const isUser = message.role === "user"
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-surface-elevated px-4 py-2.5 text-body-sm text-ink">
+          {message.content}
+        </div>
+      </div>
+    )
+  }
+  // Assistant: full-width plain prose with a small mark, ChatGPT-style.
+  return (
+    <div className="flex gap-3">
+      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full border border-hairline-strong bg-surface-card">
+        <WardressMark size={15} />
+      </div>
+      <div className="min-w-0 flex-1 whitespace-pre-wrap pt-0.5 text-body-sm text-body">
         {message.content}
       </div>
     </div>
@@ -552,7 +661,7 @@ function ConfirmationCard({
   return (
     <div
       className={cn(
-        "rounded-lg border p-4",
+        "rounded-xl border p-4",
         destructive
           ? "border-accent-red/40 bg-glow-red/40"
           : "border-hairline-strong bg-surface-elevated"
@@ -574,12 +683,7 @@ function ConfirmationCard({
         </div>
       </div>
       <div className="mt-3 flex justify-end gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void resolve(false)}
-        >
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void resolve(false)}>
           Cancel
         </Button>
         <Button
