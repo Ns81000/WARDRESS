@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { CustomSelect } from "@/components/ui/select"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Role, type UserAdmin } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -263,17 +264,16 @@ export function UsersCard() {
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="new-user-role">Role</Label>
-                  <select
+                  <CustomSelect
                     id="new-user-role"
-                    data-slot="select"
                     value={role}
-                    onChange={(e) => setRole(e.target.value as Role)}
-                    className="h-9 w-full rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none focus:border-white/25"
-                  >
-                    <option value="admin">Admin</option>
-                    <option value="analyst">Analyst</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
+                    onChange={(val) => setRole(val as Role)}
+                    options={[
+                      { value: "admin", label: "Admin" },
+                      { value: "analyst", label: "Analyst" },
+                      { value: "viewer", label: "Viewer" },
+                    ]}
+                  />
                   <p className="text-caption text-mute">{ROLE_DESCRIPTIONS[role]}</p>
                 </div>
                 {formError && (

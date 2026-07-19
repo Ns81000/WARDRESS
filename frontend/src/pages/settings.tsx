@@ -5,7 +5,6 @@ import {
   Send,
   Server,
   Trash2,
-  ChevronDown,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -33,6 +32,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { CustomSelect } from "@/components/ui/select"
 import * as apiClient from "@/lib/api"
 import { ApiError, type ChannelType } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -44,64 +44,6 @@ import { useAuth } from "@/lib/auth"
  */
 
 // --- Custom Select & Icons Component ---
-
-interface SelectOption {
-  value: string
-  label: string
-}
-
-interface CustomSelectProps {
-  id?: string
-  value: string
-  onChange: (value: string) => void
-  options: SelectOption[]
-  className?: string
-}
-
-function CustomSelect({ id, value, onChange, options, className }: CustomSelectProps) {
-  const [isOpen, setIsOpen] = useState(false)
-  const currentOption = options.find((opt) => opt.value === value) || options[0]
-
-  return (
-    <div className={cn("relative w-full", className)}>
-      <button
-        id={id}
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full h-9 rounded-md border border-hairline-strong bg-surface-elevated px-3 text-left text-body-sm text-ink outline-none focus:border-white/25 transition-colors flex items-center justify-between cursor-pointer select-none"
-      >
-        <span className="truncate">{currentOption?.label}</span>
-        <ChevronDown className={cn("size-4 text-charcoal transition-transform duration-200 shrink-0 ml-2", isOpen && "rotate-180")} />
-      </button>
-
-      {isOpen && (
-        <>
-          {/* Backdrop */}
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
-            {options.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => {
-                  onChange(opt.value)
-                  setIsOpen(false)
-                }}
-                className={cn(
-                  "w-full text-left px-3 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",
-                  opt.value === value && "text-ink bg-white/[0.02] font-medium"
-                )}
-              >
-                <span className="truncate">{opt.label}</span>
-                {opt.value === value && <span className="size-1.5 rounded-full bg-accent-blue shrink-0 ml-2" />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
 
 function getChannelIcon(key: string, className?: string) {
   const classStr = cn("size-4.5 shrink-0", className)
@@ -665,20 +607,19 @@ function TelegramCard() {
             <div className="flex flex-col items-stretch gap-2 pt-1 sm:flex-row sm:items-end">
               <div className="min-w-0 flex-1 space-y-1.5">
                 <Label htmlFor="tg-acting-user">Acts as user</Label>
-                <select
+                <CustomSelect
                   id="tg-acting-user"
                   value={s.acting_user_id ?? ""}
                   disabled={linkActingUser.isPending || users.isLoading}
-                  onChange={(e) => linkActingUser.mutate(e.target.value)}
-                  className="h-10 w-full min-w-0 rounded-md border border-hairline-strong bg-surface-card px-3 py-2 text-body-sm text-ink outline-none transition-colors focus-visible:border-ink disabled:opacity-50"
-                >
-                  <option value="">None (disable assistant)</option>
-                  {(users.data ?? []).map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.email} ({u.role})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => linkActingUser.mutate(val)}
+                  options={[
+                    { value: "", label: "None (disable assistant)" },
+                    ...(users.data ?? []).map((u) => ({
+                      value: u.id,
+                      label: `${u.email} (${u.role})`,
+                    })),
+                  ]}
+                />
               </div>
             </div>
           </div>
