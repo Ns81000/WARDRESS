@@ -47,7 +47,7 @@ A hash cannot grade *how much* a page changed — that is the job of the downstr
 </Steps>
 
 <Note>
-  Dynamic-content false positives (timestamps, session tokens, rotating widgets) are **not** handled by hashing less. They are handled by [suppression rules](/layers/9-risk-fusion#suppression) that gate the downstream *scores*, while Layer 1 still faithfully reports that bytes changed.
+  Dynamic-content false positives (timestamps, session tokens, rotating widgets) are **not** handled by hashing less. They are handled by [suppression rules](/layers/9-risk-fusion#suppression-and-the-fused-score) that gate the downstream *scores*, while Layer 1 still faithfully reports that bytes changed.
 </Note>
 
 ## Pipeline gating

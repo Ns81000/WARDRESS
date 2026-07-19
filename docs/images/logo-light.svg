@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" role="img" aria-label="Wardress">
+  <!-- Horizontal topbar lockup for LIGHT backgrounds: dark-green mark + wordmark. -->
+  <g fill-rule="evenodd">
+    <path fill="#1b5e20" fill-rule="evenodd" transform="translate(0,0) scale(0.125)" d="
+      M256 26 L458 98 L458 282 L256 486 L54 282 L54 98 Z
+      M256 152 a54 54 0 0 0 -26 101.3 L198 366 L314 366 L282 253.3 A54 54 0 0 0 256 152 Z" />
+  </g>
+  <text x="74" y="42" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#1b2320" letter-spacing="-0.5">Wardress</text>
+</svg>

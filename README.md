@@ -199,15 +199,15 @@ To preserve system resources and prevent false alarms from dynamic rendering var
 
 | Layer | Stable Key | Input Scope | Core Detection Heuristics |
 | :--- | :--- | :--- | :--- |
-| **1. Content Hash** | `layer1_hash` | Original HTML | Byte-level MD5/SHA comparison of normalized, whitespace-stripped HTML. |
+| **1. Content Hash** | `layer1_hash` | Original HTML | SHA-256 over conservatively normalized HTML. Binary `0.0`/`1.0` result. |
 | **2. DOM Structure** | `layer2_dom_structure` | Suppressed HTML | Inspects structural tree depth, element counts, script tags, iframe insertions, and style attributes that force element hiding. |
 | **3. Link Audit** | `layer3_link_audit` | Suppressed HTML | Audits newly introduced external hyperlinks, stylesheets, script references, and HTML form target domains. |
-| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | Compares page screenshots using `scikit-image` and `imagehash`. Evaluates differences across color, structural similarity index (SSIM), and pixel variance while masking out designated dynamic boxes. |
+| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | SSIM (`scikit-image`, weighted 0.7) plus pHash + dHash (`imagehash`, weighted 0.3) on downscaled, bbox-masked grayscale captures. |
 | **5. Signatures** | `layer5_signatures` | New visible text | Scans newly added visible text for defacement keywords ("hacked by", "owned by"), profanity frequency, and dominant Unicode script changes (e.g. Latin to Cyrillic/Arabic). |
 | **6. Security Metadata** | `layer6_security_metadata` | Network headers | Audits TLS certificate validity, fingerprints (distinguishes CA reissues from subject shifts), security header policies (HSTS, CSP, CORS), and `robots.txt` changes. |
 | **7. Cloaking** | `layer7_cloaking` | HTTP variant fetches | Rotates the User-Agent (Googlebot, Mobile Safari, Desktop Chrome) and compares raw HTML content similarities to identify content cloaked specifically for search engines. |
 | **8. Text Semantics** | `layer8_semantics` | Suppressed text | Computes the sentence embeddings of visible text using a local **MiniLM-L6-v2** neural network, measuring semantic cosine distance from the baseline. |
-| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | Fuses the active layer signals using a weighted heuristic matrix into a final, normalized **0% to 100% Risk Score**. |
+| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | A deterministic seed-fitted **logistic regression** (`scikit-learn`) fuses the eight sub-scores into one calibrated **0.0–1.0 risk score**. |
 
 ---
 
@@ -227,15 +227,15 @@ Per-site configuration dashboard where operators manage baselines, schedule scan
 
 ### 4. Primary Scan Report & Visual Diff
 Shows side-by-side screenshot comparisons with pixel-level highlights marking changed visual regions.
-![Scan Report Visual Diff](docs/screenshots/Scan_Reoprt%20(1).png)
+![Scan Report Visual Diff](docs/screenshots/scan-report-visual-diff.png)
 
 ### 5. DOM Structural Comparison
 Highlights tag alterations, script inclusions, and iframe injections directly within the HTML tree.
-![Scan Report DOM Structure](docs/screenshots/Scan_Reoprt%20(2).png)
+![Scan Report DOM Structure](docs/screenshots/scan-report-dom.png)
 
 ### 6. Semantic and Header Analytics
 Shows the exact differences in HTTP response headers, SSL certificates, outgoing link profiles, and semantic embeddings.
-![Scan Report Analytics](docs/screenshots/Scan_Reoprt%20(3).png)
+![Scan Report Analytics](docs/screenshots/scan-report-analytics.png)
 
 ### 7. AI Incident Assistant
 Leverages Gemini or local Ollama models to translate deep cryptographic and technical diff signatures into plain-English incident summaries.
@@ -290,7 +290,7 @@ These environment variables are written to `.env` during installation.
 | `POSTGRES_USER` | `wardress` | Database username. |
 | `POSTGRES_PASSWORD` | *generated* | Cryptographically random database password. |
 | `DATABASE_URL` | *generated* | Database connection string containing the generated password. |
-| `JWT_SECRET` | *generated* | Used to sign user session cookies (enforces >= 32 characters). |
+| `JWT_SECRET` | *generated* | HS256 signing key for JWT bearer access tokens (validated at startup to be >= 32 bytes). |
 | `CREDENTIALS_ENCRYPTION_KEY` | *generated* | A Fernet key used to encrypt SMTP and API integration credentials at rest. |
 | `ADMIN_EMAIL` | `admin@example.com` | Default email for the first administrator. |
 | `ADMIN_PASSWORD` | *generated* | The seeded administrator password. |
