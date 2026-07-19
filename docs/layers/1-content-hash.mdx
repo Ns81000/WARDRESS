@@ -9,7 +9,7 @@ The **Content Hash Layer** is the first, fastest, and most fundamental layer in 
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     FETCH[Worker HTTP Fetch] --> HTML[Raw HTML Bytes]
     HTML --> NORM[Whitespace Normalizer]
     NORM --> HASH[SHA-256 Hasher]

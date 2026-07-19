@@ -9,7 +9,7 @@ The **DOM Structure Layer** inspects the underlying HTML tree of the page, compl
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     HTML[Raw HTML] --> SUPPRESS[Suppression Engine]
     SUPPRESS --> PARSE[BeautifulSoup DOM Parser]
     

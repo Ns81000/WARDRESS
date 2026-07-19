@@ -9,7 +9,7 @@ The **Semantics Layer** goes beyond exact string matching (like Layer 5) and att
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     TEXT[Extracted New Text] --> TOPIC[Topic Keyword Shift]
     TEXT --> AGGRESSION[Aggression Lexicon]
     TEXT --> MINILM[MiniLM L6 Neural Network]

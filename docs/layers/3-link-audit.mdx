@@ -9,7 +9,7 @@ The **Link Audit Layer** parses all network references embedded in the HTML tree
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     HTML[Suppression-Filtered HTML] --> PARSER[Network Reference Parser]
     PARSER --> EXTRACT[Extract 'href', 'src', 'action']
     EXTRACT --> NORMALIZE[Normalize to FQDNs]

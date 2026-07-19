@@ -4,17 +4,6 @@ description: "Self-hosted website defacement detection and automated response or
 icon: "shield-halved"
 ---
 
-<img
-  className="h-32 block dark:hidden"
-  src="/images/wardress-logo.svg"
-  alt="Wardress Logo Light"
-/>
-<img
-  className="h-32 hidden dark:block"
-  src="/images/wardress-logo.svg"
-  alt="Wardress Logo Dark"
-/>
-
 ## Overview
 
 **Wardress** is a production-grade, self-hosted security tool built to protect website integrity. It captures and freezes a trusted **baseline** of your target website (DOM structure, network references, visual layout, and textual semantics) and continuously monitors the site for malicious defacements, script injections, metadata tampering, and domain hijacking.
@@ -57,12 +46,12 @@ Unlike simple page monitors, Wardress uses a **fused risk model** that aggregate
 Wardress is modularly designed as a set of containerized services coordinated via **Docker Compose**.
 
 ```mermaid
-graph TD
-    UI[Frontend SPA<br>React/Vite] <--> API[FastAPI Web Server]
+graph LR
+    UI[Frontend SPA] <--> API[FastAPI]
     API <--> DB[(PostgreSQL)]
-    API <--> REDIS[(Redis Cache / Broker)]
-    REDIS <--> CELERY[Celery Beat & Workers]
-    CELERY --> PLAYWRIGHT[Playwright/Chromium]
+    API <--> REDIS[(Redis)]
+    REDIS <--> CELERY[Workers]
+    CELERY --> PLAYWRIGHT[Playwright]
     PLAYWRIGHT --> TARGET((Target Website))
 ```
 

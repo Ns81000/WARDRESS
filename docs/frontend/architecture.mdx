@@ -28,18 +28,18 @@ Wardress's frontend is built on industry-leading open-source libraries:
 ## Application Flow
 
 ```mermaid
-graph TD
-    APP[App Entry: main.tsx] --> ROUTER[React Router]
+graph LR
+    APP[App Entry] --> ROUTER[React Router]
     ROUTER --> AUTH{Auth Guard}
-    AUTH -- Unauthenticated --> LOGIN[Login View]
-    AUTH -- Authenticated --> LAYOUT[Main Dashboard Layout]
+    AUTH -- Unauthenticated --> LOGIN[Login]
+    AUTH -- Authenticated --> LAYOUT[Dashboard]
     
-    LAYOUT --> DASH[Global Dashboard /sites]
-    LAYOUT --> SCAN[Scan Detail /sites/:id/scans/:scanId]
-    LAYOUT --> SETTINGS[Global Settings /settings]
+    LAYOUT --> DASH[Sites]
+    LAYOUT --> SCAN[Scan Detail]
+    LAYOUT --> SETTINGS[Settings]
     
-    SCAN --> QUERY[React Query Cache]
-    QUERY -.-> API[FastAPI Backend]
+    SCAN --> QUERY[React Query]
+    QUERY -.-> API[FastAPI]
 ```
 
 ## State Management

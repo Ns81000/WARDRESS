@@ -9,7 +9,7 @@ The **Security Metadata Layer** runs entirely independent of the page's HTML bod
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     PROBER[HTTPX Async Prober] --> REQ[Target Server]
     REQ --> RESP[HTTP Response]
     REQ --> HANDSHAKE[TLS Handshake Context]

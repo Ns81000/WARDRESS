@@ -9,7 +9,7 @@ The **Signatures Layer** acts as a fast, rule-based text scanner. It targets the
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     HTML[Suppression-Filtered HTML] --> VISIBLE[Extract Visible Text]
     VISIBLE --> DIFF[Diff against Baseline Text]
     DIFF --> NEW_TEXT[Isolate Added Text]

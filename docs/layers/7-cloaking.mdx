@@ -11,7 +11,7 @@ A cloaked page inspects the incoming request (specifically the `User-Agent` HTTP
 ## Architecture
 
 ```mermaid
-graph TD
+graph LR
     TRIGGER[Execution Triggered] --> FETCH_A[Fetch: Desktop Chrome]
     TRIGGER --> FETCH_B[Fetch: Googlebot]
     TRIGGER --> FETCH_C[Fetch: Mobile Safari]

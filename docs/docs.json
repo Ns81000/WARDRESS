@@ -1,10 +1,7 @@
 {
   "name": "Wardress",
   "theme": "mint",
-  "logo": {
-    "dark": "/images/wardress-logo.svg",
-    "light": "/images/wardress-logo.svg"
-  },
+  "favicon": "/images/favicon.svg",
   "colors": {
     "primary": "#2e7d32",
     "light": "#38B2AC",
