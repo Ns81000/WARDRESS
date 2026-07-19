@@ -21,15 +21,33 @@ refusal. One bot, one owner — this is a single-operator tool.
 import asyncio
 import logging
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
-from telegram import Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.error import InvalidToken, TelegramError
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
+from app.agent.engine import run_turn
+from app.agent.guard import resolve_pending
+from app.agent.tools import ToolError
 from app.audit import record_audit
 from app.models import (
+    AgentConversation,
+    AgentSurface,
     Alert,
     Baseline,
     BaselineStatus,
@@ -37,6 +55,7 @@ from app.models import (
     ScanStatus,
     ScanVerdict,
     Site,
+    User,
 )
 from app.scanning import is_stale
 from app.settings_store import TELEGRAM_KEY, load_setting, save_setting
@@ -152,16 +171,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not ok:
             await send("This bot is already linked to another chat.")
             return
-        await send(
-            "Wardress connected. This chat is now linked for alerts and commands.\n\n"
-            "Commands:\n"
-            "/status - overall watch status\n"
-            "/sites - monitored sites\n"
-            "/scan <name> - scan a site now\n"
-            "/ack <alert id> - acknowledge an alert\n"
-            "/mute <site> <duration> - mute a site's alerts (e.g. 2h, 45m, 1d)\n"
-            "/explain <site> - plain-English summary of the latest incident\n"
-            "/help - this list"
+        # Attach the quick-action menu on connect; the buttons just send plain
+        # text that flows through the same assistant turn as anything typed.
+        await update.get_bot().send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "Wardress connected. This chat is now linked for alerts and commands.\n\n"
+                "Ask in plain language (e.g. 'scan the blog now', 'what needs attention?') "
+                "once an admin links an 'acts as' user in Settings, or use the commands:\n"
+                "/status - overall watch status\n"
+                "/sites - monitored sites\n"
+                "/scan <name> - scan a site now\n"
+                "/ack <alert id> - acknowledge an alert\n"
+                "/mute <site> <duration> - mute a site's alerts (e.g. 2h, 45m, 1d)\n"
+                "/explain <site> - plain-English summary of the latest incident\n"
+                "/help - this list"
+            ),
+            reply_markup=_quick_action_keyboard(),
         )
     except Exception:
         log.exception("/start failed")
@@ -451,6 +477,181 @@ async def cmd_explain(update, context, send) -> None:
     await send(f"{site_name} — latest incident explained:\n\n{result['explanation']}")
 
 
+# --- Conversational assistant (shared agent core) ---
+#
+# Free text (anything that is not a slash command) is routed through the
+# same run_turn engine the web surface uses. The bot acts as a real RBAC
+# user — the "acts as" link configured in Settings — so tool permissions
+# and audit actors are the operator's, never a pseudo-actor free pass. If
+# no user is linked, the assistant is off and only slash commands answer.
+
+_QUICK_ACTIONS = [["Status", "Sites"], ["Unacknowledged alerts", "Help"]]
+
+
+def _quick_action_keyboard() -> ReplyKeyboardMarkup:
+    """A persistent button menu for the common asks. The buttons send plain
+    text that flows through the same assistant turn as anything typed."""
+    return ReplyKeyboardMarkup(_QUICK_ACTIONS, resize_keyboard=True)
+
+
+async def _load_acting_user(db) -> User | None:
+    """The RBAC user the assistant acts as (Settings 'acts as' link). A
+    stale link (user deleted/deactivated) resolves to None — the assistant
+    then declines rather than running with stale permissions."""
+    stored = await load_setting(db, TELEGRAM_KEY) or {}
+    raw = stored.get("acting_user_id")
+    if not raw:
+        return None
+    try:
+        uid = uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+    return await db.scalar(select(User).where(User.id == uid, User.is_active.is_(True)))
+
+
+async def _telegram_conversation(db, user: User) -> AgentConversation:
+    """Reuse this user's most recent Telegram thread, else open one. One
+    rolling thread per operator keeps context without unbounded growth."""
+    conversation = await db.scalar(
+        select(AgentConversation)
+        .where(
+            AgentConversation.user_id == user.id,
+            AgentConversation.surface == AgentSurface.telegram,
+        )
+        .order_by(AgentConversation.updated_at.desc())
+        .limit(1)
+    )
+    if conversation is None:
+        conversation = AgentConversation(user_id=user.id, surface=AgentSurface.telegram)
+        db.add(conversation)
+        await db.commit()
+    return conversation
+
+
+def _confirm_keyboard(action_id: str) -> InlineKeyboardMarkup:
+    """Inline Confirm/Cancel buttons for a high-impact pending action. The
+    callback_data carries the action id the guard re-validates on tap."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Confirm", callback_data=f"confirm:{action_id}"),
+                InlineKeyboardButton("Cancel", callback_data=f"cancel:{action_id}"),
+            ]
+        ]
+    )
+
+
+async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route free text through the agent core. Chat authorization mirrors the
+    slash commands; a handler crash answers the user, never kills the poller."""
+    send = _reply(update)
+    try:
+        if not await _authorized(update):
+            await send(
+                "This bot is linked to a different chat (or none yet). "
+                "Send /start from the owner's chat after configuring the token in Settings."
+            )
+            return
+        text = (update.message.text if update.message else "") or ""
+        text = text.strip()
+        if not text:
+            return
+        async with task_session() as db:
+            user = await _load_acting_user(db)
+            if user is None:
+                await send(
+                    "The assistant is not linked to a Wardress user yet. An admin can set "
+                    "'acts as' in Settings > Telegram to enable natural-language requests. "
+                    "The slash commands (/status, /sites, /scan, ...) still work."
+                )
+                return
+            conversation = await _telegram_conversation(db, user)
+            confirm_shown = False
+            final_text = ""
+            async for event in run_turn(
+                db,
+                conversation=conversation,
+                user=user,
+                user_message=text,
+                surface="agent-telegram",
+            ):
+                if event.type == "confirm":
+                    action_id = event.data.get("action_id")
+                    summary = event.text or "Confirm this action?"
+                    if action_id:
+                        await update.get_bot().send_message(
+                            chat_id=update.effective_chat.id,
+                            text=summary,
+                            reply_markup=_confirm_keyboard(action_id),
+                        )
+                        confirm_shown = True
+                elif event.type in ("done", "error"):
+                    final_text = event.text or final_text
+            if final_text and not confirm_shown:
+                await send(final_text)
+            elif final_text and confirm_shown:
+                # The prose (if any) came before the confirm card; send it too.
+                await send(final_text)
+    except Exception:
+        log.exception("Assistant message handler failed")
+        try:
+            await send("Something went wrong handling that — see the bot logs.")
+        except TelegramError:
+            pass
+
+
+async def on_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resolve an inline Confirm/Cancel tap. The guard re-checks ownership,
+    RBAC and expiry against the acting user before running frozen args."""
+    query = update.callback_query
+    if query is None:
+        return
+    try:
+        await query.answer()
+        if not await _authorized(update):
+            await query.edit_message_text("This chat is not linked — action ignored.")
+            return
+        data = query.data or ""
+        verb, _, raw_id = data.partition(":")
+        if verb not in ("confirm", "cancel") or not raw_id:
+            return
+        try:
+            action_id = uuid.UUID(raw_id)
+        except (ValueError, TypeError):
+            await query.edit_message_text("That action reference is invalid.")
+            return
+        async with task_session() as db:
+            user = await _load_acting_user(db)
+            if user is None:
+                await query.edit_message_text(
+                    "The assistant is no longer linked to a user — action cancelled."
+                )
+                return
+            try:
+                action, result = await resolve_pending(
+                    db,
+                    action_id=action_id,
+                    user=user,
+                    confirm=(verb == "confirm"),
+                    surface="agent-telegram",
+                )
+            except ToolError as exc:
+                await query.edit_message_text(str(exc))
+                return
+        if verb == "cancel":
+            await query.edit_message_text("Action cancelled.")
+        elif isinstance(result, dict) and result.get("error"):
+            await query.edit_message_text(f"Action failed: {result['error']}")
+        else:
+            await query.edit_message_text("Action confirmed and carried out.")
+    except Exception:
+        log.exception("Confirm callback failed")
+        try:
+            await query.edit_message_text("Something went wrong resolving that action.")
+        except TelegramError:
+            pass
+
+
 # --- Lifecycle ---
 
 
@@ -464,6 +665,12 @@ def build_application(token: str):
     application.add_handler(CommandHandler("ack", _guarded(cmd_ack)))
     application.add_handler(CommandHandler("mute", _guarded(cmd_mute)))
     application.add_handler(CommandHandler("explain", _guarded(cmd_explain)))
+    application.add_handler(
+        CallbackQueryHandler(on_confirm_callback, pattern=r"^(confirm|cancel):")
+    )
+    # Free text (not a command) flows through the shared agent core. Kept last
+    # so it never shadows the slash commands above.
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return application
 
 

@@ -26,8 +26,10 @@ from app.config import get_settings
 from app.crypto import DecryptionError, decrypt_json, encrypt_json
 from app.db import get_db
 from app.deps import AdminUser
-from app.models import NotificationChannel, NotificationChannelType
+from app.models import NotificationChannel, NotificationChannelType, User
 from app.schemas import (
+    GeminiKeyIn,
+    GeminiKeyOut,
     GeminiSettingsIn,
     GeminiSettingsOut,
     NotificationChannelCreate,
@@ -154,16 +156,37 @@ async def test_smtp(body: SmtpTestRequest, user: AdminUser, db: DB) -> SettingsT
 # --- Telegram (§8 bot + tgram:// pushes) ---
 
 
+async def _acting_user_out(
+    db: AsyncSession, acting_user_id: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve the stored acting-user link to (id, email) for display. A
+    stale link (user deleted or deactivated since) reads back as unset so the
+    UI shows the assistant is effectively off until it's re-linked."""
+    if not acting_user_id:
+        return None, None
+    try:
+        uid = uuid.UUID(acting_user_id)
+    except (ValueError, TypeError):
+        return None, None
+    linked = await db.scalar(select(User).where(User.id == uid, User.is_active.is_(True)))
+    if linked is None:
+        return None, None
+    return str(linked.id), linked.email
+
+
 @router.get("/telegram", response_model=TelegramSettingsOut)
 async def get_telegram(user: AdminUser, db: DB) -> TelegramSettingsOut:
     tg = await load_setting(db, TELEGRAM_KEY)
     if not tg or not tg.get("bot_token"):
         return TelegramSettingsOut(configured=False)
+    acting_id, acting_email = await _acting_user_out(db, tg.get("acting_user_id"))
     return TelegramSettingsOut(
         configured=True,
         token_hint=_hint(tg["bot_token"], keep=10),
         chat_id=tg.get("chat_id"),
         chat_captured_at=tg.get("chat_captured_at"),
+        acting_user_id=acting_id,
+        acting_user_email=acting_email,
     )
 
 
@@ -192,6 +215,28 @@ async def put_telegram(body: TelegramSettingsIn, user: AdminUser, db: DB) -> Tel
         value.pop("chat_id", None)
         value.pop("chat_captured_at", None)
     value["bot_token"] = token
+    # acting_user_id: None keeps the stored link, "" clears it, a value sets it
+    # (validated to a live user so the assistant can never run under a stale or
+    # deactivated identity).
+    if body.acting_user_id is not None:
+        linked_id = body.acting_user_id.strip()
+        if not linked_id:
+            value.pop("acting_user_id", None)
+        else:
+            try:
+                uid = uuid.UUID(linked_id)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "That is not a valid user id"
+                ) from None
+            linked = await db.scalar(
+                select(User).where(User.id == uid, User.is_active.is_(True))
+            )
+            if linked is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "No active user with that id"
+                )
+            value["acting_user_id"] = str(linked.id)
     record_audit(
         db,
         actor=user,
@@ -199,7 +244,11 @@ async def put_telegram(body: TelegramSettingsIn, user: AdminUser, db: DB) -> Tel
         target_type="settings",
         target_id="telegram",
         target_label="Telegram settings",
-        after={"configured": True, "token_changed": token != existing.get("bot_token")},
+        after={
+            "configured": True,
+            "token_changed": token != existing.get("bot_token"),
+            "acting_user_id": value.get("acting_user_id"),
+        },
     )
     await save_setting(db, TELEGRAM_KEY, value)
     return await get_telegram(user, db)
@@ -221,38 +270,70 @@ async def test_telegram(user: AdminUser, db: DB) -> SettingsTestResult:
     return SettingsTestResult(ok=ok, detail="Test message sent" if ok else detail)
 
 
-# --- Gemini (§8 optional cloud intelligence) ---
+# --- Gemini (§8 optional cloud intelligence; multi-key rotation pool) ---
+#
+# Stored shape: {"keys": [{"id", "api_key", "label", "added_at"}], "enabled"}.
+# A legacy single-key row ({"api_key", "enabled"}) is normalized on first
+# write; readers (llm.keys_from_setting) accept both shapes forever.
+
+
+def _normalize_gemini(g: dict | None) -> dict:
+    """Return the stored payload in pool shape (legacy rows auto-wrapped)."""
+    if not g:
+        return {"keys": [], "enabled": True}
+    if isinstance(g.get("keys"), list):
+        return {"keys": g["keys"], "enabled": bool(g.get("enabled", True))}
+    if g.get("api_key"):
+        return {
+            "keys": [{"id": uuid.uuid4().hex[:12], "api_key": g["api_key"], "label": "default"}],
+            "enabled": bool(g.get("enabled", True)),
+        }
+    return {"keys": [], "enabled": bool(g.get("enabled", True))}
+
+
+def _gemini_out(g: dict) -> GeminiSettingsOut:
+    from app.llm import KeyPool, keys_from_setting
+
+    pool = KeyPool(keys_from_setting({**g, "enabled": True}))
+    keys = [GeminiKeyOut(**snap) for snap in pool.health_snapshot()]
+    return GeminiSettingsOut(
+        configured=bool(g["keys"]),
+        enabled=bool(g.get("enabled", True)) and bool(g["keys"]),
+        key_hint=keys[0].hint if keys else None,
+        model=get_settings().gemini_model,
+        keys=keys,
+    )
 
 
 @router.get("/gemini", response_model=GeminiSettingsOut)
 async def get_gemini(user: AdminUser, db: DB) -> GeminiSettingsOut:
-    g = await load_setting(db, GEMINI_KEY)
-    if not g or not g.get("api_key"):
+    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    if not g["keys"]:
         return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
-    return GeminiSettingsOut(
-        configured=True,
-        enabled=bool(g.get("enabled", True)),
-        key_hint=_hint(g["api_key"]),
-        model=get_settings().gemini_model,
-    )
+    return _gemini_out(g)
 
 
 @router.put("/gemini", response_model=GeminiSettingsOut)
 async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiSettingsOut:
-    existing = await load_setting(db, GEMINI_KEY) or {}
-    key = existing.get("api_key", "") if body.api_key is None else body.api_key.strip()
-    if not key:
-        record_audit(
-            db,
-            actor=user,
-            action="settings.gemini.update",
-            target_type="settings",
-            target_id="gemini",
-            target_label="Gemini settings",
-            after={"configured": False},
-        )
-        await delete_setting(db, GEMINI_KEY)
-        return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
+    """Legacy single-key PUT, kept so older clients work: sets/clears the
+    whole pool. New clients use POST/DELETE /gemini/keys instead."""
+    existing = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    if body.api_key is not None:
+        key = body.api_key.strip()
+        if not key:
+            record_audit(
+                db,
+                actor=user,
+                action="settings.gemini.update",
+                target_type="settings",
+                target_id="gemini",
+                target_label="Gemini settings",
+                after={"configured": False},
+            )
+            await delete_setting(db, GEMINI_KEY)
+            return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
+        existing["keys"] = [{"id": uuid.uuid4().hex[:12], "api_key": key, "label": "default"}]
+    existing["enabled"] = body.enabled
     record_audit(
         db,
         actor=user,
@@ -260,23 +341,82 @@ async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiS
         target_type="settings",
         target_id="gemini",
         target_label="Gemini settings",
-        after={"configured": True, "enabled": body.enabled},
+        after={"configured": bool(existing["keys"]), "enabled": body.enabled},
     )
-    await save_setting(db, GEMINI_KEY, {"api_key": key, "enabled": body.enabled})
+    await save_setting(db, GEMINI_KEY, existing)
     return await get_gemini(user, db)
+
+
+@router.post("/gemini/keys", response_model=GeminiSettingsOut, status_code=status.HTTP_201_CREATED)
+async def add_gemini_key(body: GeminiKeyIn, user: AdminUser, db: DB) -> GeminiSettingsOut:
+    """Add one key to the rotation pool (duplicates rejected)."""
+    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    key = body.api_key.strip()
+    if any(k.get("api_key") == key for k in g["keys"]):
+        raise HTTPException(status.HTTP_409_CONFLICT, "That key is already in the pool")
+    if len(g["keys"]) >= 10:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Key pool is capped at 10 keys")
+    g["keys"].append(
+        {
+            "id": uuid.uuid4().hex[:12],
+            "api_key": key,
+            "label": body.label.strip() or f"key {len(g['keys']) + 1}",
+        }
+    )
+    g["enabled"] = True
+    record_audit(
+        db,
+        actor=user,
+        action="settings.gemini.key_add",
+        target_type="settings",
+        target_id="gemini",
+        target_label="Gemini key pool",
+        after={"pool_size": len(g["keys"])},
+    )
+    await save_setting(db, GEMINI_KEY, g)
+    return _gemini_out(g)
+
+
+@router.delete("/gemini/keys/{key_id}", response_model=GeminiSettingsOut)
+async def remove_gemini_key(key_id: str, user: AdminUser, db: DB) -> GeminiSettingsOut:
+    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    remaining = [k for k in g["keys"] if k.get("id") != key_id]
+    if len(remaining) == len(g["keys"]):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Key not found in the pool")
+    g["keys"] = remaining
+    record_audit(
+        db,
+        actor=user,
+        action="settings.gemini.key_remove",
+        target_type="settings",
+        target_id="gemini",
+        target_label="Gemini key pool",
+        after={"pool_size": len(g["keys"])},
+    )
+    if g["keys"]:
+        await save_setting(db, GEMINI_KEY, g)
+        return _gemini_out(g)
+    await delete_setting(db, GEMINI_KEY)
+    return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
 
 
 @router.post("/gemini/test", response_model=SettingsTestResult)
 async def test_gemini(user: AdminUser, db: DB) -> SettingsTestResult:
-    """One cheap gemini-flash-latest call to confirm the stored key works
-    (§7). Uses the same client module the worker's escalation uses."""
-    g = await load_setting(db, GEMINI_KEY)
-    if not g or not g.get("api_key"):
-        return SettingsTestResult(ok=False, detail="Gemini API key is not configured yet")
-    from app.llm import gemini_test_call
+    """One cheap gemini-flash-latest call through the rotation pool to
+    confirm at least one stored key works (§7)."""
+    from app.llm import KeyPool, LLMUnavailable, keys_from_setting
 
-    ok, detail = await gemini_test_call(g["api_key"])
-    return SettingsTestResult(ok=ok, detail=detail)
+    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    keys = keys_from_setting({**g, "enabled": True})
+    if not keys:
+        return SettingsTestResult(ok=False, detail="No Gemini API keys configured yet")
+    try:
+        await KeyPool(keys).generate("Reply with the single word: ok")
+        return SettingsTestResult(
+            ok=True, detail=f"Pool works — {get_settings().gemini_model} answered"
+        )
+    except LLMUnavailable as exc:
+        return SettingsTestResult(ok=False, detail=f"Gemini test failed: {exc}")
 
 
 # --- Ollama (§8 optional local LLM) ---

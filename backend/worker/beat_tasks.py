@@ -48,6 +48,10 @@ MAX_DISPATCH_PER_TICK = 50
 JANITOR_INTERVAL_SECONDS = 24 * 60 * 60
 JANITOR_MAX_REMOVALS_PER_RUN = 500
 
+# Agent pending-action TTL is 10 min (guard.PENDING_TTL); sweep a little
+# faster so expired confirmation cards don't linger long in the DB.
+AGENT_ACTION_JANITOR_SECONDS = 5 * 60
+
 # Redis heartbeat key the health page reads (Phase 5 §7): proof that
 # Beat is scheduling AND a worker is executing (the tick runs on a
 # worker). Written best-effort — a Redis blip must not fail the tick.
@@ -239,6 +243,30 @@ def cleanup_orphan_artifacts() -> dict:
         return {"error": True}
 
 
+@celery_app.task(name="wardress.expire_agent_actions")
+def expire_agent_actions() -> dict:
+    """Flip agent pending-action rows past their TTL to `expired` so a stale
+    confirmation card can never be resolved after the fact. The guard already
+    re-checks expiry at confirm time, so this is bookkeeping, not a safety
+    gate — and, like every janitor, best-effort: it must never crash the
+    worker (rule 6)."""
+    try:
+        from app.agent.guard import expire_stale
+
+        count = asyncio.run(_run_with_session(expire_stale))
+        if count:
+            logger.info("Agent action janitor expired %d stale pending action(s)", count)
+        return {"expired": count}
+    except Exception:
+        logger.exception("Agent action janitor run failed")
+        return {"error": True}
+
+
+async def _run_with_session(fn):
+    async with task_session() as db:
+        return await fn(db)
+
+
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs) -> None:
     sender.add_periodic_task(
@@ -254,4 +282,10 @@ def setup_periodic_tasks(sender, **kwargs) -> None:
         cleanup_orphan_artifacts.s(),
         name="cleanup orphan artifacts",
         expires=JANITOR_INTERVAL_SECONDS,
+    )
+    sender.add_periodic_task(
+        AGENT_ACTION_JANITOR_SECONDS,
+        expire_agent_actions.s(),
+        name="expire agent pending actions",
+        expires=AGENT_ACTION_JANITOR_SECONDS,
     )

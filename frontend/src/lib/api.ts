@@ -437,6 +437,22 @@ export interface TelegramSettings {
   token_hint: string | null
   chat_id: string | null
   chat_captured_at: string | null
+  // Which RBAC user the free-text assistant acts as (null => assistant off,
+  // slash commands only).
+  acting_user_id: string | null
+  acting_user_email: string | null
+}
+
+export type GeminiKeyHealth = "healthy" | "cooldown" | "exhausted"
+
+export interface GeminiKeyOut {
+  id: string
+  label: string
+  hint: string | null
+  health: GeminiKeyHealth
+  used_today: number
+  daily_budget: number
+  last_used: string | null
 }
 
 export interface GeminiSettings {
@@ -444,6 +460,7 @@ export interface GeminiSettings {
   enabled: boolean
   key_hint: string | null
   model: string
+  keys: GeminiKeyOut[]
 }
 
 export interface OllamaSettings {
@@ -519,10 +536,17 @@ export const testSmtp = (to: string, settings?: SmtpSettingsPatch) =>
   })
 
 export const getTelegramSettings = () => api<TelegramSettings>("/api/settings/telegram")
-export const putTelegramSettings = (bot_token: string | null) =>
+// bot_token: null keeps the stored token, "" clears the whole config.
+// acting_user_id: undefined keeps the stored link, "" clears it, an id sets it.
+export const putTelegramSettings = (
+  bot_token: string | null,
+  acting_user_id?: string | null
+) =>
   api<TelegramSettings>("/api/settings/telegram", {
     method: "PUT",
-    body: JSON.stringify({ bot_token }),
+    body: JSON.stringify(
+      acting_user_id === undefined ? { bot_token } : { bot_token, acting_user_id }
+    ),
   })
 export const testTelegram = () =>
   api<TestResult>("/api/settings/telegram/test", { method: "POST" })
@@ -530,6 +554,13 @@ export const testTelegram = () =>
 export const getGeminiSettings = () => api<GeminiSettings>("/api/settings/gemini")
 export const putGeminiSettings = (body: { api_key?: string | null; enabled: boolean }) =>
   api<GeminiSettings>("/api/settings/gemini", { method: "PUT", body: JSON.stringify(body) })
+export const addGeminiKey = (body: { api_key: string; label?: string }) =>
+  api<GeminiSettings>("/api/settings/gemini/keys", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+export const removeGeminiKey = (keyId: string) =>
+  api<GeminiSettings>(`/api/settings/gemini/keys/${keyId}`, { method: "DELETE" })
 export const testGemini = () => api<TestResult>("/api/settings/gemini/test", { method: "POST" })
 
 export const getOllamaSettings = () => api<OllamaSettings>("/api/settings/ollama")
@@ -573,6 +604,140 @@ export const explainScan = (siteId: string, scanId: string, force = false) =>
   api<ExplainResult>(`/api/sites/${siteId}/scans/${scanId}/explain?force=${force}`, {
     method: "POST",
   })
+
+// --- Conversational agent (§ agent) ---
+
+export interface AgentConversation {
+  id: string
+  surface: string
+  title: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentMessage {
+  id: string
+  role: "user" | "assistant" | "tool"
+  content: string
+  tool_name: string | null
+  created_at: string
+}
+
+export interface AgentPendingAction {
+  id: string
+  tool: string
+  summary: string | null
+  status: string
+  expires_at: string
+}
+
+export interface AgentConversationDetail extends AgentConversation {
+  messages: AgentMessage[]
+  pending_action: AgentPendingAction | null
+}
+
+/*
+ * One event off the SSE turn stream. The wire shape is one JSON object per
+ * `data:` line (see routers/agent.py): {type, text?, data?}. `confirm`
+ * events carry {action_id, tool, summary, destructive} in `data`; `tool`
+ * events carry {tool, state: "start"|"done", ok?}.
+ */
+export interface AgentStreamEvent {
+  type: "tool" | "confirm" | "done" | "error" | "text"
+  text?: string
+  data?: {
+    action_id?: string
+    tool?: string
+    summary?: string | null
+    destructive?: boolean
+    state?: "start" | "done"
+    ok?: boolean
+  }
+}
+
+export const listConversations = () =>
+  api<AgentConversation[]>("/api/agent/conversations")
+export const createConversation = () =>
+  api<AgentConversation>("/api/agent/conversations", { method: "POST" })
+export const getConversation = (id: string) =>
+  api<AgentConversationDetail>(`/api/agent/conversations/${id}`)
+export const deleteConversation = (id: string) =>
+  api<void>(`/api/agent/conversations/${id}`, { method: "DELETE" })
+
+export const confirmAgentAction = (actionId: string) =>
+  api<{ status: string; result: unknown }>(
+    `/api/agent/actions/${actionId}/confirm`,
+    { method: "POST" }
+  )
+export const cancelAgentAction = (actionId: string) =>
+  api<{ status: string }>(`/api/agent/actions/${actionId}/cancel`, {
+    method: "POST",
+  })
+
+/*
+ * Stream one user turn as Server-Sent Events. Native EventSource can't set
+ * the Authorization header (the access token lives in module memory, not a
+ * cookie), so we POST with a fetch-stream reader and parse `data:` frames
+ * ourselves. A 401 refreshes once and replays, mirroring api()/artifactFetch.
+ * `onEvent` fires per parsed frame; the returned promise resolves when the
+ * stream ends. Pass an AbortSignal to cancel an in-flight turn.
+ */
+export async function streamAgentTurn(
+  conversationId: string,
+  message: string,
+  onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const path = `/api/agent/conversations/${conversationId}/messages`
+  const doFetch = () =>
+    fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({ message }),
+      signal,
+    })
+
+  let resp = await doFetch()
+  if (resp.status === 401) {
+    if (await refreshSession()) resp = await doFetch()
+    else {
+      onSessionExpired?.()
+      throw new ApiError(401, "Session expired")
+    }
+  }
+  if (!resp.ok) throw new ApiError(resp.status, await parseDetail(resp))
+  if (!resp.body) throw new ApiError(0, "The assistant stream is unavailable.")
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // SSE frames are separated by a blank line; a frame may hold multiple
+    // `data:` lines, though the server emits one per frame.
+    let sep: number
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      const payload = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("")
+      if (!payload) continue
+      try {
+        onEvent(JSON.parse(payload) as AgentStreamEvent)
+      } catch {
+        // A partial/garbled frame is skipped rather than killing the turn.
+      }
+    }
+  }
+}
 
 // Report downloads carry the Authorization header via artifactFetch and
 // hand back a blob URL the caller anchors to (and revokes).

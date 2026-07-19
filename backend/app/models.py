@@ -133,6 +133,31 @@ class RemediationExecutionStatus(enum.StrEnum):
     dismissed = "dismissed"  # operator rejected the pending confirmation
 
 
+class AgentSurface(enum.StrEnum):
+    """Which transport a conversation belongs to (web dashboard vs the
+    Telegram bot). Both drive the same agent core."""
+
+    web = "web"
+    telegram = "telegram"
+
+
+class AgentMessageRole(enum.StrEnum):
+    user = "user"
+    assistant = "assistant"
+    tool = "tool"  # a tool result folded back into the transcript
+
+
+class AgentActionStatus(enum.StrEnum):
+    """Lifecycle of a high-impact tool call held for explicit confirmation
+    (§ agent safety): pending sits in the chat confirm slot; confirmed runs
+    the frozen args verbatim; cancelled/expired never execute."""
+
+    pending = "pending"
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+    expired = "expired"
+
+
 def _enum(e: type[enum.StrEnum], name: str) -> Enum:
     """Store enum *values* (lowercase strings), not Python member names."""
     return Enum(e, name=name, values_callable=lambda x: [m.value for m in x])
@@ -596,3 +621,80 @@ class RemediationExecution(Base):
     __table_args__ = (
         Index("uq_remediation_executions_hook_scan", "hook_id", "scan_id", unique=True),
     )
+
+
+# --- Conversational agent (§ agent) ---------------------------------------
+
+
+class AgentConversation(Base):
+    """One chat thread between a user and the assistant, on either surface.
+    Persisted so history survives across sessions (web reloads, bot restarts).
+    `summary` holds a rolling one-paragraph digest of turns that have aged out
+    of the live context window — token-efficiency without losing continuity."""
+
+    __tablename__ = "agent_conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    surface: Mapped[AgentSurface] = mapped_column(
+        _enum(AgentSurface, "agent_surface"), default=AgentSurface.web
+    )
+    title: Mapped[str | None] = mapped_column(String(200), default=None)
+    summary: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    messages: Mapped[list["AgentMessage"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+
+
+class AgentMessage(Base):
+    """One turn in a conversation. `tool_name`/`tool_payload` are set only on
+    role=tool rows (the compact result fed back to the model) and on
+    assistant rows that triggered a tool call — enough to replay or render the
+    transcript without re-running anything."""
+
+    __tablename__ = "agent_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[AgentMessageRole] = mapped_column(_enum(AgentMessageRole, "agent_message_role"))
+    content: Mapped[str] = mapped_column(Text, default="")
+    tool_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    tool_payload: Mapped[dict | None] = mapped_column(JSONDict, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    conversation: Mapped[AgentConversation] = relationship(back_populates="messages")
+
+
+class AgentPendingAction(Base):
+    """A high-impact tool call frozen for explicit confirmation. The model
+    proposes; the args are stored here verbatim; the user confirms; only then
+    does the dispatcher execute the stored args (the model is never in the loop
+    between propose and execute). RBAC + ownership + expiry are re-checked at
+    confirm time."""
+
+    __tablename__ = "agent_pending_actions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    tool: Mapped[str] = mapped_column(String(64))
+    args: Mapped[dict] = mapped_column(JSONDict, default=dict)
+    # Human-readable one-line summary shown on the confirmation card.
+    summary: Mapped[str | None] = mapped_column(String(500), default=None)
+    status: Mapped[AgentActionStatus] = mapped_column(
+        _enum(AgentActionStatus, "agent_action_status"), default=AgentActionStatus.pending
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

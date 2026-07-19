@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 from app.config import get_settings
 from app.ratelimit import enforce_ip_rate_limit
 from app.routers import (
+    agent,
     alerts,
     apikeys,
     artifacts,
@@ -73,10 +74,15 @@ class RequestBodySizeLimitMiddleware:
 
         async def limited_receive():
             nonlocal sent
-            if sent:
-                return {"type": "http.request", "body": b"", "more_body": False}
-            sent = True
-            return {"type": "http.request", "body": body, "more_body": False}
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            # Body already delivered. Defer to the real transport instead of
+            # returning a synthetic empty message: a StreamingResponse runs a
+            # disconnect listener that calls receive() in a loop until it sees
+            # http.disconnect, so a non-blocking stub would spin it hot and
+            # starve the event loop (the stream body would never run).
+            return await receive()
 
         await self.app(scope, limited_receive, send)
 
@@ -134,6 +140,7 @@ app.include_router(alerts.router)
 app.include_router(settings.router)
 app.include_router(settings.channels_router)
 app.include_router(reports.router)
+app.include_router(agent.router)
 
 
 class SPAStaticFiles(StaticFiles):

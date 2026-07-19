@@ -4,6 +4,7 @@ import { AppShell } from "@/components/app-shell"
 import { Toaster } from "@/components/ui/sonner"
 import { useAuth } from "@/lib/auth"
 import { AlertsPage } from "@/pages/alerts"
+import { AssistantPage } from "@/pages/assistant"
 import { AuditPage } from "@/pages/audit"
 import { HealthPage } from "@/pages/health"
 import { LoginPage } from "@/pages/login"
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/sites/:siteId" element={<SiteDetailPage />} />
           <Route path="/sites/:siteId/scans/:scanId" element={<ScanDetailPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/assistant" element={<AssistantPage />} />
           <Route path="/remediation" element={<RemediationPage />} />
           <Route path="/health" element={<HealthPage />} />
           <Route

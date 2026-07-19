@@ -280,6 +280,44 @@ async def test_telegram_test_requires_capture(client, auth_headers):
     assert body["ok"] is False and "/start" in body["detail"]
 
 
+async def test_telegram_acting_user_link(client, auth_headers, admin_user):
+    """The bot's assistant acts as a real RBAC user; linking one round-trips
+    the id + email, and an unknown/cleared link reads back as unset."""
+    await client.put(
+        "/api/settings/telegram", json={"bot_token": "111:aaa"}, headers=auth_headers
+    )
+    # Link the admin as the acting user.
+    resp = await client.put(
+        "/api/settings/telegram",
+        json={"acting_user_id": str(admin_user.id)},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["acting_user_id"] == str(admin_user.id)
+    assert body["acting_user_email"] == admin_user.email
+
+    # A GET reflects the same link.
+    resp = await client.get("/api/settings/telegram", headers=auth_headers)
+    assert resp.json()["acting_user_id"] == str(admin_user.id)
+
+    # An unknown user id is rejected (fail closed, no silent link).
+    resp = await client.put(
+        "/api/settings/telegram",
+        json={"acting_user_id": "00000000-0000-0000-0000-000000000000"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+    # Clearing the link ("") drops it without touching the token.
+    resp = await client.put(
+        "/api/settings/telegram", json={"acting_user_id": ""}, headers=auth_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["acting_user_id"] is None
+    assert resp.json()["configured"] is True  # token untouched
+
+
 # --- Gemini / Ollama settings ---
 
 

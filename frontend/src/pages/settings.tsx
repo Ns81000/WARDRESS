@@ -11,7 +11,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
 import { ApiKeysCard } from "@/components/api-keys-card"
-import { StatusDot } from "@/components/status-dot"
+import { StatusDot, type DotState } from "@/components/status-dot"
 import { UsersCard } from "@/components/users-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -303,6 +303,34 @@ function errMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
+// Rotation-pool key health -> status dot + label. A cooled-down key is
+// resting after a rate-limit; exhausted has spent its daily budget.
+function geminiKeyDot(health: apiClient.GeminiKeyHealth): DotState {
+  switch (health) {
+    case "healthy":
+      return "clean"
+    case "cooldown":
+      return "pending"
+    case "exhausted":
+      return "threat"
+    default:
+      return "idle"
+  }
+}
+
+function geminiKeyHealthLabel(health: apiClient.GeminiKeyHealth): string {
+  switch (health) {
+    case "healthy":
+      return "Healthy"
+    case "cooldown":
+      return "Cooling down"
+    case "exhausted":
+      return "Daily budget spent"
+    default:
+      return health
+  }
+}
+
 // --- SMTP card (§8: a passing Send Test gates the Save action) ---
 
 function SmtpCard() {
@@ -536,6 +564,9 @@ function TelegramCard() {
       query.state.data?.configured && !query.state.data.chat_id ? 4000 : false,
   })
   const [token, setToken] = useState("")
+  // The bot's free-text assistant acts as a real RBAC user (no pseudo-actor
+  // free pass). Without a linked user the bot answers slash commands only.
+  const users = useQuery({ queryKey: ["users"], queryFn: apiClient.listUsers })
 
   const save = useMutation({
     mutationFn: (value: string | null) => apiClient.putTelegramSettings(value),
@@ -555,6 +586,20 @@ function TelegramCard() {
     mutationFn: apiClient.testTelegram,
     onSuccess: (result) => (result.ok ? toast.success(result.detail) : toast.error(result.detail)),
     onError: (err) => toast.error(errMessage(err, "Test failed")),
+  })
+
+  const linkActingUser = useMutation({
+    mutationFn: (actingUserId: string) =>
+      apiClient.putTelegramSettings(null, actingUserId),
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ["settings", "telegram"] })
+      toast.success(
+        data.acting_user_id
+          ? `Assistant now acts as ${data.acting_user_email}`
+          : "Assistant user cleared"
+      )
+    },
+    onError: (err) => toast.error(errMessage(err, "Could not link the assistant user")),
   })
 
   const s = settings.data
@@ -596,6 +641,46 @@ function TelegramCard() {
                 : "Token saved — waiting for /start from your Telegram account"}
             </div>
             <p className="text-caption text-mute">Token {s.token_hint}</p>
+          </div>
+        ) : null}
+
+        {/* Natural-language assistant: which Wardress user the bot acts as.
+            Actions run with this user's role and are audited under them. */}
+        {s?.configured && s.chat_id ? (
+          <div className="space-y-2 rounded-md border border-hairline bg-surface-elevated p-4">
+            <div className="flex items-center gap-2 text-body-sm text-body">
+              <StatusDot state={s.acting_user_id ? "clean" : "pending"} />
+              Natural-language assistant
+              {s.acting_user_id ? (
+                <span className="text-caption text-mute">acts as {s.acting_user_email}</span>
+              ) : (
+                <span className="text-caption text-mute">not linked — slash commands only</span>
+              )}
+            </div>
+            <p className="text-caption text-mute">
+              Free-text messages route through the same guarded actions as the web
+              assistant, running with the linked user&rsquo;s role. High-impact actions
+              still ask for confirmation with inline buttons.
+            </p>
+            <div className="flex flex-col items-stretch gap-2 pt-1 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <Label htmlFor="tg-acting-user">Acts as user</Label>
+                <select
+                  id="tg-acting-user"
+                  value={s.acting_user_id ?? ""}
+                  disabled={linkActingUser.isPending || users.isLoading}
+                  onChange={(e) => linkActingUser.mutate(e.target.value)}
+                  className="h-10 w-full min-w-0 rounded-md border border-hairline-strong bg-surface-card px-3 py-2 text-body-sm text-ink outline-none transition-colors focus-visible:border-ink disabled:opacity-50"
+                >
+                  <option value="">None (disable assistant)</option>
+                  {(users.data ?? []).map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.email} ({u.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -651,6 +736,7 @@ function AiCard() {
   const ollama = useQuery({ queryKey: ["settings", "ollama"], queryFn: apiClient.getOllamaSettings })
 
   const [apiKey, setApiKey] = useState("")
+  const [keyLabel, setKeyLabel] = useState("")
   const [ollamaModel, setOllamaModel] = useState("")
   const [ollamaHydrated, setOllamaHydrated] = useState(false)
 
@@ -661,15 +747,24 @@ function AiCard() {
     }
   }, [ollama.data, ollamaHydrated])
 
-  const saveGemini = useMutation({
-    mutationFn: (body: { api_key?: string | null; enabled: boolean }) =>
-      apiClient.putGeminiSettings(body),
-    onSuccess: (data) => {
+  const addKey = useMutation({
+    mutationFn: (body: { api_key: string; label?: string }) => apiClient.addGeminiKey(body),
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings", "gemini"] })
       setApiKey("")
-      toast.success(data.configured ? "Gemini key saved" : "Gemini key removed")
+      setKeyLabel("")
+      toast.success("Key added to the pool")
     },
-    onError: (err) => toast.error(errMessage(err, "Could not save the Gemini key")),
+    onError: (err) => toast.error(errMessage(err, "Could not add the key")),
+  })
+
+  const removeKey = useMutation({
+    mutationFn: (keyId: string) => apiClient.removeGeminiKey(keyId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings", "gemini"] })
+      toast.success("Key removed from the pool")
+    },
+    onError: (err) => toast.error(errMessage(err, "Could not remove the key")),
   })
 
   const testGeminiM = useMutation({
@@ -677,6 +772,8 @@ function AiCard() {
     onSuccess: (r) => (r.ok ? toast.success(r.detail) : toast.error(r.detail)),
     onError: (err) => toast.error(errMessage(err, "Test failed")),
   })
+
+  const keys = gemini.data?.keys ?? []
 
   const saveOllama = useMutation({
     mutationFn: (enabled: boolean) =>
@@ -712,36 +809,64 @@ function AiCard() {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-body-sm text-body">
-              <StatusDot state={gemini.data?.configured ? "clean" : "idle"} />
+              <StatusDot state={keys.length > 0 ? "clean" : "idle"} />
               {getChannelIcon("gemini", "size-4.5 text-accent-blue")}
-              Google Gemini ({gemini.data?.model ?? "gemini-2.5-flash"})
-              {gemini.data?.configured && (
-                <span className="text-caption text-mute">key {gemini.data.key_hint}</span>
+              Google Gemini ({gemini.data?.model ?? "gemini-flash-latest"})
+              {keys.length > 0 && (
+                <span className="text-caption text-mute">
+                  {keys.length} key{keys.length === 1 ? "" : "s"} in rotation
+                </span>
               )}
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!gemini.data?.configured || testGeminiM.isPending}
-                onClick={() => testGeminiM.mutate()}
-              >
-                {testGeminiM.isPending ? "Testing" : "Test key"}
-              </Button>
-              {gemini.data?.configured && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => saveGemini.mutate({ api_key: "", enabled: false })}
-                >
-                  Remove
-                </Button>
-              )}
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={keys.length === 0 || testGeminiM.isPending}
+              onClick={() => testGeminiM.mutate()}
+            >
+              {testGeminiM.isPending ? "Testing" : "Test pool"}
+            </Button>
           </div>
+
+          {/* Rotation pool — the agent and ambiguous-scan calls fail over
+              across these keys, each with its own free-tier budget. */}
+          {keys.length > 0 && (
+            <ul className="divide-y divide-hairline rounded-md border border-hairline">
+              {keys.map((key) => (
+                <li key={key.id} className="flex items-center gap-3 px-3 py-2.5">
+                  <StatusDot state={geminiKeyDot(key.health)} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-body-sm text-body">
+                      <span className="truncate">{key.label || "unnamed key"}</span>
+                      {key.hint && (
+                        <span className="text-caption text-mute">{key.hint}</span>
+                      )}
+                    </div>
+                    <p className="text-caption text-mute">
+                      {geminiKeyHealthLabel(key.health)}
+                      {key.daily_budget > 0 && (
+                        <> · {key.used_today}/{key.daily_budget} today</>
+                      )}
+                      {key.last_used && <> · last used {key.last_used}</>}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove ${key.label || "key"}`}
+                    disabled={removeKey.isPending}
+                    onClick={() => removeKey.mutate(key.id)}
+                  >
+                    <Trash2 className="text-mute" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
-            <div className="min-w-0 flex-1 space-y-1.5 sm:min-w-64">
-              <Label htmlFor="gemini-key">API key</Label>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Label htmlFor="gemini-key">Add API key</Label>
               <Input
                 id="gemini-key"
                 type="password"
@@ -751,18 +876,29 @@ function AiCard() {
                 onChange={(e) => setApiKey(e.target.value)}
               />
             </div>
+            <div className="space-y-1.5 sm:w-40">
+              <Label htmlFor="gemini-label">Label</Label>
+              <Input
+                id="gemini-label"
+                autoComplete="off"
+                placeholder="optional"
+                value={keyLabel}
+                onChange={(e) => setKeyLabel(e.target.value)}
+              />
+            </div>
             <Button
               variant="outline"
               size="sm"
-              disabled={!apiKey || saveGemini.isPending}
-              onClick={() => saveGemini.mutate({ api_key: apiKey, enabled: true })}
+              disabled={apiKey.trim().length < 8 || addKey.isPending}
+              onClick={() => addKey.mutate({ api_key: apiKey.trim(), label: keyLabel.trim() })}
             >
-              Save key
+              {addKey.isPending ? "Adding" : "Add key"}
             </Button>
           </div>
           <p className="text-caption text-mute">
-            Free-tier keys work; requests are rate-limited well inside the free
-            quota and only ambiguous scans consult the model.
+            Add several free-tier keys — Wardress rotates across them and cools
+            down any that hit a rate limit, so the assistant keeps working well
+            inside the free quota.
           </p>
         </div>
 

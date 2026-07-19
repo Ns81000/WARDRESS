@@ -23,6 +23,7 @@ export function AppShell() {
   const items = [
     { to: "/", label: "Sites", end: true },
     { to: "/alerts", label: "Alerts" },
+    { to: "/assistant", label: "Assistant" },
     { to: "/remediation", label: "Remediation" },
     { to: "/health", label: "Health" },
     ...(isAdmin ? [{ to: "/audit", label: "Audit" }] : []),

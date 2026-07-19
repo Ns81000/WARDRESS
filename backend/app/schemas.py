@@ -386,6 +386,11 @@ class SmtpTestRequest(BaseModel):
 class TelegramSettingsIn(BaseModel):
     # None keeps the stored token; empty string clears the configuration.
     bot_token: str | None = Field(default=None, max_length=256)
+    # The RBAC user the bot's free-text assistant acts as. None keeps the
+    # stored link; empty string clears it (falling back to slash commands
+    # only). A missing/cleared link means the assistant is disabled — no
+    # pseudo-actor free pass.
+    acting_user_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("bot_token")
     @classmethod
@@ -405,6 +410,11 @@ class TelegramSettingsOut(BaseModel):
     token_hint: str | None = None  # "1234567890:AAAA..." redacted
     chat_id: str | None = None  # captured by /start; shown so the user knows it worked
     chat_captured_at: str | None = None
+    # Who the conversational assistant acts as (RBAC identity). None => the
+    # assistant is off and only the legacy slash commands answer.
+    acting_user_id: str | None = None
+    acting_user_email: str | None = None  # display hint for the linked user
+    acting_user_email: str | None = None
 
 
 class GeminiSettingsIn(BaseModel):
@@ -413,11 +423,29 @@ class GeminiSettingsIn(BaseModel):
     enabled: bool = True
 
 
+class GeminiKeyIn(BaseModel):
+    """Add one key to the rotation pool."""
+
+    api_key: str = Field(min_length=8, max_length=256)
+    label: str = Field(default="", max_length=60)
+
+
+class GeminiKeyOut(BaseModel):
+    id: str
+    label: str = ""
+    hint: str | None = None
+    health: str = "healthy"  # healthy | cooldown | exhausted
+    used_today: int = 0
+    daily_budget: int = 0
+    last_used: str | None = None
+
+
 class GeminiSettingsOut(BaseModel):
     configured: bool
     enabled: bool = False
-    key_hint: str | None = None
+    key_hint: str | None = None  # first key's hint (legacy field, kept for compat)
     model: str = "gemini-flash-latest"
+    keys: list[GeminiKeyOut] = Field(default_factory=list)
 
 
 class OllamaSettingsIn(BaseModel):
@@ -681,6 +709,49 @@ class RemediationHookUpdate(BaseModel):
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("webhook_url must be an http(s) URL")
         return v
+
+
+# --- Conversational agent (§ agent) ---
+
+
+class AgentConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    surface: str
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentMessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: str
+    content: str
+    tool_name: str | None = None
+    created_at: datetime
+
+
+class AgentConversationDetailOut(AgentConversationOut):
+    messages: list[AgentMessageOut] = Field(default_factory=list)
+    # A high-impact action awaiting confirmation on this conversation, if any.
+    pending_action: "AgentPendingActionOut | None" = None
+
+
+class AgentPendingActionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tool: str
+    summary: str | None = None
+    status: str
+    expires_at: datetime
+
+
+class AgentMessageIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class RemediationHookOut(BaseModel):
