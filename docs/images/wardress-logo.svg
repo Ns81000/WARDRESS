@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Wardress">
+  <!--
+    Wardress ward mark.
+    An angular shield cut from a single white plane, with a keyhole in
+    negative space: the "wards" of a lock are the fixed guards a key must
+    pass, and a wardress is a keeper of keys. Monochrome by rule (design
+    system: white is the brand on black); geometry chosen to stay legible
+    from 16px favicon to 512px app tile - no strokes, no gradients, one
+    even-odd path.
+  -->
+  <path fill="#fcfdff" fill-rule="evenodd" d="
+    M256 26
+    L458 98
+    L458 282
+    L256 486
+    L54 282
+    L54 98
+    Z
+    M256 152
+    a54 54 0 0 0 -26 101.3
+    L198 366
+    L314 366
+    L282 253.3
+    A54 54 0 0 0 256 152
+    Z" />
+</svg>

@@ -1,17 +1,14 @@
 {
   "name": "Wardress",
+  "theme": "mint",
   "logo": {
-    "dark": "../assets/brand/wardress-logo.svg",
-    "light": "../assets/brand/wardress-logo.svg"
+    "dark": "/images/wardress-logo.svg",
+    "light": "/images/wardress-logo.svg"
   },
   "colors": {
     "primary": "#2e7d32",
     "light": "#38B2AC",
-    "dark": "#1b5e20",
-    "background": {
-      "light": "#ffffff",
-      "dark": "#0f172a"
-    }
+    "dark": "#1b5e20"
   },
   "topbarLinks": [
     {
@@ -19,48 +16,50 @@
       "url": "https://github.com/Ns81000/WARDRESS"
     }
   ],
-  "navigation": [
-    {
-      "group": "Get Started",
-      "pages": [
-        "introduction",
-        "installation"
-      ]
-    },
-    {
-      "group": "Platform Guide",
-      "pages": [
-        "usage",
-        "detection-layers"
-      ]
-    },
-    {
-      "group": "Detection Engine",
-      "pages": [
-        "layers/1-content-hash",
-        "layers/2-dom-structure",
-        "layers/3-link-audit",
-        "layers/4-visual-diff",
-        "layers/5-signatures",
-        "layers/6-security-metadata",
-        "layers/7-cloaking",
-        "layers/8-semantics",
-        "layers/9-risk-fusion"
-      ]
-    },
-    {
-      "group": "Administration",
-      "pages": [
-        "configuration",
-        "user-management",
-        "api-reference",
-        "remediation-hooks",
-        "agent",
-        "audit-logs",
-        "security-and-dev"
-      ]
-    }
-  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "introduction",
+          "installation"
+        ]
+      },
+      {
+        "group": "Platform Guide",
+        "pages": [
+          "usage",
+          "detection-layers"
+        ]
+      },
+      {
+        "group": "Detection Engine",
+        "pages": [
+          "layers/1-content-hash",
+          "layers/2-dom-structure",
+          "layers/3-link-audit",
+          "layers/4-visual-diff",
+          "layers/5-signatures",
+          "layers/6-security-metadata",
+          "layers/7-cloaking",
+          "layers/8-semantics",
+          "layers/9-risk-fusion"
+        ]
+      },
+      {
+        "group": "Administration",
+        "pages": [
+          "configuration",
+          "user-management",
+          "api-reference",
+          "remediation-hooks",
+          "agent",
+          "audit-logs",
+          "security-and-dev"
+        ]
+      }
+    ]
+  },
   "footerSocials": {
     "github": "https://github.com/Ns81000/WARDRESS"
   }
