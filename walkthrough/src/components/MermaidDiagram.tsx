@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import type { FlowNodeSpec, FlowSpec } from '../flows/types';
+import type { FlowSpec } from '../flows/types';
 import { buildMermaid } from '../lib/mermaid';
 
 mermaid.initialize({
@@ -21,18 +21,16 @@ mermaid.initialize({
 interface Props {
   flow: FlowSpec;
   gateSkipped: boolean;
-  selectedId: string | null;
-  onSelect: (node: FlowNodeSpec) => void;
 }
 
 interface Tip {
-  text: string;
+  tech: string;
+  math?: string;
   x: number;
   y: number;
 }
 
-// Mermaid ids look like "<renderId>-flowchart-<userId>-<counter>"
-// (e.g. "wd-mermaid-0-flowchart-layer1-2"). Pull the userId back out.
+// Mermaid ids look like "<renderId>-flowchart-<userId>-<counter>".
 function userIdOf(gid: string): string | null {
   const m = /flowchart-(.+)-\d+$/.exec(gid);
   return m ? m[1] : null;
@@ -40,7 +38,7 @@ function userIdOf(gid: string): string | null {
 
 let renderSeq = 0;
 
-export function MermaidDiagram({ flow, gateSkipped, selectedId, onSelect }: Props) {
+export function MermaidDiagram({ flow, gateSkipped }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<Tip | null>(null);
 
@@ -67,36 +65,29 @@ export function MermaidDiagram({ flow, gateSkipped, selectedId, onSelect }: Prop
         svgEl.style.height = '100%';
         svgEl.style.maxWidth = '100%';
 
-        // Wire each rendered node back to its spec for hover + click.
+        // Wire each rendered node back to its spec for the hover tooltip.
         hostRef.current.querySelectorAll<SVGGElement>('g.node').forEach((g) => {
           const uid = userIdOf(g.id);
           const spec = uid ? specById.get(uid) : undefined;
           if (!spec) return;
 
-          g.style.cursor = 'pointer';
           g.classList.add('wd-node');
-          if (spec.id === selectedId) g.classList.add('wd-node--active');
 
-          g.addEventListener('mouseenter', (ev) => {
+          const show = (ev: MouseEvent) => {
             const rect = hostRef.current!.getBoundingClientRect();
-            const me = ev as MouseEvent;
-            setTip({ text: spec.detail.plain, x: me.clientX - rect.left, y: me.clientY - rect.top });
-          });
-          g.addEventListener('mousemove', (ev) => {
-            const rect = hostRef.current!.getBoundingClientRect();
-            const me = ev as MouseEvent;
-            setTip((t) => (t ? { ...t, x: me.clientX - rect.left, y: me.clientY - rect.top } : t));
-          });
+            setTip({
+              tech: spec.detail.tech,
+              math: spec.detail.math,
+              x: ev.clientX - rect.left,
+              y: ev.clientY - rect.top,
+            });
+          };
+          g.addEventListener('mouseenter', show as EventListener);
+          g.addEventListener('mousemove', show as EventListener);
           g.addEventListener('mouseleave', () => setTip(null));
-          g.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            setTip(null);
-            onSelect(spec);
-          });
         });
       })
       .catch((err) => {
-        // Rendering should never hard-fail the page; surface it quietly.
         console.error('mermaid render failed', err);
         if (hostRef.current) {
           hostRef.current.innerHTML =
@@ -107,7 +98,7 @@ export function MermaidDiagram({ flow, gateSkipped, selectedId, onSelect }: Prop
     return () => {
       cancelled = true;
     };
-  }, [flow, gateSkipped, selectedId, onSelect]);
+  }, [flow, gateSkipped]);
 
   return (
     <div className="relative h-full w-full">
@@ -115,11 +106,13 @@ export function MermaidDiagram({ flow, gateSkipped, selectedId, onSelect }: Prop
       {tip && (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-30 max-w-[260px] rounded-[9px] border border-hairline-strong bg-surface-elevated/95 px-3 py-2 text-[12.5px] leading-snug text-body shadow-lg backdrop-blur-xl"
+          className="pointer-events-none absolute z-30 max-w-[320px] rounded-[10px] border border-hairline-strong bg-surface-elevated/95 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-body shadow-lg backdrop-blur-xl"
           style={{ left: tip.x + 14, top: tip.y + 14 }}
         >
-          {tip.text}
-          <span className="mt-1 block font-mono text-[10px] text-ash">click for the full story →</span>
+          {tip.tech}
+          {tip.math && (
+            <span className="mt-1.5 block font-mono text-[11px] text-ash">{tip.math}</span>
+          )}
         </div>
       )}
     </div>

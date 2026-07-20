@@ -21,6 +21,13 @@ export function GateToggle({ mode, onChange }: Props) {
           identical
         </Seg>
       </div>
+      <kbd
+        className="rounded-[5px] border px-1.5 py-0.5 font-mono text-[10px]"
+        style={{ borderColor: 'var(--color-hairline-strong)', color: 'var(--color-mute)' }}
+        title="Press B to toggle"
+      >
+        B
+      </kbd>
     </div>
   );
 }

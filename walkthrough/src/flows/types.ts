@@ -39,12 +39,6 @@ export type NodeKind =
   | 'score'
   | 'note';
 
-/** A labelled block inside a node's detail panel. */
-export interface DetailBlock {
-  label: string;
-  body: string;
-}
-
 export interface FlowNodeSpec {
   id: string;
   kind: NodeKind;
@@ -54,14 +48,12 @@ export interface FlowNodeSpec {
   gateRole: GateRole;
   /** Optional layer numeral, prefixed onto the node label. */
   index?: string;
-  /** Machine key, e.g. `layer4_visual_diff` — shown in the detail panel. */
+  /** Machine key, e.g. `layer4_visual_diff`. */
   systemKey?: string;
-  /** Rich deep-dive, revealed in the side panel on click. */
+  /** Shown on hover — a technical one-liner, plus an optional formula. */
   detail: {
-    plain: string; // one-line, plain-English "what it watches" — also the hover tooltip
-    blocks: DetailBlock[]; // How it works / What trips it / etc.
-    math?: string; // mono chip, e.g. "SSIM·0.7 + (pHash,dHash)·0.3"
-    inputScope?: string; // original / suppressed HTML / masked screenshot / transport
+    tech: string; // technical "what it does", one line
+    math?: string; // optional mono formula, e.g. "SSIM·0.7 + (pHash,dHash)·0.3"
   };
 }
 

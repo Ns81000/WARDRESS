@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { flows } from './flows';
 import { MermaidDiagram } from './components/MermaidDiagram';
-import { DetailPanel } from './components/DetailPanel';
 import { TabBar } from './components/TabBar';
 import { GateToggle, type GateMode } from './components/GateToggle';
-import type { FlowNodeSpec } from './flows/types';
 
 // Landing page origin under GitHub Pages (project subpath).
 const LANDING_URL = '../';
@@ -22,24 +20,30 @@ const LEGEND: { shape: string; label: string }[] = [
 
 export function App() {
   const [activeId, setActiveId] = useState(flows[0].id);
-  const [selected, setSelected] = useState<FlowNodeSpec | null>(null);
   const [gateMode, setGateMode] = useState<GateMode>('changed');
 
   const flow = useMemo(() => flows.find((f) => f.id === activeId) ?? flows[0], [activeId]);
   const gateSkipped = flow.hasGate && gateMode === 'identical';
 
-  // Reset transient UI whenever the flow changes.
+  // Reset the gate whenever the flow changes.
   useEffect(() => {
-    setSelected(null);
     setGateMode('changed');
   }, [activeId]);
 
-  // Escape closes the detail panel.
+  // "B" toggles the content-hash gate (identical ⇄ changed).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelected(null);
+    if (!flow.hasGate) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        setGateMode((m) => (m === 'changed' ? 'identical' : 'changed'));
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [flow.hasGate]);
 
   return (
     <div className="flex h-full flex-col bg-canvas text-body">
@@ -95,18 +99,7 @@ export function App() {
       {/* ===== diagram ===== */}
       <div className="relative z-10 min-h-0 flex-1 px-4 pb-2">
         <div className="relative h-full w-full overflow-hidden rounded-[16px] border border-hairline bg-surface-card/40">
-          <MermaidDiagram
-            flow={flow}
-            gateSkipped={gateSkipped}
-            selectedId={selected?.id ?? null}
-            onSelect={setSelected}
-          />
-          <DetailPanel node={selected} onClose={() => setSelected(null)} />
-
-          {/* hover hint */}
-          <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full border border-hairline bg-surface-card/90 px-4 py-1.5 text-[12px] text-mute backdrop-blur-xl">
-            Hover a node for the short version · click it for the full story
-          </div>
+          <MermaidDiagram flow={flow} gateSkipped={gateSkipped} />
         </div>
       </div>
 
