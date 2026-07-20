@@ -8,6 +8,8 @@ backend/.venv/
 **/__pycache__/
 **/.pytest_cache/
 **/.ruff_cache/
+landing-page
 .env
 *.md
 !backend/README.md
+EXample
