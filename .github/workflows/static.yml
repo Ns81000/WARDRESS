@@ -1,4 +1,6 @@
-# Simple workflow for deploying static content to GitHub Pages
+# Deploys the public site to GitHub Pages:
+#   - the hand-written static landing page (landing/) at the site root
+#   - the built interactive walkthrough app at /walkthrough/
 name: Deploy static content to Pages
 
 on:
@@ -31,13 +33,39 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # --- Build the interactive walkthrough (Vite + React) ---
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: walkthrough/pnpm-lock.yaml
+      - name: Install walkthrough deps
+        working-directory: walkthrough
+        run: pnpm install --frozen-lockfile
+      - name: Build walkthrough
+        working-directory: walkthrough
+        run: pnpm build
+
+      # --- Assemble the deployable site tree ---
+      # landing/ becomes the site root; the built app is nested at /walkthrough/
+      # (matching vite base '/WARDRESS/walkthrough/').
+      - name: Assemble _site
+        run: |
+          mkdir -p _site
+          cp -r landing/. _site/
+          mkdir -p _site/walkthrough
+          cp -r walkthrough/dist/. _site/walkthrough/
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload landing directory
-          path: 'landing'
+          path: '_site'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

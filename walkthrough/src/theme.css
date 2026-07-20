@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* Fonts — vendored via @fontsource, no CDN (identical to frontend/src/index.css).
+ * Fraunces (display serif), Instrument Sans (display-sans), Inter (body/UI),
+ * Geist Mono (code). */
+@import "@fontsource-variable/fraunces/index.css";
+@import "@fontsource-variable/instrument-sans/index.css";
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource/geist-mono/index.css";
+
+/* React Flow base styles — imported before our overrides so we win. */
+@import "@xyflow/react/dist/style.css";
+
+/*
+ * Wardress design tokens — copied verbatim from frontend/src/index.css so the
+ * walkthrough is a visual sibling of the app and landing page: true-black
+ * canvas, hairline borders (never drop shadows), glow-only accents.
+ */
+@theme {
+  /* Canvas & surfaces — true black, never near-black */
+  --color-canvas: #000000;
+  --color-surface-card: #0a0a0c;
+  --color-surface-elevated: #101012;
+  --color-surface-deep: #06060a;
+
+  /* Text */
+  --color-ink: #fcfdff;
+  --color-body: rgba(252, 253, 255, 0.86);
+  --color-charcoal: rgba(252, 253, 255, 0.7);
+  --color-mute: #a1a4a5;
+  --color-ash: #888e90;
+  --color-stone: #464a4d;
+
+  /* Hairlines replace drop shadows entirely */
+  --color-hairline: rgba(255, 255, 255, 0.06);
+  --color-hairline-strong: rgba(255, 255, 255, 0.14);
+  --color-divider-soft: rgba(255, 255, 255, 0.04);
+
+  /* Accents — glows only, never solid fills */
+  --color-accent-orange: #ff801f;
+  --color-accent-yellow: #ffc53d;
+  --color-accent-blue: #3b9eff;
+  --color-accent-green: #11ff99;
+  --color-accent-red: #ff2047;
+  --color-link: #3b9eff;
+
+  --color-glow-orange: rgba(255, 89, 0, 0.22);
+  --color-glow-blue: rgba(0, 117, 255, 0.34);
+  --color-glow-green: rgba(34, 255, 153, 0.18);
+  --color-glow-red: rgba(255, 32, 71, 0.34);
+
+  /* Radius vocabulary */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Font stacks */
+  --font-display: "Fraunces Variable", ui-serif, Georgia, serif;
+  --font-display-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+::selection {
+  background: rgba(59, 158, 255, 0.28);
+  color: #fff;
+}
+
+/* ---------- scrollbars (match landing) ---------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* ============================================================
+   React Flow reskin — strip the default light theme, inherit
+   the Wardress canvas. Variables per @xyflow/react docs.
+   ============================================================ */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke-default: var(--color-hairline-strong);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-attribution-background-color-default: transparent;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+/* We draw our own handles inside custom nodes; hide the default dots. */
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__controls {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-card);
+}
+.react-flow__controls-button {
+  background: var(--color-surface-card);
+  border-bottom: 1px solid var(--color-hairline);
+  color: var(--color-body);
+}
+.react-flow__controls-button:hover {
+  background: var(--color-surface-elevated);
+}
+.react-flow__controls-button svg {
+  fill: var(--color-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
