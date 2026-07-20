@@ -8,9 +8,6 @@
 @import "@fontsource-variable/inter/index.css";
 @import "@fontsource/geist-mono/index.css";
 
-/* React Flow base styles — imported before our overrides so we win. */
-@import "@xyflow/react/dist/style.css";
-
 /*
  * Wardress design tokens — copied verbatim from frontend/src/index.css so the
  * walkthrough is a visual sibling of the app and landing page: true-black
@@ -103,42 +100,63 @@ body {
 }
 
 /* ============================================================
-   React Flow reskin — strip the default light theme, inherit
-   the Wardress canvas. Variables per @xyflow/react docs.
+   Mermaid reskin — the diagram is server-rendered SVG; these
+   rules give nodes the Wardress feel (glow-only, hairlines) and
+   wire the hover / active affordances the overlay depends on.
    ============================================================ */
-.react-flow {
-  --xy-background-color: transparent;
-  --xy-edge-stroke-default: var(--color-hairline-strong);
-  --xy-edge-stroke-width-default: 1.5;
-  --xy-attribution-background-color-default: transparent;
+.wd-mermaid-host {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px 8px;
 }
-.react-flow__attribution {
-  display: none;
+.wd-mermaid-host svg {
+  max-width: 100%;
+  height: 100%;
 }
-.react-flow__node {
-  cursor: pointer;
+
+/* edge paths + arrowheads */
+.wd-mermaid-host .flowchart-link {
+  stroke-width: 1.6px;
 }
-/* We draw our own handles inside custom nodes; hide the default dots. */
-.react-flow__handle {
-  opacity: 0;
-  pointer-events: none;
+.wd-mermaid-host .edgeLabel,
+.wd-mermaid-host .edgeLabel p {
+  background: var(--color-surface-deep) !important;
+  color: var(--color-body) !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
 }
-.react-flow__controls {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--color-surface-card);
+.wd-mermaid-host .edgeLabel rect {
+  fill: var(--color-surface-deep) !important;
+  opacity: 0.9;
 }
-.react-flow__controls-button {
-  background: var(--color-surface-card);
-  border-bottom: 1px solid var(--color-hairline);
-  color: var(--color-body);
+
+/* node shells — the fill/stroke come from classDef; here we add motion */
+.wd-mermaid-host .wd-node .basic,
+.wd-mermaid-host .wd-node > path,
+.wd-mermaid-host .wd-node > polygon,
+.wd-mermaid-host .wd-node > rect,
+.wd-mermaid-host .wd-node > circle,
+.wd-mermaid-host .wd-node > ellipse {
+  transition: filter 200ms ease, transform 200ms ease, stroke-width 200ms ease;
 }
-.react-flow__controls-button:hover {
-  background: var(--color-surface-elevated);
+.wd-mermaid-host .wd-node:hover {
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.16));
 }
-.react-flow__controls-button svg {
-  fill: var(--color-body);
+.wd-mermaid-host .wd-node--active {
+  filter: drop-shadow(0 0 14px rgba(59, 158, 255, 0.4));
+}
+.wd-mermaid-host .wd-node--active > path,
+.wd-mermaid-host .wd-node--active > polygon,
+.wd-mermaid-host .wd-node--active > rect,
+.wd-mermaid-host .wd-node--active > circle {
+  stroke-width: 2.4px !important;
+}
+.wd-mermaid-host .nodeLabel {
+  font-weight: 500;
+  letter-spacing: -0.1px;
 }
 
 @media (prefers-reduced-motion: reduce) {

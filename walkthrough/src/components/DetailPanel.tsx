@@ -1,11 +1,21 @@
 import { AnimatePresence, motion } from 'motion/react';
-import type { FlowNodeSpec } from '../flows/types';
-import { accentOf } from '../lib/accent';
+import type { Accent, FlowNodeSpec } from '../flows/types';
 
 interface Props {
   node: FlowNodeSpec | null;
   onClose: () => void;
 }
+
+// Accent → panel colours (glow-only, matching the diagram skin).
+const ACCENT: Record<Accent, { color: string; glow: string }> = {
+  blue: { color: '#3b9eff', glow: 'rgba(0, 117, 255, 0.20)' },
+  orange: { color: '#ff801f', glow: 'rgba(255, 89, 0, 0.16)' },
+  red: { color: '#ff2047', glow: 'rgba(255, 32, 71, 0.20)' },
+  green: { color: '#11ff99', glow: 'rgba(34, 255, 153, 0.16)' },
+  purple: { color: '#a97bff', glow: 'rgba(169, 123, 255, 0.20)' },
+  neutral: { color: '#9aa0a2', glow: 'rgba(255, 255, 255, 0.08)' },
+};
+const accentOf = (a: Accent) => ACCENT[a];
 
 export function DetailPanel({ node, onClose }: Props) {
   return (
@@ -18,7 +28,7 @@ export function DetailPanel({ node, onClose }: Props) {
           exit={{ opacity: 0, x: 24 }}
           transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
           className="pointer-events-auto absolute right-4 top-4 bottom-4 z-20 flex w-[380px] flex-col overflow-hidden rounded-[16px] border border-hairline-strong bg-surface-card/95 backdrop-blur-xl"
-          aria-label={`${node.title} details`}
+          aria-label={`${node.label} details`}
         >
           <DetailBody node={node} onClose={onClose} />
         </motion.aside>
@@ -52,7 +62,7 @@ function DetailBody({ node, onClose }: { node: FlowNodeSpec; onClose: () => void
               className="font-display-sans text-[22px] font-medium tracking-[-0.3px] text-ink"
               style={{ marginTop: node.index ? 8 : 0 }}
             >
-              {node.title}
+              {node.label}
             </h2>
           </div>
           <button

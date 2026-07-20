@@ -5,44 +5,31 @@ import type { FlowSpec } from './types';
 //
 // Sourced from the detection-layers / fusion documentation:
 //   - Celery Beat ticks every 60s and dispatches due scans.
-//   - Material-change threshold: 0.15.
+//   - Material-change threshold: 0.15 (the decision branch).
 //   - Tighten on change: next interval = base ÷ 4.
 //   - Relax on clean scans: interval ×1.5 each clean scan, up to base.
 //   - Clamp: every interval bounded to [5 minutes, 24 hours].
 //   - Adaptive state lives in the DB — a restart loses nothing.
 //
-// This second flow exists to prove the engine is content-driven:
-// it is pure data, no bespoke components, and renders through the
-// exact same FlowCanvas as the pipeline.
+// A second flow that proves the engine is content-driven: pure data,
+// same Mermaid renderer, no bespoke code.
 // ============================================================
-
-const MID_Y = 200;
 
 export const cadenceFlow: FlowSpec = {
   id: 'cadence',
   name: 'Adaptive Cadence',
   blurb: 'The scan interval breathes — tightening the moment something changes, relaxing as the page stays calm.',
+  direction: 'LR',
   hasGate: false,
-  steps: [
-    'Celery Beat ticks every 60 seconds, dispatching any site whose next scan is due.',
-    'The scan runs and produces a fused risk score.',
-    'Below 0.15 the page is calm; at or above 0.15 it is a material change.',
-    'On a material change, the next interval tightens to a quarter of the base.',
-    'Each clean scan afterwards relaxes the interval back by half again, up to the base.',
-    'Every interval is clamped to a sane floor and ceiling before it is stored.',
-  ],
 
   nodes: [
     {
       id: 'beat',
-      kind: 'io',
-      title: 'Celery Beat',
-      tagline: 'ticks every 60s',
+      kind: 'input',
+      label: 'Celery Beat · 60s',
       accent: 'neutral',
       gateRole: 'none',
       systemKey: 'beat',
-      position: { x: 0, y: MID_Y },
-      step: 0,
       detail: {
         plain: 'The heartbeat that decides, once a minute, which sites are due for a scan.',
         blocks: [
@@ -60,12 +47,9 @@ export const cadenceFlow: FlowSpec = {
     {
       id: 'scan',
       kind: 'stage',
-      title: 'Scan runs',
-      tagline: '9-layer pipeline → fused score',
+      label: 'Scan runs',
       accent: 'blue',
       gateRole: 'none',
-      position: { x: 320, y: MID_Y },
-      step: 1,
       detail: {
         plain: 'The full detection pipeline runs and hands back one calibrated risk score.',
         math: 'fused_risk ∈ [0.0, 1.0]',
@@ -79,14 +63,11 @@ export const cadenceFlow: FlowSpec = {
     },
     {
       id: 'decide',
-      kind: 'layer',
-      title: 'Material change?',
-      tagline: 'threshold 0.15',
+      kind: 'decision',
+      label: 'risk ≥ 0.15?',
       accent: 'orange',
       gateRole: 'none',
       systemKey: 'MATERIAL_CHANGE_RISK',
-      position: { x: 640, y: MID_Y },
-      step: 2,
       detail: {
         plain: 'A single dividing line: is this ordinary noise, or something worth reacting to?',
         math: 'fused_risk ≥ 0.15',
@@ -105,12 +86,9 @@ export const cadenceFlow: FlowSpec = {
     {
       id: 'tighten',
       kind: 'layer',
-      title: 'Tighten',
-      tagline: 'next = base ÷ 4',
+      label: 'Tighten · base ÷ 4',
       accent: 'red',
       gateRole: 'none',
-      position: { x: 980, y: 60 },
-      step: 3,
       detail: {
         plain: 'Something moved — so look again much sooner.',
         math: 'interval = base ÷ 4',
@@ -125,12 +103,9 @@ export const cadenceFlow: FlowSpec = {
     {
       id: 'relax',
       kind: 'layer',
-      title: 'Relax',
-      tagline: 'interval ×1.5 per clean scan',
+      label: 'Relax · ×1.5',
       accent: 'green',
       gateRole: 'none',
-      position: { x: 980, y: 340 },
-      step: 4,
       detail: {
         plain: 'Calm restored — so gradually ease back off, without snapping straight to normal.',
         math: 'interval = min(interval × 1.5, base)',
@@ -145,12 +120,9 @@ export const cadenceFlow: FlowSpec = {
     {
       id: 'clamp',
       kind: 'fusion',
-      title: 'Clamp',
-      tagline: '[5 min, 24 h]',
-      accent: 'blue',
+      label: 'Clamp [5m, 24h]',
+      accent: 'purple',
       gateRole: 'none',
-      position: { x: 1320, y: MID_Y },
-      step: 5,
       detail: {
         plain: 'A guardrail so the interval can never get absurdly short or dangerously long.',
         math: 'clamp(interval, 5 min, 24 h)',
@@ -165,13 +137,10 @@ export const cadenceFlow: FlowSpec = {
     {
       id: 'store',
       kind: 'score',
-      title: 'Next scan',
-      tagline: 'persisted',
+      label: 'Next scan',
       accent: 'neutral',
       gateRole: 'none',
       systemKey: 'next_scan_at',
-      position: { x: 1660, y: MID_Y },
-      step: 5,
       detail: {
         plain: 'The chosen moment for the next look, written down so nothing forgets it.',
         blocks: [
@@ -185,14 +154,13 @@ export const cadenceFlow: FlowSpec = {
   ],
 
   edges: [
-    { id: 'c-beat-scan', source: 'beat', target: 'scan', step: 0, accent: 'neutral' },
-    { id: 'c-scan-dec', source: 'scan', target: 'decide', step: 1, accent: 'blue' },
-    { id: 'c-dec-tight', source: 'decide', target: 'tighten', step: 2, accent: 'red' },
-    { id: 'c-dec-relax', source: 'decide', target: 'relax', step: 2, accent: 'green' },
-    { id: 'c-tight-clamp', source: 'tighten', target: 'clamp', step: 3, accent: 'red' },
-    { id: 'c-relax-clamp', source: 'relax', target: 'clamp', step: 4, accent: 'green' },
-    { id: 'c-clamp-store', source: 'clamp', target: 'store', step: 5, accent: 'blue' },
-    // the loop back — cadence is continuous
-    { id: 'c-store-beat', source: 'store', target: 'beat', step: 5, accent: 'neutral' },
+    { source: 'beat', target: 'scan', accent: 'neutral' },
+    { source: 'scan', target: 'decide', accent: 'blue' },
+    { source: 'decide', target: 'tighten', label: 'yes · changed', accent: 'red' },
+    { source: 'decide', target: 'relax', label: 'no · clean', accent: 'green' },
+    { source: 'tighten', target: 'clamp', accent: 'red' },
+    { source: 'relax', target: 'clamp', accent: 'green' },
+    { source: 'clamp', target: 'store', accent: 'purple' },
+    { source: 'store', target: 'beat', label: 'loops', accent: 'neutral' },
   ],
 };

@@ -5,8 +5,9 @@ import type { FlowSpec } from './types';
 //
 // Every technical claim here is sourced from the Wardress
 // detection-layers documentation:
-//   - Layer 1 hashes ORIGINAL html (SHA-256, normalized) and gates
-//     layers 2/3/4/5/8 when it matches the baseline.
+//   - Layer 1 hashes ORIGINAL html (SHA-256, normalized).
+//   - The hash result drives a SKIP DECISION: identical bytes skip
+//     layers 2/3/4/5/8; changed bytes run everything.
 //   - Layers 6 & 7 always run (transport + per-UA data are invisible
 //     to the content hash).
 //   - Layer 4: SSIM·0.7 + (pHash,dHash)·0.3 on bbox-masked grayscale.
@@ -15,36 +16,21 @@ import type { FlowSpec } from './types';
 //   - Material-change threshold 0.15.
 // ============================================================
 
-// Vertical rhythm for the parallel analyzer column.
-const COL_X = 760;
-const ROW = (n: number) => 40 + n * 116;
-const SPINE_Y = ROW(3); // vertical centre of the analyzer stack
-
 export const pipelineFlow: FlowSpec = {
   id: 'pipeline',
   name: 'Detection Pipeline',
   blurb: 'One scan, nine independent witnesses, fused into a single calibrated risk score.',
-  steps: [
-    'A monitored URL comes due for a scan.',
-    'Playwright fetches and renders the page, capturing HTML and a screenshot.',
-    'Layer 1 hashes the normalized HTML. Identical bytes gate five layers.',
-    'The surviving analyzers run in parallel — structure, links, pixels, text, transport.',
-    'Layer 9 fuses all eight sub-scores with a calibrated model.',
-    'One number, 0.0–1.0 — the risk score that trips alerts and tightens cadence.',
-  ],
+  direction: 'LR',
   hasGate: true,
 
   nodes: [
     // ---- inputs & capture ----
     {
       id: 'url',
-      kind: 'io',
-      title: 'Monitored URL',
-      tagline: 'https://your-site.example',
+      kind: 'input',
+      label: 'Monitored URL',
       accent: 'neutral',
       gateRole: 'none',
-      position: { x: 0, y: SPINE_Y },
-      step: 0,
       detail: {
         plain: 'The page you asked Wardress to watch, frozen once as a trusted baseline.',
         inputScope: 'Your site — fetched read-only',
@@ -63,13 +49,10 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'capture',
       kind: 'stage',
-      title: 'Capture',
-      tagline: 'Playwright · render · screenshot',
+      label: 'Capture',
       accent: 'neutral',
       gateRole: 'none',
       systemKey: 'playwright',
-      position: { x: 340, y: SPINE_Y },
-      step: 1,
       detail: {
         plain: 'A real browser loads the page exactly as a visitor would, then hands the pipeline its raw materials.',
         inputScope: 'Original HTML + rendered screenshot',
@@ -86,20 +69,17 @@ export const pipelineFlow: FlowSpec = {
       },
     },
 
-    // ---- the gate ----
+    // ---- layer 1 + the skip decision ----
     {
       id: 'layer1',
       kind: 'layer',
-      title: 'Content Hash',
-      tagline: 'The gate — identical bytes skip the rest.',
+      label: 'Content Hash',
       accent: 'blue',
       gateRole: 'always',
       index: '01',
       systemKey: 'layer1_hash',
-      position: { x: 460, y: SPINE_Y },
-      step: 2,
       detail: {
-        plain: 'A single fingerprint of the whole page. If it is unchanged, most of the pipeline can safely be skipped.',
+        plain: 'A single fingerprint of the whole page — the fast first check.',
         math: 'SHA-256(normalize(html)) → 0.0 / 1.0',
         inputScope: 'Original HTML (never suppressed)',
         blocks: [
@@ -108,12 +88,35 @@ export const pipelineFlow: FlowSpec = {
             body: 'Layer 1 conservatively normalizes the HTML and computes a SHA-256 hash, producing a binary result: 0.0 if the fingerprint matches the baseline, 1.0 if it differs. It deliberately hashes the ORIGINAL content, not the noise-suppressed copy, so tampering can never be hidden behind suppression rules.',
           },
           {
-            label: 'The gate',
-            body: 'This is the pipeline\'s efficiency gate. If the hash matches, layers 2, 3, 4, 5 and 8 are skipped — byte-identical content cannot differ structurally, in links, visually, in signatures, or semantically. Each skip is logged with its reason. Layers 6 and 7 always run anyway, because TLS, headers and per-user-agent responses are invisible to a content hash.',
-          },
-          {
             label: 'What trips it',
             body: 'Any change to the served HTML at all — a single injected script tag, an altered headline, a new hidden iframe — flips the hash to 1.0 and wakes the full pipeline.',
+          },
+        ],
+      },
+    },
+    {
+      // The explicit branch the user asked for: decide whether to skip.
+      id: 'gate',
+      kind: 'decision',
+      label: 'Bytes changed?',
+      accent: 'blue',
+      gateRole: 'none',
+      systemKey: 'skip-gate',
+      detail: {
+        plain: 'The efficiency gate: if the page is byte-for-byte identical, most analyzers can be safely skipped.',
+        math: 'hash == baseline ?  skip 2·3·4·5·8  :  run all',
+        blocks: [
+          {
+            label: 'How it works',
+            body: 'The hash result decides the whole pipeline\'s shape. If the fingerprint matches the baseline, layers 2, 3, 4, 5 and 8 are skipped — byte-identical content cannot differ structurally, in links, visually, in signatures, or semantically. Each skip is logged with its reason.',
+          },
+          {
+            label: 'What never skips',
+            body: 'Layers 6 and 7 run on every scan regardless of this decision, because TLS certificates, security headers and per-user-agent responses are all invisible to a content hash. A page can be byte-identical yet served over a swapped certificate.',
+          },
+          {
+            label: 'Try it',
+            body: 'Flip the "Content hash" toggle above the diagram between "changed" and "identical" to watch the skipped branch dim out and the pipeline collapse to just the always-on analyzers.',
           },
         ],
       },
@@ -123,26 +126,22 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'layer2',
       kind: 'layer',
-      title: 'DOM Structure',
-      tagline: 'Injected scripts, iframes, hidden nodes.',
+      label: 'DOM Structure',
       accent: 'blue',
       gateRole: 'gated',
       index: '02',
       systemKey: 'layer2_dom_structure',
-      position: { x: COL_X, y: ROW(0) },
-      step: 3,
       detail: {
-        plain: 'Watches the shape of the page for structure that was quietly added or torn out.',
-        math: 'lxml tag-tree churn + new <script>/<iframe>/hidden',
-        inputScope: 'Suppressed HTML',
+        plain: 'Watches the shape of the page for structure that was quietly added or hidden.',
+        inputScope: 'Suppressed HTML (noise removed)',
         blocks: [
           {
             label: 'How it works',
-            body: 'Layer 2 diffs the lxml tag-tree of the current page against the baseline, measuring how much of the structure churned, and specifically counting newly introduced <script> tags, <iframe>s, and force-hidden elements.',
+            body: 'Layer 2 diffs the DOM tree against the baseline after noise suppression, looking for injected <script> tags, new <iframe>s, and nodes hidden with display:none or off-screen positioning.',
           },
           {
             label: 'What trips it',
-            body: 'A hidden <iframe> pointing at an attacker domain, an injected <script> that was never in the baseline, or a block of content shoved off-screen with inline styles — the classic footprints of an injection.',
+            body: 'A cryptominer injected as a script, an invisible iframe pulling in a phishing page, or SEO-spam links stuffed into a hidden div — the classic shapes of a quiet compromise.',
           },
         ],
       },
@@ -150,22 +149,18 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'layer3',
       kind: 'layer',
-      title: 'Link Audit',
-      tagline: 'The exfiltration fingerprint.',
+      label: 'Link & Resource',
       accent: 'blue',
       gateRole: 'gated',
       index: '03',
-      systemKey: 'layer3_link_audit',
-      position: { x: COL_X, y: ROW(1) },
-      step: 3,
+      systemKey: 'layer3_links',
       detail: {
-        plain: 'Tracks every outbound reference so new destinations can\'t slip in unnoticed.',
-        math: 'set-diff(script,a,link,iframe,form) — new external domains dominate',
-        inputScope: 'Suppressed HTML',
+        plain: 'Follows where the page now points — new domains, redirected forms, swapped scripts.',
+        inputScope: 'Suppressed HTML (links & resources)',
         blocks: [
           {
             label: 'How it works',
-            body: 'Layer 3 takes the set difference of all script, anchor, link, iframe and form references between baseline and current page. New references to external domains are weighted most heavily.',
+            body: 'Layer 3 compares the set of outbound links, form actions, and external resource origins (scripts, stylesheets, images) against the baseline, flagging newly-introduced hosts.',
           },
           {
             label: 'What trips it',
@@ -177,14 +172,11 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'layer4',
       kind: 'layer',
-      title: 'Visual Diff',
-      tagline: 'Sees the defacement as pixels.',
+      label: 'Visual Diff',
       accent: 'orange',
       gateRole: 'gated',
       index: '04',
       systemKey: 'layer4_visual_diff',
-      position: { x: COL_X, y: ROW(2) },
-      step: 3,
       detail: {
         plain: 'Compares what the page looks like, pixel for pixel, against the baseline picture.',
         math: 'SSIM·0.7 + (pHash, dHash)·0.3',
@@ -204,14 +196,11 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'layer5',
       kind: 'layer',
-      title: 'Signatures',
-      tagline: 'Defacement phrases, profanity, script flips.',
+      label: 'Signatures',
       accent: 'orange',
       gateRole: 'gated',
       index: '05',
       systemKey: 'layer5_signatures',
-      position: { x: COL_X, y: ROW(3) },
-      step: 3,
       detail: {
         plain: 'Reads the newly-appeared text for the vocabulary of a defacement.',
         math: 'weighted phrases + profanity burst + Unicode script flip',
@@ -231,14 +220,11 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'layer8',
       kind: 'layer',
-      title: 'Text Semantics',
-      tagline: 'Measures meaning drift from the baseline.',
+      label: 'Text Semantics',
       accent: 'orange',
       gateRole: 'gated',
       index: '08',
       systemKey: 'layer8_semantics',
-      position: { x: COL_X, y: ROW(4) },
-      step: 3,
       detail: {
         plain: 'Understands whether the page still means the same thing, even when the wording changes.',
         math: 'MiniLM cosine drift + aggression lexicon + topic keywords',
@@ -259,15 +245,12 @@ export const pipelineFlow: FlowSpec = {
     // ---- always-run analyzers ----
     {
       id: 'layer6',
-      kind: 'layer',
-      title: 'Security Metadata',
-      tagline: 'TLS, HSTS, CSP, CORS, robots.txt.',
+      kind: 'always',
+      label: 'Security Metadata',
       accent: 'red',
       gateRole: 'always',
       index: '06',
       systemKey: 'layer6_security_metadata',
-      position: { x: COL_X, y: ROW(5) + 24 },
-      step: 3,
       detail: {
         plain: 'Watches the transport layer and security headers that a content hash can never see.',
         inputScope: 'TLS + headers + robots.txt',
@@ -285,15 +268,12 @@ export const pipelineFlow: FlowSpec = {
     },
     {
       id: 'layer7',
-      kind: 'layer',
-      title: 'Cloaking',
-      tagline: 'Content served only to crawlers, not visitors.',
+      kind: 'always',
+      label: 'Cloaking',
       accent: 'red',
       gateRole: 'always',
       index: '07',
       systemKey: 'layer7_cloaking',
-      position: { x: COL_X, y: ROW(6) + 24 },
-      step: 3,
       detail: {
         plain: 'Catches pages that show one thing to Google and something else to real people.',
         math: 'Jaccard divergence: Googlebot / mobile vs desktop reference',
@@ -315,14 +295,11 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'fusion',
       kind: 'fusion',
-      title: 'Risk Fusion',
-      tagline: 'Eight sub-scores → one calibrated number.',
-      accent: 'green',
+      label: 'Risk Fusion',
+      accent: 'purple',
       gateRole: 'none',
       index: '09',
       systemKey: 'layer9_fusion',
-      position: { x: COL_X + 420, y: SPINE_Y },
-      step: 4,
       detail: {
         plain: 'Weighs all eight verdicts together into a single trustworthy score, instead of tripping on any one alarm.',
         math: 'logistic_regression(L1…L8) → 0.0–1.0',
@@ -346,13 +323,10 @@ export const pipelineFlow: FlowSpec = {
     {
       id: 'score',
       kind: 'score',
-      title: 'Fused Risk',
-      tagline: 'baseline locked',
+      label: 'Fused Risk',
       accent: 'green',
       gateRole: 'none',
       systemKey: 'fused_risk',
-      position: { x: COL_X + 760, y: SPINE_Y },
-      step: 5,
       detail: {
         plain: 'The one number you actually watch — and the actions it sets in motion.',
         math: '< 0.15 stable · ≥ 0.15 material change · high = defacement',
@@ -371,28 +345,29 @@ export const pipelineFlow: FlowSpec = {
   ],
 
   edges: [
-    { id: 'e-url-cap', source: 'url', target: 'capture', step: 0, accent: 'neutral' },
-    { id: 'e-cap-l1', source: 'capture', target: 'layer1', step: 1, accent: 'neutral' },
+    { source: 'url', target: 'capture', accent: 'neutral' },
+    { source: 'capture', target: 'layer1', accent: 'neutral' },
+    { source: 'layer1', target: 'gate', accent: 'blue' },
 
-    // gate → gated analyzers
-    { id: 'e-l1-l2', source: 'layer1', target: 'layer2', step: 2, branch: 'gated', accent: 'blue' },
-    { id: 'e-l1-l3', source: 'layer1', target: 'layer3', step: 2, branch: 'gated', accent: 'blue' },
-    { id: 'e-l1-l4', source: 'layer1', target: 'layer4', step: 2, branch: 'gated', accent: 'orange' },
-    { id: 'e-l1-l5', source: 'layer1', target: 'layer5', step: 2, branch: 'gated', accent: 'orange' },
-    { id: 'e-l1-l8', source: 'layer1', target: 'layer8', step: 2, branch: 'gated', accent: 'orange' },
-    // gate → always-run analyzers
-    { id: 'e-l1-l6', source: 'layer1', target: 'layer6', step: 2, branch: 'always', accent: 'red' },
-    { id: 'e-l1-l7', source: 'layer1', target: 'layer7', step: 2, branch: 'always', accent: 'red' },
+    // decision → gated analyzers (the "changed" branch)
+    { source: 'gate', target: 'layer2', label: 'changed', branch: 'gated', accent: 'blue' },
+    { source: 'gate', target: 'layer3', branch: 'gated', accent: 'blue' },
+    { source: 'gate', target: 'layer4', branch: 'gated', accent: 'orange' },
+    { source: 'gate', target: 'layer5', branch: 'gated', accent: 'orange' },
+    { source: 'gate', target: 'layer8', branch: 'gated', accent: 'orange' },
+    // decision → always-run analyzers (taken on every scan)
+    { source: 'gate', target: 'layer6', label: 'always', branch: 'always', accent: 'red' },
+    { source: 'gate', target: 'layer7', branch: 'always', accent: 'red' },
 
     // analyzers → fusion
-    { id: 'e-l2-f', source: 'layer2', target: 'fusion', step: 3, branch: 'gated', accent: 'blue' },
-    { id: 'e-l3-f', source: 'layer3', target: 'fusion', step: 3, branch: 'gated', accent: 'blue' },
-    { id: 'e-l4-f', source: 'layer4', target: 'fusion', step: 3, branch: 'gated', accent: 'orange' },
-    { id: 'e-l5-f', source: 'layer5', target: 'fusion', step: 3, branch: 'gated', accent: 'orange' },
-    { id: 'e-l8-f', source: 'layer8', target: 'fusion', step: 3, branch: 'gated', accent: 'orange' },
-    { id: 'e-l6-f', source: 'layer6', target: 'fusion', step: 3, branch: 'always', accent: 'red' },
-    { id: 'e-l7-f', source: 'layer7', target: 'fusion', step: 3, branch: 'always', accent: 'red' },
+    { source: 'layer2', target: 'fusion', branch: 'gated', accent: 'blue' },
+    { source: 'layer3', target: 'fusion', branch: 'gated', accent: 'blue' },
+    { source: 'layer4', target: 'fusion', branch: 'gated', accent: 'orange' },
+    { source: 'layer5', target: 'fusion', branch: 'gated', accent: 'orange' },
+    { source: 'layer8', target: 'fusion', branch: 'gated', accent: 'orange' },
+    { source: 'layer6', target: 'fusion', branch: 'always', accent: 'red' },
+    { source: 'layer7', target: 'fusion', branch: 'always', accent: 'red' },
 
-    { id: 'e-f-score', source: 'fusion', target: 'score', step: 4, accent: 'green' },
+    { source: 'fusion', target: 'score', accent: 'green' },
   ],
 };

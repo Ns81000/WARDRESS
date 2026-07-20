@@ -5,8 +5,8 @@ interface Props {
   onChange: (mode: GateMode) => void;
 }
 
-// The demo control for the Content-Hash gate. Flipping to "identical"
-// dims the five gated layers to skipped — the pipeline's hero beat.
+// The demo control for the Content-Hash skip decision. Flipping to
+// "identical" dims the five gated layers — the pipeline's hero beat.
 export function GateToggle({ mode, onChange }: Props) {
   return (
     <div className="flex items-center gap-2.5">
