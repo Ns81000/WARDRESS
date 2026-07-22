@@ -199,7 +199,8 @@ Each scan drives the target page through 9 specialized analysis layers designed 
 To preserve system resources and prevent false alarms from dynamic rendering variations, the pipeline implements **intelligent gating rules**:
 *   **Layer 1 (Content Hash) Gating**: If the byte-level hash of the page is identical to the baseline, the engine skips Layers 2, 3, 4, 5, and 8. If nothing changed at the byte level, DOM trees, text semantics, visual pixels, and signatures are guaranteed to be identical.
 *   **Persistent Probes**: Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan. TLS cert details, response headers, and UA-rotated fetches are invisible to the primary DOM content hash and could indicate high-impact MITM attacks or crawler-specific cloaking.
-*   **Crash Isolation**: Each layer is isolated inside try/except enclosures. A parser failure in one layer records the error as evidence, assigns a `None` score, and allows the remaining eight layers to continue functioning.
+*   **Crash Isolation**: Each layer is isolated inside try/except enclosures. A parser failure in one layer records the error as evidence, assigns a `None` score, and allows the remaining eight layers to continue functioning
+
 
 ### Pipeline Breakdown
 
