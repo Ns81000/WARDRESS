@@ -30,36 +30,8 @@ Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $EnvFile = Join-Path $RepoRoot ".env"
 
-function Fail([string]$Message) {
-    Write-Host ""
-    Write-Host "ERROR: $Message" -ForegroundColor Red
-    exit 1
-}
-
-function Step([string]$Message) {
-    Write-Host ""
-    Write-Host "==> $Message" -ForegroundColor Cyan
-}
-
-function Invoke-Quiet([scriptblock]$Block) {
-    # Probe a native command, discarding all output. Under EAP=Stop,
-    # PowerShell 5.1 turns redirected native stderr (even harmless
-    # warnings) into terminating errors - relax it around the probe.
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & $Block 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
-    }
-    finally { $ErrorActionPreference = $prev }
-}
-
-function Invoke-Compose([string[]]$ComposeArgs, [string]$FailureHint) {
-    & docker compose @ComposeArgs
-    if ($LASTEXITCODE -ne 0) {
-        Fail "$FailureHint (docker compose $($ComposeArgs -join ' ') exited with code $LASTEXITCODE)"
-    }
-}
+# Shared helpers (Fail/Step/Invoke-*, dynamic image discovery, retries).
+. (Join-Path $PSScriptRoot "lib.ps1")
 
 # --- 1. Preconditions ----------------------------------------------------
 
@@ -105,17 +77,22 @@ if (Test-Path $changelog) {
 
 # --- 3. Pull base images + rebuild (serially, in the foreground) ---------
 
-Step "Pulling newer base images (db, redis)"
-Invoke-Compose @("pull", "db", "redis") "Pulling base images failed"
+Step "Pre-pulling base images (retries transient registry errors)"
+# Discovered dynamically from the Dockerfiles + compose config (nothing
+# hardcoded), so it always matches the real stack.
+$baseImages = @()
+$baseImages += Get-BuildBaseImages $RepoRoot
+$baseImages += Get-ComposeRemoteImages
+Warm-Images $baseImages
 
 Step "Rebuilding the app image"
-Invoke-Compose @("build", "--pull", "app") "Rebuilding the app image failed"
+Build-Service @("--pull") "app" "Rebuilding the app image failed"
 
 Step "Rebuilding the worker image"
-Invoke-Compose @("build", "--pull", "worker") "Rebuilding the worker image failed"
+Build-Service @("--pull") "worker" "Rebuilding the worker image failed"
 
 Step "Rebuilding the scheduler image (shares the worker build cache)"
-Invoke-Compose @("build", "beat") "Rebuilding the beat image failed"
+Build-Service @() "beat" "Rebuilding the beat image failed"
 
 # --- 4. Migrate ----------------------------------------------------------
 

@@ -34,16 +34,8 @@ $EnvFile = Join-Path $RepoRoot ".env"
 $EnvExample = Join-Path $RepoRoot ".env.example"
 $IconFile = Join-Path $RepoRoot "assets\brand\wardress.ico"
 
-function Fail([string]$Message) {
-    Write-Host ""
-    Write-Host "ERROR: $Message" -ForegroundColor Red
-    exit 1
-}
-
-function Step([string]$Message) {
-    Write-Host ""
-    Write-Host "==> $Message" -ForegroundColor Cyan
-}
+# Shared helpers (Fail/Step/Invoke-*, dynamic image discovery, retries).
+. (Join-Path $PSScriptRoot "lib.ps1")
 
 function New-RandomSecret([int]$Length = 43) {
     # URL- and .env-safe alphabet (alphanumeric only): these values are
@@ -72,24 +64,10 @@ function New-RandomSecret([int]$Length = 43) {
     $sb.ToString()
 }
 
-function Invoke-Quiet([scriptblock]$Block) {
-    # Probe a native command, discarding all output. Under EAP=Stop,
-    # PowerShell 5.1 turns redirected native stderr (even harmless
-    # warnings) into terminating errors - relax it around the probe.
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & $Block 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
-    }
-    finally { $ErrorActionPreference = $prev }
-}
-
-function Invoke-Compose([string[]]$ComposeArgs, [string]$FailureHint) {
-    & docker compose @ComposeArgs
-    if ($LASTEXITCODE -ne 0) {
-        Fail "$FailureHint (docker compose $($ComposeArgs -join ' ') exited with code $LASTEXITCODE)"
-    }
+# Build helper: install builds cache-friendly (no --pull; base images are
+# pre-warmed separately). Shared retry/hint logic lives in lib.ps1.
+function Build-InstallService([string]$Service, [string]$FailureHint) {
+    Build-Service @() $Service $FailureHint
 }
 
 # --- 1. Docker Desktop checks -------------------------------------------
@@ -193,7 +171,10 @@ else {
 $envMap = @{}
 foreach ($line in Get-Content $EnvFile) {
     if ($line -match "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$") {
-        $envMap[$Matches[1]] = $Matches[2]
+        # .Trim() defends against a trailing CR when .env was saved with
+        # CRLF endings by a Windows editor (the installer writes LF, but
+        # users may re-save it), which would otherwise corrupt the port.
+        $envMap[$Matches[1]] = $Matches[2].Trim()
     }
 }
 $port = if ($envMap.ContainsKey("WARDRESS_HTTP_PORT") -and $envMap["WARDRESS_HTTP_PORT"]) {
@@ -206,14 +187,22 @@ $dashboardUrl = "http://localhost:$port"
 
 # --- 3. Build images (serially, in the foreground) ----------------------
 
+Step "Pre-pulling base images (retries transient registry errors)"
+# Image set is discovered dynamically from the Dockerfiles + compose config
+# (nothing hardcoded), so it always matches the real stack.
+$baseImages = @()
+$baseImages += Get-BuildBaseImages $RepoRoot
+$baseImages += Get-ComposeRemoteImages
+Warm-Images $baseImages
+
 Step "Building the app image (API + dashboard) - first build takes a few minutes"
-Invoke-Compose @("build", "app") "Building the app image failed"
+Build-InstallService "app" "Building the app image failed"
 
 Step "Building the worker image (browser + detection engine) - the largest image"
-Invoke-Compose @("build", "worker") "Building the worker image failed"
+Build-InstallService "worker" "Building the worker image failed"
 
 Step "Building the scheduler image (shares the worker build cache)"
-Invoke-Compose @("build", "beat") "Building the beat image failed"
+Build-InstallService "beat" "Building the beat image failed"
 
 # --- 4. Start db/redis, migrate, start the stack ------------------------
 
@@ -225,6 +214,20 @@ Invoke-Compose @("run", "--rm", "app", "alembic", "upgrade", "head") "Database m
 
 Step "Starting the Wardress services"
 Invoke-Compose @("up", "-d", "--no-build", "app", "worker", "beat") "Starting the stack failed"
+
+# If the optional telegram-bot is already running from a previous install,
+# force-recreate it: it shares the worker image, and `up -d` will not
+# recreate a running container whose own config is unchanged - so after a
+# rebuild it would silently keep the OLD code. Mirrors update.ps1.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$botRunning = docker compose --profile telegram ps --status running -q telegram-bot 2>$null
+$botQueryOk = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
+if ($botQueryOk -and $botRunning) {
+    Step "Force-recreating the running telegram-bot onto the rebuilt image"
+    Invoke-Compose @("--profile", "telegram", "up", "-d", "--no-build", "--force-recreate", "telegram-bot") "Recreating telegram-bot failed"
+}
 
 Step "Waiting for the dashboard to come up"
 $deadline = (Get-Date).AddSeconds(120)

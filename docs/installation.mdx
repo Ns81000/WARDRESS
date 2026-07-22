@@ -119,7 +119,52 @@ To update Wardress to the latest release while maintaining all database records,
 
 ## Uninstall Guide
 
-To stop and completely remove Wardress from your system:
+### Automated removal with backup (`uninstall.ps1`)
+
+The recommended way to remove Wardress. It **backs up everything recoverable first** — your
+`.env`, a logical PostgreSQL dump (`pg_dump`), and the scan-artifacts volume — to a timestamped
+folder next to the repository, then removes all Wardress containers, the network, the data
+volumes, and the locally-built images. Every backup folder includes a `RESTORE.txt` with exact
+restore commands.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+```
+
+<ParamField path="-SkipBackup" type="switch">
+  Remove everything without taking a backup (permanent data loss).
+</ParamField>
+<ParamField path="-Force" type="switch">
+  Skip the confirmation prompt (unattended teardown).
+</ParamField>
+<ParamField path="-KeepImages" type="switch">
+  Remove containers and volumes but keep the built images (faster reinstall).
+</ParamField>
+<ParamField path="-PruneBaseImages" type="switch">
+  Also remove the pulled upstream base images (Postgres, Redis, and the build bases). Kept by
+  default because they are shared and reusable; pass this for a full-footprint wipe.
+</ParamField>
+<ParamField path="-BackupPath <dir>" type="string">
+  Write the backup to a specific folder instead of the default location.
+</ParamField>
+
+<Note>
+  The internal `docker compose down --rmi local` only removes images Wardress **built** locally.
+  Base images pulled from registries (`postgres`, `redis`, the Playwright/`uv`/`node` build bases)
+  are left for reuse unless you pass `-PruneBaseImages`.
+</Note>
+
+<Caution>
+  The uninstall script removes the data volumes. With the default backup you can restore later
+  via the generated `RESTORE.txt`; with `-SkipBackup` the deletion is permanent.
+</Caution>
+
+The repository files on disk are left in place — delete the folder yourself if you also want the
+source gone.
+
+### Manual removal
+
+To stop and remove Wardress by hand:
 
 1. Stop the active container stack (this preserves the database volume and your scan history):
    ```bash

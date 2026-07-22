@@ -267,7 +267,44 @@ Real-time health statistics charting Celery queue depth, worker heartbeats, and 
 
 ## Uninstall Guide
 
-To stop and completely remove Wardress from your system:
+### Automated removal with backup (`uninstall.ps1`)
+
+The simplest way to remove Wardress is the uninstall script. It **backs up everything
+recoverable first** — your `.env`, a logical PostgreSQL dump (`pg_dump`), and the scan-artifacts
+volume — to a timestamped folder next to the repository, and only then removes all Wardress
+containers, the network, the data volumes, and the locally-built images. Each backup folder also
+gets a `RESTORE.txt` with exact restore commands.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+```
+
+The script prompts for confirmation and prints the backup location when it finishes. Useful flags:
+
+*   `-SkipBackup` — remove everything without taking a backup (permanent data loss).
+*   `-Force` — skip the confirmation prompt (for unattended teardown).
+*   `-KeepImages` — remove containers and volumes but keep the built images (faster reinstall).
+*   `-PruneBaseImages` — also remove the pulled upstream base images (Postgres, Redis, and the
+    build bases). By default these shared, reusable images are kept so a reinstall is fast; pass
+    this for a full-footprint wipe.
+*   `-BackupPath <dir>` — write the backup to a specific folder instead of the default.
+
+> [!NOTE]
+> `docker compose down --rmi local` (used internally) only removes the images Wardress **built**
+> locally. The base images pulled from registries (e.g. `postgres`, `redis`, the Playwright and
+> `uv` build bases) are intentionally left behind for reuse — use `-PruneBaseImages` to remove
+> those as well.
+
+> [!CAUTION]
+> The uninstall script removes the data volumes. With the default backup you can restore later
+> via the generated `RESTORE.txt`; with `-SkipBackup` the deletion is permanent.
+
+The repository files on disk are left in place — delete the folder yourself if you also want the
+source gone.
+
+### Manual removal
+
+To stop and remove Wardress by hand with Docker Compose directly:
 
 1. Stop the active container stack (this preserves the database volume and your scan history):
    ```bash
