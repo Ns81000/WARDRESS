@@ -8,17 +8,17 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from app import services as services_mod
 from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, ScanVerdict, Site
-from app.routers import sites as sites_router
 
 
 @pytest.fixture(autouse=True)
 def stub_enqueue(monkeypatch: pytest.MonkeyPatch) -> dict:
     calls: dict[str, list] = {"baseline": [], "scan": []}
     monkeypatch.setattr(
-        sites_router, "enqueue_baseline_capture", lambda bid: calls["baseline"].append(bid)
+        services_mod, "enqueue_baseline_capture", lambda bid: calls["baseline"].append(bid)
     )
-    monkeypatch.setattr(sites_router, "enqueue_scan", lambda sid: calls["scan"].append(sid))
+    monkeypatch.setattr(services_mod, "enqueue_scan", lambda sid: calls["scan"].append(sid))
     return calls
 
 

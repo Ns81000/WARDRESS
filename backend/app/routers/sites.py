@@ -1,6 +1,5 @@
 """Site CRUD + baseline/scan endpoints (§7, extended for Phase 2)."""
 
-import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -9,21 +8,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import services
 from app.audit import record_audit
 from app.db import get_db
 from app.deps import AnalystUser, CurrentUser
 from app.explain import ExplainError, explain_scan
 from app.models import (
     Baseline,
-    BaselineStatus,
     Scan,
     ScanFinding,
-    ScanStatus,
-    ScanVerdict,
     Site,
     SuppressionRule,
 )
-from app.scanning import clamp_interval, is_stale
+from app.scanning import clamp_interval
 from app.schemas import (
     BaselineOut,
     ExplainResponse,
@@ -38,27 +35,14 @@ from app.schemas import (
     SuppressionRuleCreate,
     SuppressionRuleOut,
 )
-from app.ssrf import SSRFBlockedError, assert_url_allowed
-from app.tasks import enqueue_baseline_capture, enqueue_scan
+from app.services import ServiceError, site_snapshot
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
 
 
-def _is_stale(created_at: datetime, started_at: datetime | None = None) -> bool:
-    return is_stale(created_at, started_at)
-
-
-def _site_snapshot(site: Site) -> dict:
-    """Audit snapshot of a site's configurable state (no secrets here)."""
-    return {
-        "name": site.name,
-        "url": site.url,
-        "allow_private_networks": site.allow_private_networks,
-        "flag_threshold": site.flag_threshold,
-        "auto_scan_enabled": site.auto_scan_enabled,
-        "scan_interval_minutes": site.scan_interval_minutes,
-        "muted_until": site.muted_until.isoformat() if site.muted_until else None,
-    }
+def _http_from_service(exc: ServiceError) -> HTTPException:
+    """Translate a shared-service domain error to the router's HTTP shape."""
+    return HTTPException(exc.status_code, exc.message)
 
 
 async def _get_site_or_404(db: AsyncSession, site_id: uuid.UUID) -> Site:
@@ -80,61 +64,20 @@ async def create_site(
     user: AnalystUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SiteDetailOut:
-    url = str(body.url)
     try:
-        # SSRF policy check at creation time gives the user immediate
-        # feedback; the worker re-validates before every actual fetch.
-        # Runs in a thread: the check resolves DNS, which would otherwise
-        # block the event loop for up to the resolver timeout.
-        await asyncio.to_thread(
-            assert_url_allowed, url, allow_private_networks=body.allow_private_networks
+        site, baseline = await services.create_site(
+            db,
+            name=body.name,
+            url=str(body.url),
+            actor=user,
+            via="dashboard",
+            allow_private_networks=body.allow_private_networks,
+            flag_threshold=body.flag_threshold,
+            auto_scan_enabled=body.auto_scan_enabled,
+            scan_interval_minutes=body.scan_interval_minutes,
         )
-    except SSRFBlockedError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
-
-    site = Site(
-        name=body.name,
-        url=url,
-        created_by=user.id,
-        allow_private_networks=body.allow_private_networks,
-        flag_threshold=body.flag_threshold,
-        auto_scan_enabled=body.auto_scan_enabled,
-        scan_interval_minutes=clamp_interval(body.scan_interval_minutes),
-    )
-    db.add(site)
-    await db.flush()
-    # First auto-scan due one interval after creation (the baseline
-    # capture below anchors "now"); manual scan-now works immediately.
-    if site.auto_scan_enabled:
-        site.next_scan_at = datetime.now(UTC) + timedelta(minutes=site.scan_interval_minutes)
-
-    # Kick off the initial baseline capture immediately.
-    baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
-    db.add(baseline)
-    record_audit(
-        db,
-        actor=user,
-        action="site.create",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-        after=_site_snapshot(site),
-    )
-    await db.commit()
-    try:
-        enqueue_baseline_capture(baseline.id)
-    except HTTPException as exc:
-        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
-            raise
-        # Broker unreachable (503): the site is created but its initial
-        # capture could not be dispatched. Mark the pending baseline failed
-        # so the UI shows a clear failed-capture state (user can rebaseline
-        # once the queue is back) rather than a stuck "pending" forever.
-        baseline.status = BaselineStatus.failed
-        baseline.error = "Could not enqueue capture — task queue was unavailable"
-        await db.commit()
-        raise
-
+    except ServiceError as exc:
+        raise _http_from_service(exc) from None
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
         baseline_id=baseline.id,
@@ -207,7 +150,7 @@ async def update_site(
     interval). Name/URL edits are deliberately excluded — a different URL
     means a different trust anchor, i.e. a new site."""
     site = await _get_site_or_404(db, site_id)
-    before = _site_snapshot(site)
+    before = site_snapshot(site)
     if body.flag_threshold is not None:
         site.flag_threshold = body.flag_threshold
     if body.auto_scan_enabled is not None:
@@ -241,7 +184,7 @@ async def update_site(
         target_id=site.id,
         target_label=site.name,
         before=before,
-        after=_site_snapshot(site),
+        after=site_snapshot(site),
     )
     await db.commit()
 
@@ -278,7 +221,7 @@ async def delete_site(
         target_type="site",
         target_id=site.id,
         target_label=site.name,
-        before=_site_snapshot(site),
+        before=site_snapshot(site),
     )
     await db.delete(site)
     await db.commit()
@@ -295,44 +238,10 @@ async def rebaseline(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BaselineOut:
     site = await _get_site_or_404(db, site_id)
-    in_flight = await db.scalar(
-        select(Baseline).where(
-            Baseline.site_id == site.id,
-            Baseline.status.in_([BaselineStatus.pending, BaselineStatus.capturing]),
-        )
-    )
-    if in_flight is not None:
-        if _is_stale(in_flight.created_at):
-            # Orphaned row (worker killed, enqueue lost) — fail it and
-            # let this request proceed instead of 409-blocking forever.
-            in_flight.status = BaselineStatus.failed
-            in_flight.error = "Capture never completed — superseded by a new capture"
-        else:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "A baseline capture is already in progress"
-            )
-    baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
-    db.add(baseline)
-    record_audit(
-        db,
-        actor=user,
-        action="site.rebaseline",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-    )
-    await db.commit()
     try:
-        enqueue_baseline_capture(baseline.id)
-    except HTTPException as exc:
-        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
-            raise
-        # Broker unreachable (503): the pending baseline would 409-block
-        # future captures until stale. Mark it failed, then surface 503.
-        baseline.status = BaselineStatus.failed
-        baseline.error = "Could not enqueue capture — task queue was unavailable"
-        await db.commit()
-        raise
+        baseline = await services.rebaseline_site(db, site, actor=user, via="dashboard")
+    except ServiceError as exc:
+        raise _http_from_service(exc) from None
     return BaselineOut.model_validate(baseline)
 
 
@@ -347,51 +256,10 @@ async def scan_now(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScanOut:
     site = await _get_site_or_404(db, site_id)
-    baseline = await _current_baseline(db, site.id)
-    if baseline is None or baseline.status != BaselineStatus.ready:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Site has no ready baseline yet — capture a baseline first",
-        )
-    in_flight = await db.scalar(
-        select(Scan).where(
-            Scan.site_id == site.id,
-            Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
-        )
-    )
-    if in_flight is not None:
-        if _is_stale(in_flight.created_at, in_flight.started_at):
-            in_flight.status = ScanStatus.failed
-            in_flight.verdict = ScanVerdict.error
-            in_flight.error = "Scan never completed — superseded by a new scan"
-            in_flight.finished_at = datetime.now(UTC)
-        else:
-            raise HTTPException(status.HTTP_409_CONFLICT, "A scan is already in progress")
-    scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
-    db.add(scan)
-    record_audit(
-        db,
-        actor=user,
-        action="scan.now",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-    )
-    await db.commit()
     try:
-        enqueue_scan(scan.id)
-    except HTTPException as exc:
-        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
-            raise
-        # Broker was unreachable (503). The pending row is already committed;
-        # if we leave it, it 409-blocks the site until it goes stale. Mark it
-        # failed so the site is immediately scannable again, then surface 503.
-        scan.status = ScanStatus.failed
-        scan.verdict = ScanVerdict.error
-        scan.error = "Could not enqueue scan — task queue was unavailable"
-        scan.finished_at = datetime.now(UTC)
-        await db.commit()
-        raise
+        scan = await services.trigger_scan_now(db, site, actor=user, via="dashboard")
+    except ServiceError as exc:
+        raise _http_from_service(exc) from None
     return ScanOut.model_validate(scan)
 
 

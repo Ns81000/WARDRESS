@@ -436,10 +436,11 @@ def test_prompts_embed_the_exact_model_inputs():
 
 
 async def test_gemini_unavailable_without_key():
-    from app.llm import LLMUnavailable, gemini_generate
+    from app.llm import KeyPool, LLMUnavailable
 
+    # An empty pool (no configured keys) degrades to LLMUnavailable, never a crash.
     with pytest.raises(LLMUnavailable):
-        await gemini_generate("", "hello")
+        await KeyPool([]).generate("hello")
 
 
 async def test_ollama_unavailable_without_model():

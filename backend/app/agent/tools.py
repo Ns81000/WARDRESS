@@ -17,7 +17,6 @@ in one rule: tool output is *data*, never instructions.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ from app.explain import ExplainError, explain_scan
 from app.models import (
     Alert,
     Baseline,
-    BaselineStatus,
     Scan,
     ScanFinding,
     ScanStatus,
@@ -42,9 +40,16 @@ from app.models import (
     ensure_utc,
     utcnow,
 )
-from app.scanning import clamp_interval, is_stale
-from app.ssrf import SSRFBlockedError, assert_url_allowed
-from app.tasks import enqueue_baseline_capture, enqueue_scan
+from app.scanning import clamp_interval
+from app.services import (
+    ServiceError,
+    acknowledge_alert,
+    create_site,
+    mute_site,
+    rebaseline_site,
+    site_snapshot,
+    trigger_scan_now,
+)
 
 # Role ordering for min_role checks (viewer < analyst < admin).
 _ROLE_RANK = {UserRole.viewer: 0, UserRole.analyst: 1, UserRole.admin: 2}
@@ -59,7 +64,6 @@ TIER_DESTRUCTIVE = 3
 _MAX_SITES = 30
 _MAX_SCANS = 20
 _MAX_ALERTS = 10
-_MUTE_CAP_MINUTES = 7 * 24 * 60
 _NAME_CAP = 120
 
 
@@ -186,18 +190,6 @@ async def _current_baseline(db: AsyncSession, site_id: uuid.UUID) -> Baseline | 
     return await db.scalar(
         select(Baseline).where(Baseline.site_id == site_id, Baseline.is_current.is_(True))
     )
-
-
-def _site_snapshot(site: Site) -> dict:
-    return {
-        "name": site.name,
-        "url": site.url,
-        "allow_private_networks": site.allow_private_networks,
-        "flag_threshold": site.flag_threshold,
-        "auto_scan_enabled": site.auto_scan_enabled,
-        "scan_interval_minutes": site.scan_interval_minutes,
-        "muted_until": site.muted_until.isoformat() if site.muted_until else None,
-    }
 
 
 def _site_brief(site: Site, baseline: Baseline | None) -> dict:
@@ -394,27 +386,10 @@ async def _list_alerts(ctx: ToolContext, args: dict) -> dict:
 
 async def _run_scan_now(ctx: ToolContext, args: dict) -> dict:
     site = await _resolve_site(ctx, args.get("site", ""))
-    baseline = await _current_baseline(ctx.db, site.id)
-    if baseline is None or baseline.status != BaselineStatus.ready:
-        raise ToolError(f"{_cap(site.name)} has no ready baseline yet — capture a baseline first.")
-    in_flight = await ctx.db.scalar(
-        select(Scan).where(
-            Scan.site_id == site.id,
-            Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
-        )
-    )
-    if in_flight is not None:
-        if is_stale(in_flight.created_at, in_flight.started_at):
-            in_flight.status = ScanStatus.failed
-            in_flight.verdict = ScanVerdict.error
-            in_flight.error = "Scan never completed — superseded by a new scan"
-            in_flight.finished_at = datetime.now(UTC)
-        else:
-            raise ToolError(f"A scan is already in progress for {_cap(site.name)}.")
-    scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
-    ctx.db.add(scan)
-    await ctx.db.commit()
-    enqueue_scan(scan.id)
+    try:
+        scan = await trigger_scan_now(ctx.db, site, actor=ctx.user, via=ctx.surface)
+    except ServiceError as exc:
+        raise ToolError(exc.message) from None
     return {"queued": True, "site": _cap(site.name), "scan_id": _sid(scan.id)}
 
 
@@ -433,40 +408,14 @@ async def _acknowledge_alert(ctx: ToolContext, args: dict) -> dict:
         alert = match[0] if len(match) == 1 else None
     if alert is None:
         raise ToolError(f"No alert found matching {ref!r}.")
-    if alert.acknowledged_at is None:
-        alert.acknowledged_at = utcnow()
-        alert.acknowledged_by = ctx.user.id
-        alert.acknowledged_via = ctx.surface
-        record_audit(
-            ctx.db,
-            actor=ctx.user,
-            action="alert.acknowledge",
-            target_type="alert",
-            target_id=alert.id,
-            target_label=f"Alert {_sid(alert.id)}",
-            after={"risk_score": alert.risk_score, "via": ctx.surface},
-        )
-        await ctx.db.commit()
+    await acknowledge_alert(ctx.db, alert, actor=ctx.user, via=ctx.surface)
     return {"acknowledged": True, "alert_id": _sid(alert.id)}
 
 
 async def _mute_site(ctx: ToolContext, args: dict) -> dict:
     site = await _resolve_site(ctx, args.get("site", ""))
     minutes = int(args.get("minutes", 0) or 0)
-    minutes = max(0, min(minutes, _MUTE_CAP_MINUTES))
-    before = _site_snapshot(site)
-    site.muted_until = datetime.now(UTC) + timedelta(minutes=minutes) if minutes > 0 else None
-    record_audit(
-        ctx.db,
-        actor=ctx.user,
-        action="site.mute",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-        before=before,
-        after=_site_snapshot(site),
-    )
-    await ctx.db.commit()
+    await mute_site(ctx.db, site, minutes=minutes, actor=ctx.user, via=ctx.surface)
     return {
         "site": _cap(site.name),
         "muted_until": site.muted_until.isoformat() if site.muted_until else None,
@@ -488,61 +437,25 @@ async def _add_site(ctx: ToolContext, args: dict) -> dict:
         raise ToolError("Both a name and a URL are required to add a site.")
     allow_private = bool(args.get("allow_private_networks", False))
     try:
-        await asyncio.to_thread(assert_url_allowed, url, allow_private_networks=allow_private)
-    except SSRFBlockedError as exc:
-        raise ToolError(str(exc)) from None
-    site = Site(
-        name=name,
-        url=url,
-        created_by=ctx.user.id,
-        allow_private_networks=allow_private,
-    )
-    ctx.db.add(site)
-    await ctx.db.flush()
-    if site.auto_scan_enabled:
-        site.next_scan_at = datetime.now(UTC) + timedelta(minutes=site.scan_interval_minutes)
-    baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
-    ctx.db.add(baseline)
-    record_audit(
-        ctx.db,
-        actor=ctx.user,
-        action="site.create",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-        after=_site_snapshot(site),
-    )
-    await ctx.db.commit()
-    enqueue_baseline_capture(baseline.id)
+        site, _ = await create_site(
+            ctx.db,
+            name=name,
+            url=url,
+            actor=ctx.user,
+            via=ctx.surface,
+            allow_private_networks=allow_private,
+        )
+    except ServiceError as exc:
+        raise ToolError(exc.message) from None
     return {"created": True, "site": _cap(site.name), "site_id": _sid(site.id)}
 
 
 async def _rebaseline_site(ctx: ToolContext, args: dict) -> dict:
     site = await _resolve_site(ctx, args.get("site", ""))
-    in_flight = await ctx.db.scalar(
-        select(Baseline).where(
-            Baseline.site_id == site.id,
-            Baseline.status.in_([BaselineStatus.pending, BaselineStatus.capturing]),
-        )
-    )
-    if in_flight is not None:
-        if is_stale(in_flight.created_at):
-            in_flight.status = BaselineStatus.failed
-            in_flight.error = "Capture never completed — superseded by a new capture"
-        else:
-            raise ToolError(f"A baseline capture is already in progress for {_cap(site.name)}.")
-    baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
-    ctx.db.add(baseline)
-    record_audit(
-        ctx.db,
-        actor=ctx.user,
-        action="site.rebaseline",
-        target_type="site",
-        target_id=site.id,
-        target_label=site.name,
-    )
-    await ctx.db.commit()
-    enqueue_baseline_capture(baseline.id)
+    try:
+        await rebaseline_site(ctx.db, site, actor=ctx.user, via=ctx.surface)
+    except ServiceError as exc:
+        raise ToolError(exc.message) from None
     return {"rebaselining": True, "site": _cap(site.name)}
 
 
@@ -554,7 +467,7 @@ async def _set_flag_threshold(ctx: ToolContext, args: dict) -> dict:
         raise ToolError("threshold must be a number between 0 and 1.") from None
     if not 0.0 <= threshold <= 1.0:
         raise ToolError("threshold must be between 0 and 1.")
-    before = _site_snapshot(site)
+    before = site_snapshot(site)
     site.flag_threshold = threshold
     record_audit(
         ctx.db,
@@ -564,7 +477,7 @@ async def _set_flag_threshold(ctx: ToolContext, args: dict) -> dict:
         target_id=site.id,
         target_label=site.name,
         before=before,
-        after=_site_snapshot(site),
+        after=site_snapshot(site),
     )
     await ctx.db.commit()
     return {"site": _cap(site.name), "flag_threshold": threshold}
@@ -576,7 +489,7 @@ async def _set_scan_interval(ctx: ToolContext, args: dict) -> dict:
         minutes = int(args.get("minutes"))
     except (TypeError, ValueError):
         raise ToolError("minutes must be a whole number.") from None
-    before = _site_snapshot(site)
+    before = site_snapshot(site)
     site.scan_interval_minutes = clamp_interval(minutes)
     site.current_interval_minutes = None
     if site.auto_scan_enabled:
@@ -589,7 +502,7 @@ async def _set_scan_interval(ctx: ToolContext, args: dict) -> dict:
         target_id=site.id,
         target_label=site.name,
         before=before,
-        after=_site_snapshot(site),
+        after=site_snapshot(site),
     )
     await ctx.db.commit()
     return {"site": _cap(site.name), "scan_interval_minutes": site.scan_interval_minutes}
@@ -605,7 +518,7 @@ async def _delete_site(ctx: ToolContext, args: dict) -> dict:
         target_type="site",
         target_id=site.id,
         target_label=site.name,
-        before=_site_snapshot(site),
+        before=site_snapshot(site),
     )
     await ctx.db.delete(site)
     await ctx.db.commit()

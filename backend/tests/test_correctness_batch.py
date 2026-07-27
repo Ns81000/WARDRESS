@@ -234,7 +234,7 @@ async def test_scan_now_503_marks_scan_failed(client, db_factory, auth_headers) 
     def _raise(_id):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "queue down")
 
-    with patch("app.routers.sites.enqueue_scan", side_effect=_raise):
+    with patch("app.services.enqueue_scan", side_effect=_raise):
         resp = await client.post(f"/api/sites/{site_id}/scan-now", headers=auth_headers)
 
     assert resp.status_code == 503

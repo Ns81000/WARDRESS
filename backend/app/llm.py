@@ -7,18 +7,22 @@ Used for exactly two things:
 (b) the "Explain this incident" button (API + Telegram bot).
 
 Hard rules (master prompt §8):
-- One model string (``GEMINI_MODEL``) everywhere: ``gemini-flash-latest``,
-  Google's stable alias for the current flash model (the previously
-  pinned ``gemini-2.5-flash`` was retired for new API keys in 2026).
+- One model string everywhere, sourced from ``settings.gemini_model``
+  (env ``GEMINI_MODEL``, default ``gemini-flash-latest`` — Google's stable
+  alias for the current flash model; the previously pinned
+  ``gemini-2.5-flash`` was retired for new API keys in 2026). The pool reads
+  it at construction so what the Settings UI displays is exactly what is sent.
 - Rate limiting via aiolimiter, tuned conservatively under the free
-  tier (~8 requests/minute), plus a per-process daily budget and
-  exponential backoff on HTTP 429.
+  tier (~8 requests/minute), plus a per-key daily budget and cooldown
+  ladder on HTTP 429.
 - **Silent degradation**: a missing/invalid key, exhausted quota, or a
   dead endpoint raises LLMUnavailable, which every caller treats as
   "feature unavailable" — it can never block or crash a scan.
+
+There is a single Gemini call path — :class:`KeyPool` — used by the explain
+feature, the worker escalation, the agent, and the Settings key-test button.
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -32,17 +36,12 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-flash-latest"
-
 # Conservative token bucket: the published free-tier ceilings shift, so
 # stay well below them (§8 assumes ~8 req/min, ~200/day). Both limits are
 # per key (multi-key pool) and per process; escalations only fire in the
 # ambiguous band, so real volume is a small fraction of scan volume.
 _PER_KEY_RATE = (8, 60)  # requests, seconds
 _DAILY_BUDGET = 200  # per key
-# Legacy single-key path (gemini_generate) keeps its own limiter/budget.
-_gemini_limiter = AsyncLimiter(*_PER_KEY_RATE)
-_daily_state = {"day": None, "count": 0}
 
 # Cooldown ladder applied to a key after consecutive quota failures:
 # 1 min, then 5, then 30 (repeats at 30). Success resets the strike count.
@@ -55,18 +54,6 @@ _MAX_OUTPUT_CHARS = 4_000
 class LLMUnavailable(Exception):
     """The optional LLM could not answer (unconfigured, bad key, quota,
     network). Callers degrade silently — this is not an error state."""
-
-
-def _budget_exhausted() -> bool:
-    today = datetime.now(UTC).date()
-    if _daily_state["day"] != today:
-        _daily_state["day"] = today
-        _daily_state["count"] = 0
-    return _daily_state["count"] >= _DAILY_BUDGET
-
-
-def _budget_spend() -> None:
-    _daily_state["count"] += 1
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -169,8 +156,12 @@ class KeyPool:
     """A rotating pool of Gemini keys sharing one gemini-flash-latest call
     path. Used by the explain feature, the worker escalation, and the agent."""
 
-    def __init__(self, keys: list[dict]) -> None:
+    def __init__(self, keys: list[dict], model: str | None = None) -> None:
         self.keys = [k for k in keys if k.get("api_key")]
+        # The model string is a single source of truth: read from settings
+        # (env GEMINI_MODEL) at construction so the Settings UI display and
+        # the string actually sent to Gemini can never diverge.
+        self.model = model or get_settings().gemini_model
         # Prune _key_states entries that are no longer in this pool so the
         # module-level registry doesn't grow unboundedly across key rotations.
         active = {k["api_key"] for k in self.keys}
@@ -222,7 +213,7 @@ class KeyPool:
                     client = genai.Client(api_key=st.api_key)
                     try:
                         response = await client.aio.models.generate_content(
-                            model=GEMINI_MODEL, contents=contents, config=config
+                            model=self.model, contents=contents, config=config
                         )
                     finally:
                         await client.aio.aclose()
@@ -276,46 +267,6 @@ def _key_hint(secret: str, keep: int = 6) -> str:
     return secret[:keep] + "…" + secret[-2:]
 
 
-async def gemini_generate(api_key: str, prompt: str) -> str:
-    """One gemini-flash-latest call. Raises LLMUnavailable on any failure."""
-    if not api_key:
-        raise LLMUnavailable("no API key configured")
-    if _budget_exhausted():
-        raise LLMUnavailable("daily request budget exhausted")
-    try:
-        from google import genai
-    except ImportError as exc:  # pragma: no cover — pinned dependency
-        raise LLMUnavailable("google-genai SDK unavailable") from exc
-
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with _gemini_limiter:
-                _budget_spend()
-                client = genai.Client(api_key=api_key)
-                try:
-                    response = await client.aio.models.generate_content(
-                        model=GEMINI_MODEL, contents=prompt
-                    )
-                finally:
-                    await client.aio.aclose()
-            text = (response.text or "").strip()
-            if not text:
-                raise LLMUnavailable("Gemini returned an empty response")
-            return text[:_MAX_OUTPUT_CHARS]
-        except LLMUnavailable:
-            raise
-        except Exception as exc:
-            last_exc = exc
-            if _is_rate_limit(exc) and attempt < 2:
-                # Exponential backoff on 429 (§8).
-                await asyncio.sleep(2**attempt * 2)
-                continue
-            break
-    logger.warning("Gemini call failed: %s", str(last_exc)[:200])
-    raise LLMUnavailable(f"Gemini call failed: {type(last_exc).__name__}") from last_exc
-
-
 async def ollama_generate(base_url: str, model: str | None, prompt: str) -> str:
     """One chat call against Ollama's OpenAI-compatible endpoint.
     Raises LLMUnavailable on any failure."""
@@ -348,14 +299,6 @@ async def ollama_generate(base_url: str, model: str | None, prompt: str) -> str:
 # --- Settings test calls (§7: cheap confirmation endpoints) ---
 
 
-async def gemini_test_call(api_key: str) -> tuple[bool, str]:
-    try:
-        await gemini_generate(api_key, "Reply with the single word: ok")
-        return True, f"Key works — {GEMINI_MODEL} answered"
-    except LLMUnavailable as exc:
-        return False, f"Gemini test failed: {exc}"
-
-
 async def ollama_test_call(base_url: str, model: str | None) -> tuple[bool, str]:
     try:
         await ollama_generate(base_url, model, "Reply with the single word: ok")
@@ -370,16 +313,15 @@ async def ollama_test_call(base_url: str, model: str | None) -> tuple[bool, str]
 @dataclass
 class LLMProvider:
     kind: str  # "gemini" | "ollama"
-    api_key: str = ""  # legacy single-key (kept for compatibility)
     base_url: str = ""
     model: str = ""
     pool: "KeyPool | None" = None
 
     async def generate(self, prompt: str) -> str:
         if self.kind == "gemini":
-            if self.pool:
-                return await self.pool.generate(prompt)
-            return await gemini_generate(self.api_key, prompt)
+            if self.pool is None:
+                raise LLMUnavailable("no API key configured")
+            return await self.pool.generate(prompt)
         return await ollama_generate(self.base_url, self.model, prompt)
 
 
@@ -396,7 +338,7 @@ async def resolve_provider(db) -> LLMProvider | None:
         g = {"api_key": settings.gemini_api_key, "enabled": True}
     keys = keys_from_setting(g)
     if keys:
-        return LLMProvider(kind="gemini", api_key=keys[0]["api_key"], pool=KeyPool(keys))
+        return LLMProvider(kind="gemini", pool=KeyPool(keys))
 
     o = await load_setting(db, OLLAMA_KEY)
     if o is None and settings.enable_ollama:

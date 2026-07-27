@@ -135,14 +135,14 @@ def stub_all_enqueues(monkeypatch: pytest.MonkeyPatch) -> dict:
     Individual test modules with their own stub_enqueue still work; this is
     an opt-in convenience for Phase 5 tests that create sites/remediations."""
     calls: dict[str, list] = {"baseline": [], "scan": [], "remediation": []}
+    from app import services
     from app.routers import imports as imports_router
     from app.routers import remediation as remediation_router
-    from app.routers import sites as sites_router
 
     monkeypatch.setattr(
-        sites_router, "enqueue_baseline_capture", lambda bid: calls["baseline"].append(bid)
+        services, "enqueue_baseline_capture", lambda bid: calls["baseline"].append(bid)
     )
-    monkeypatch.setattr(sites_router, "enqueue_scan", lambda sid: calls["scan"].append(sid))
+    monkeypatch.setattr(services, "enqueue_scan", lambda sid: calls["scan"].append(sid))
     monkeypatch.setattr(
         imports_router, "enqueue_baseline_capture", lambda bid: calls["baseline"].append(bid)
     )

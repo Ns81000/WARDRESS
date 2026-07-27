@@ -13,10 +13,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.audit import record_audit
+from app import services
 from app.db import get_db
 from app.deps import AnalystUser, CurrentUser
-from app.models import Alert, Site, utcnow
+from app.models import Alert, Site
 from app.schemas import AlertDeliveryOut, AlertDetailOut, AlertOut, AlertPage
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
@@ -85,19 +85,6 @@ async def acknowledge_alert(alert_id: uuid.UUID, user: AnalystUser, db: DB) -> A
     )
     if alert is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Alert not found")
-    if alert.acknowledged_at is None:
-        alert.acknowledged_at = utcnow()
-        alert.acknowledged_by = user.id
-        alert.acknowledged_via = "dashboard"
-        record_audit(
-            db,
-            actor=user,
-            action="alert.acknowledge",
-            target_type="alert",
-            target_id=alert.id,
-            target_label=f"Alert {str(alert.id)[:8]}",
-            after={"risk_score": alert.risk_score, "via": "dashboard"},
-        )
-        await db.commit()
+    await services.acknowledge_alert(db, alert, actor=user, via="dashboard")
     site = await db.scalar(select(Site).where(Site.id == alert.site_id))
     return _detail(alert, site.name if site else None)

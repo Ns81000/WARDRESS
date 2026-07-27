@@ -22,7 +22,7 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from telegram import (
@@ -44,22 +44,18 @@ from telegram.ext import (
 from app.agent.engine import run_turn
 from app.agent.guard import resolve_pending
 from app.agent.tools import ToolError
-from app.audit import record_audit
 from app.models import (
     AgentConversation,
     AgentSurface,
     Alert,
-    Baseline,
-    BaselineStatus,
     Scan,
     ScanStatus,
     ScanVerdict,
     Site,
     User,
 )
-from app.scanning import is_stale
+from app.services import ServiceError, acknowledge_alert, mute_site, trigger_scan_now
 from app.settings_store import TELEGRAM_KEY, load_setting, save_setting
-from worker.celery_app import celery_app
 from worker.db import task_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -308,43 +304,18 @@ async def cmd_scan(update, context, send) -> None:
         if site is None:
             await send(err)
             return
-        # Same semantics as the API's scan-now endpoint.
-        baseline = await db.scalar(
-            select(Baseline).where(
-                Baseline.site_id == site.id,
-                Baseline.is_current.is_(True),
-                Baseline.status == BaselineStatus.ready,
-            )
-        )
-        if baseline is None:
-            await send(f"{site.name} has no ready baseline yet — capture one in the dashboard.")
-            return
-        in_flight = await db.scalar(
-            select(Scan).where(
-                Scan.site_id == site.id,
-                Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
-            )
-        )
-        if in_flight is not None:
-            if is_stale(in_flight.created_at, in_flight.started_at):
-                in_flight.status = ScanStatus.failed
-                in_flight.verdict = ScanVerdict.error
-                in_flight.error = "Scan never completed — superseded by a new scan"
-                in_flight.finished_at = datetime.now(UTC)
-            else:
-                await send(f"A scan of {site.name} is already in progress.")
-                return
-        scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
-        db.add(scan)
-        await db.commit()
-        scan_id = scan.id
         site_name = site.name
-    try:
-        await asyncio.to_thread(celery_app.send_task, "wardress.run_scan", args=[str(scan_id)])
-    except Exception:
-        log.exception("Could not enqueue scan from bot")
-        await send("Could not reach the task queue — try again shortly.")
-        return
+        # Same shared service path as the REST endpoint and the agent tool —
+        # ready-baseline check, stale-supersede, audit row, and 503-safe
+        # enqueue all handled once (the bot slash command records the audit
+        # as the "telegram-bot" actor).
+        try:
+            await trigger_scan_now(
+                db, site, actor=None, actor_label="telegram-bot", via="telegram"
+            )
+        except ServiceError as exc:
+            await send(exc.message)
+            return
     await send(f"Scan of {site_name} started. I'll stay quiet; check /status or the dashboard.")
 
 
@@ -369,19 +340,9 @@ async def cmd_ack(update, context, send) -> None:
             await send(f"'{raw}' matches {len(matches)} alerts — use more characters.")
             return
         alert = matches[0]
-        alert.acknowledged_at = datetime.now(UTC)
-        alert.acknowledged_via = "telegram"
-        record_audit(
-            db,
-            actor=None,
-            actor_label="telegram-bot",
-            action="alert.acknowledge",
-            target_type="alert",
-            target_id=alert.id,
-            target_label=f"Alert {str(alert.id)[:8]}",
-            after={"risk_score": alert.risk_score, "via": "telegram"},
+        await acknowledge_alert(
+            db, alert, actor=None, actor_label="telegram-bot", via="telegram"
         )
-        await db.commit()
         site = await db.scalar(select(Site).where(Site.id == alert.site_id))
         site_name = site.name if site else "unknown site"
     await send(f"Acknowledged alert {str(alert.id)[:8]} for {site_name}.")
@@ -419,34 +380,13 @@ async def cmd_mute(update, context, send) -> None:
         if site is None:
             await send(err)
             return
-        if duration == 0:
-            site.muted_until = None
-            record_audit(
-                db,
-                actor=None,
-                actor_label="telegram-bot",
-                action="site.mute",
-                target_type="site",
-                target_id=site.id,
-                target_label=site.name,
-                after={"muted_until": None, "via": "telegram"},
-            )
-            await db.commit()
+        await mute_site(
+            db, site, minutes=duration, actor=None, actor_label="telegram-bot", via="telegram"
+        )
+        if site.muted_until is None:
             await send(f"Alerts for {site.name} are unmuted.")
             return
-        site.muted_until = datetime.now(UTC) + timedelta(minutes=duration)
         until = site.muted_until.strftime("%Y-%m-%d %H:%M UTC")
-        record_audit(
-            db,
-            actor=None,
-            actor_label="telegram-bot",
-            action="site.mute",
-            target_type="site",
-            target_id=site.id,
-            target_label=site.name,
-            after={"muted_until": until, "via": "telegram"},
-        )
-        await db.commit()
         await send(
             f"Alerts for {site.name} muted until {until}. "
             "Scans keep running; skipped deliveries stay visible in the dashboard."

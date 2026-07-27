@@ -123,11 +123,11 @@ async def test_create_pending_supersedes_prior(db_factory, analyst_user):
 
 async def test_confirm_executes_frozen_args(db_factory, analyst_user, monkeypatch):
     calls = []
-    monkeypatch.setattr("app.agent.tools.enqueue_scan", lambda sid: calls.append(sid))
+    monkeypatch.setattr("app.services.enqueue_scan", lambda sid: calls.append(sid))
     site = await _seed_site(db_factory)
     conv = await _seed_conversation(db_factory, analyst_user)
     tool = tools.get_tool("rebaseline_site")
-    monkeypatch.setattr("app.agent.tools.enqueue_baseline_capture", lambda bid: calls.append(bid))
+    monkeypatch.setattr("app.services.enqueue_baseline_capture", lambda bid: calls.append(bid))
     async with db_factory() as db:
         action = await guard.create_pending(
             db, conversation_id=conv.id, user=analyst_user, tool=tool, args={"site": site.name}
@@ -142,7 +142,7 @@ async def test_confirm_executes_frozen_args(db_factory, analyst_user, monkeypatc
 
 async def test_cancel_does_not_execute(db_factory, analyst_user, monkeypatch):
     calls = []
-    monkeypatch.setattr("app.agent.tools.enqueue_baseline_capture", lambda bid: calls.append(bid))
+    monkeypatch.setattr("app.services.enqueue_baseline_capture", lambda bid: calls.append(bid))
     site = await _seed_site(db_factory)
     conv = await _seed_conversation(db_factory, analyst_user)
     tool = tools.get_tool("rebaseline_site")
