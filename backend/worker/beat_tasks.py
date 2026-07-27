@@ -52,6 +52,18 @@ JANITOR_MAX_REMOVALS_PER_RUN = 500
 # faster so expired confirmation cards don't linger long in the DB.
 AGENT_ACTION_JANITOR_SECONDS = 5 * 60
 
+# Re-delivery sweep: an Alert whose delivery-enqueue was lost (Redis blip
+# right after the scan committed) has zero AlertDelivery rows and would
+# otherwise never be delivered. A queued RemediationExecution whose
+# fire-enqueue was lost sits queued forever. Both tasks are idempotent
+# (deliver_alert no-ops if any delivery row exists; fire_remediation
+# no-ops unless status is still queued), so re-enqueueing a row that is
+# actually in flight is harmless. The grace period avoids racing a
+# delivery/fire that was legitimately enqueued moments ago.
+REDELIVERY_SWEEP_SECONDS = 5 * 60
+REDELIVERY_GRACE = timedelta(minutes=5)
+REDELIVERY_MAX_PER_RUN = 200
+
 # Redis heartbeat key the health page reads (Phase 5 §7): proof that
 # Beat is scheduling AND a worker is executing (the tick runs on a
 # worker). Written best-effort — a Redis blip must not fail the tick.
@@ -136,7 +148,7 @@ async def _dispatch_due_scans() -> dict:
                 )
             )
             if in_flight is not None:
-                if is_stale(in_flight.created_at):
+                if is_stale(in_flight.created_at, in_flight.started_at):
                     in_flight.status = ScanStatus.failed
                     in_flight.verdict = ScanVerdict.error
                     in_flight.error = "Scan never completed — superseded by a scheduled scan"
@@ -262,6 +274,72 @@ def expire_agent_actions() -> dict:
         return {"error": True}
 
 
+async def _resweep_undelivered() -> dict:
+    """Find committed Alerts with no delivery rows and queued Remediation
+    executions past the grace period, and re-enqueue their tasks. Both
+    downstream tasks are idempotent, so this can only recover lost
+    enqueues — never double-send."""
+    from sqlalchemy import func
+
+    from app.models import Alert, AlertDelivery, RemediationExecution, RemediationExecutionStatus
+
+    stats = {"alerts_reenqueued": 0, "remediations_reenqueued": 0}
+    cutoff = _utcnow() - REDELIVERY_GRACE
+    async with task_session() as db:
+        # Alerts older than the grace period with zero delivery attempts.
+        stranded_alerts = (
+            await db.scalars(
+                select(Alert.id)
+                .outerjoin(AlertDelivery, AlertDelivery.alert_id == Alert.id)
+                .where(Alert.created_at < cutoff)
+                .group_by(Alert.id)
+                .having(func.count(AlertDelivery.id) == 0)
+                .order_by(Alert.created_at.asc())
+                .limit(REDELIVERY_MAX_PER_RUN)
+            )
+        ).all()
+        for alert_id in stranded_alerts:
+            try:
+                celery_app.send_task("wardress.deliver_alert", args=[str(alert_id)])
+                stats["alerts_reenqueued"] += 1
+            except Exception:
+                logger.exception("Could not re-enqueue delivery for alert %s", alert_id)
+
+        # Remediation executions stuck queued past the grace period.
+        stranded_rems = (
+            await db.scalars(
+                select(RemediationExecution.id)
+                .where(
+                    RemediationExecution.status == RemediationExecutionStatus.queued,
+                    RemediationExecution.created_at < cutoff,
+                )
+                .order_by(RemediationExecution.created_at.asc())
+                .limit(REDELIVERY_MAX_PER_RUN)
+            )
+        ).all()
+        for execution_id in stranded_rems:
+            try:
+                celery_app.send_task("wardress.fire_remediation", args=[str(execution_id)])
+                stats["remediations_reenqueued"] += 1
+            except Exception:
+                logger.exception("Could not re-enqueue remediation %s", execution_id)
+    return stats
+
+
+@celery_app.task(name="wardress.resweep_undelivered")
+def resweep_undelivered() -> dict:
+    """Best-effort recovery of lost alert/remediation enqueues (rule 6:
+    never crash the worker)."""
+    try:
+        stats = asyncio.run(_resweep_undelivered())
+        if stats["alerts_reenqueued"] or stats["remediations_reenqueued"]:
+            logger.info("Undelivered re-sweep: %s", stats)
+        return stats
+    except Exception:
+        logger.exception("Undelivered re-sweep failed")
+        return {"error": True}
+
+
 async def _run_with_session(fn):
     async with task_session() as db:
         return await fn(db)
@@ -288,4 +366,10 @@ def setup_periodic_tasks(sender, **kwargs) -> None:
         expire_agent_actions.s(),
         name="expire agent pending actions",
         expires=AGENT_ACTION_JANITOR_SECONDS,
+    )
+    sender.add_periodic_task(
+        REDELIVERY_SWEEP_SECONDS,
+        resweep_undelivered.s(),
+        name="re-deliver stranded alerts and remediations",
+        expires=REDELIVERY_SWEEP_SECONDS,
     )

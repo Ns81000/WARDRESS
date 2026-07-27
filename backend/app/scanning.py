@@ -14,10 +14,18 @@ from datetime import UTC, datetime, timedelta
 STALE_INFLIGHT = timedelta(minutes=10)
 
 
-def is_stale(created_at: datetime) -> bool:
-    if created_at.tzinfo is None:  # SQLite test backend returns naive datetimes
-        created_at = created_at.replace(tzinfo=UTC)
-    return created_at < datetime.now(UTC) - STALE_INFLIGHT
+def is_stale(created_at: datetime, started_at: datetime | None = None) -> bool:
+    """True when an in-flight scan/baseline has been running too long.
+
+    Measures from `started_at` when the worker has picked it up (status
+    running), otherwise from `created_at` (still pending). Using created_at
+    for a running scan would falsely expire a backlogged-then-running scan
+    that spent most of its age waiting in the queue.
+    """
+    anchor = started_at if started_at is not None else created_at
+    if anchor.tzinfo is None:  # SQLite test backend returns naive datetimes
+        anchor = anchor.replace(tzinfo=UTC)
+    return anchor < datetime.now(UTC) - STALE_INFLIGHT
 
 
 # --- Adaptive scan intervals (§11) ---

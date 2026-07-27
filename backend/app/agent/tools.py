@@ -404,7 +404,7 @@ async def _run_scan_now(ctx: ToolContext, args: dict) -> dict:
         )
     )
     if in_flight is not None:
-        if is_stale(in_flight.created_at):
+        if is_stale(in_flight.created_at, in_flight.started_at):
             in_flight.status = ScanStatus.failed
             in_flight.verdict = ScanVerdict.error
             in_flight.error = "Scan never completed — superseded by a new scan"

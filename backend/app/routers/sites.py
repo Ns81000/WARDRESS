@@ -44,8 +44,8 @@ from app.tasks import enqueue_baseline_capture, enqueue_scan
 router = APIRouter(prefix="/api/sites", tags=["sites"])
 
 
-def _is_stale(created_at: datetime) -> bool:
-    return is_stale(created_at)
+def _is_stale(created_at: datetime, started_at: datetime | None = None) -> bool:
+    return is_stale(created_at, started_at)
 
 
 def _site_snapshot(site: Site) -> dict:
@@ -121,7 +121,19 @@ async def create_site(
         after=_site_snapshot(site),
     )
     await db.commit()
-    enqueue_baseline_capture(baseline.id)
+    try:
+        enqueue_baseline_capture(baseline.id)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+            raise
+        # Broker unreachable (503): the site is created but its initial
+        # capture could not be dispatched. Mark the pending baseline failed
+        # so the UI shows a clear failed-capture state (user can rebaseline
+        # once the queue is back) rather than a stuck "pending" forever.
+        baseline.status = BaselineStatus.failed
+        baseline.error = "Could not enqueue capture — task queue was unavailable"
+        await db.commit()
+        raise
 
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
@@ -310,7 +322,17 @@ async def rebaseline(
         target_label=site.name,
     )
     await db.commit()
-    enqueue_baseline_capture(baseline.id)
+    try:
+        enqueue_baseline_capture(baseline.id)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+            raise
+        # Broker unreachable (503): the pending baseline would 409-block
+        # future captures until stale. Mark it failed, then surface 503.
+        baseline.status = BaselineStatus.failed
+        baseline.error = "Could not enqueue capture — task queue was unavailable"
+        await db.commit()
+        raise
     return BaselineOut.model_validate(baseline)
 
 
@@ -338,7 +360,7 @@ async def scan_now(
         )
     )
     if in_flight is not None:
-        if _is_stale(in_flight.created_at):
+        if _is_stale(in_flight.created_at, in_flight.started_at):
             in_flight.status = ScanStatus.failed
             in_flight.verdict = ScanVerdict.error
             in_flight.error = "Scan never completed — superseded by a new scan"
@@ -347,8 +369,29 @@ async def scan_now(
             raise HTTPException(status.HTTP_409_CONFLICT, "A scan is already in progress")
     scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
     db.add(scan)
+    record_audit(
+        db,
+        actor=user,
+        action="scan.now",
+        target_type="site",
+        target_id=site.id,
+        target_label=site.name,
+    )
     await db.commit()
-    enqueue_scan(scan.id)
+    try:
+        enqueue_scan(scan.id)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+            raise
+        # Broker was unreachable (503). The pending row is already committed;
+        # if we leave it, it 409-blocks the site until it goes stale. Mark it
+        # failed so the site is immediately scannable again, then surface 503.
+        scan.status = ScanStatus.failed
+        scan.verdict = ScanVerdict.error
+        scan.error = "Could not enqueue scan — task queue was unavailable"
+        scan.finished_at = datetime.now(UTC)
+        await db.commit()
+        raise
     return ScanOut.model_validate(scan)
 
 
@@ -424,6 +467,15 @@ async def explain_incident(
     scan = await db.scalar(select(Scan).where(Scan.id == scan_id, Scan.site_id == site_id))
     if scan is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan not found")
+    record_audit(
+        db,
+        actor=user,
+        action="scan.explain",
+        target_type="scan",
+        target_id=scan_id,
+        target_label=str(site_id),
+        after={"force": force},
+    )
     try:
         result = await explain_scan(db, scan_id, force=force)
     except ExplainError as exc:

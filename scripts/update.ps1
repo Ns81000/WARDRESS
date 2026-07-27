@@ -68,13 +68,6 @@ if (-not $NoGitPull) {
     }
 }
 
-# Show what changed, if a changelog ships with the release.
-$changelog = Join-Path $RepoRoot "CHANGELOG.md"
-if (Test-Path $changelog) {
-    Step "Changelog (top of CHANGELOG.md)"
-    Get-Content $changelog -TotalCount 40 | ForEach-Object { Write-Host "  $_" }
-}
-
 # --- 3. Pull base images + rebuild (serially, in the foreground) ---------
 
 Step "Pre-pulling base images (retries transient registry errors)"

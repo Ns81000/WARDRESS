@@ -171,9 +171,33 @@ class KeyPool:
 
     def __init__(self, keys: list[dict]) -> None:
         self.keys = [k for k in keys if k.get("api_key")]
+        # Prune _key_states entries that are no longer in this pool so the
+        # module-level registry doesn't grow unboundedly across key rotations.
+        active = {k["api_key"] for k in self.keys}
+        for stale in [k for k in list(_key_states) if k not in active]:
+            del _key_states[stale]
 
     def __bool__(self) -> bool:
         return bool(self.keys)
+
+    def _sorted_keys(self) -> list[dict]:
+        """Order keys so the best next candidate is first: a key whose rate
+        limiter currently has a token beats one that would block, and among
+        equals the least-recently-used wins. This spreads load evenly (LRU)
+        AND avoids waiting ~7.5s on one key's empty bucket when another key
+        has capacity right now (finding: limiter-blocking failover)."""
+
+        def _rank(entry: dict) -> tuple[int, float]:
+            st = _key_states.get(entry["api_key"])
+            if st is None:
+                # Never used — has full capacity, oldest possible.
+                return (0, 0.0)
+            has_capacity = st.limiter.has_capacity()
+            last_used = st.last_used.timestamp() if st.last_used else 0.0
+            # capacity-first (0 sorts before 1), then LRU ascending.
+            return (0 if has_capacity else 1, last_used)
+
+        return sorted(self.keys, key=_rank)
 
     async def call(self, *, contents, config=None):
         """Run one generate_content across the pool, returning the raw SDK
@@ -188,14 +212,13 @@ class KeyPool:
 
         last_exc: Exception | None = None
         served = 0
-        for entry in self.keys:
+        for entry in self._sorted_keys():
             st = _state_for(entry["api_key"])
             if not st.available():
                 continue
             served += 1
             try:
                 async with st.limiter:
-                    st.spend()
                     client = genai.Client(api_key=st.api_key)
                     try:
                         response = await client.aio.models.generate_content(
@@ -203,6 +226,9 @@ class KeyPool:
                         )
                     finally:
                         await client.aio.aclose()
+                # Count the request only on success so a failed attempt
+                # doesn't consume daily budget before we know it worked.
+                st.spend()
                 st.reset()
                 return response
             except Exception as exc:  # noqa: BLE001 — classify then fail over

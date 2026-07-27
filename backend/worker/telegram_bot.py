@@ -124,6 +124,21 @@ async def _authorized(update: Update) -> bool:
     return bool(captured) and captured == str(update.effective_chat.id)
 
 
+def _log_unauthorized(update: Update, surface: str) -> None:
+    """Server-side record of an unauthorized-chat interaction (§ settled
+    silent-drop decision): no reply is sent to the chat — replying would
+    confirm to any chat reaching the token that a Wardress bot exists
+    behind it. We only log the chat id + timestamp for the operator."""
+    chat = update.effective_chat
+    chat_id = chat.id if chat is not None else "unknown"
+    log.info(
+        "Dropped %s from unauthorized chat %s at %s",
+        surface,
+        chat_id,
+        datetime.now(UTC).isoformat(),
+    )
+
+
 def _reply(update: Update):
     """The bot replies in plain text only — no markdown parsing surprises
     from site names, no emoji (product rule)."""
@@ -143,10 +158,9 @@ def _guarded(handler):
         send = _reply(update)
         try:
             if not await _authorized(update):
-                await send(
-                    "This bot is linked to a different chat (or none yet). "
-                    "Send /start from the owner's chat after configuring the token in Settings."
-                )
+                # Settled decision: silent drop for unauthorized chats — no
+                # reply (which would confirm the bot exists), just a log line.
+                _log_unauthorized(update, "slash command")
                 return
             await handler(update, context, send)
         except Exception:
@@ -163,13 +177,15 @@ def _guarded(handler):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    send = _reply(update)
     try:
         if update.effective_chat is None:
             return
         ok = await _capture_chat(update.effective_chat.id)
         if not ok:
-            await send("This bot is already linked to another chat.")
+            # Settled silent-drop decision: a /start from a second chat when
+            # one is already linked gets no reply (confirming the bot exists),
+            # only a server-side log line.
+            _log_unauthorized(update, "/start (second chat)")
             return
         # Attach the quick-action menu on connect; the buttons just send plain
         # text that flows through the same assistant turn as anything typed.
@@ -310,7 +326,7 @@ async def cmd_scan(update, context, send) -> None:
             )
         )
         if in_flight is not None:
-            if is_stale(in_flight.created_at):
+            if is_stale(in_flight.created_at, in_flight.started_at):
                 in_flight.status = ScanStatus.failed
                 in_flight.verdict = ScanVerdict.error
                 in_flight.error = "Scan never completed — superseded by a new scan"
@@ -547,10 +563,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     send = _reply(update)
     try:
         if not await _authorized(update):
-            await send(
-                "This bot is linked to a different chat (or none yet). "
-                "Send /start from the owner's chat after configuring the token in Settings."
-            )
+            # Settled decision: silent drop for unauthorized chats.
+            _log_unauthorized(update, "message")
             return
         text = (update.message.text if update.message else "") or ""
         text = text.strip()
@@ -609,7 +623,8 @@ async def on_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await query.answer()
         if not await _authorized(update):
-            await query.edit_message_text("This chat is not linked — action ignored.")
+            # Settled decision: silent drop — no reply, just a log line.
+            _log_unauthorized(update, "confirm callback")
             return
         data = query.data or ""
         verb, _, raw_id = data.partition(":")

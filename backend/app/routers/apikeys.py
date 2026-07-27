@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.apikeys import generate_api_key
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import SessionAuthContext
+from app.deps import AnalystUser, SessionAuthContext
 from app.models import ApiKey, utcnow
 from app.schemas import ApiKeyCreate, ApiKeyCreatedOut, ApiKeyOut
 
@@ -37,7 +37,12 @@ async def list_api_keys(ctx: SessionAuthContext, db: DB) -> list[ApiKeyOut]:
 
 
 @router.post("", response_model=ApiKeyCreatedOut, status_code=status.HTTP_201_CREATED)
-async def create_api_key(body: ApiKeyCreate, ctx: SessionAuthContext, db: DB) -> ApiKeyCreatedOut:
+async def create_api_key(
+    body: ApiKeyCreate,
+    ctx: SessionAuthContext,
+    _analyst: AnalystUser,
+    db: DB,
+) -> ApiKeyCreatedOut:
     raw, key_hash, prefix = generate_api_key()
     key = ApiKey(user_id=ctx.user.id, key_hash=key_hash, key_prefix=prefix, label=body.label)
     db.add(key)

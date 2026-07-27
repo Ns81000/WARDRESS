@@ -28,6 +28,22 @@ from worker.detection.types import PageData, layer_result
 # findings row (full artifacts remain on disk for manual inspection).
 MAX_EVIDENCE_ITEMS = 50
 
+
+def _safe_hostname(url: str | None) -> str:
+    """Lowercased hostname, or "" for a falsy/malformed URL.
+
+    `urlparse(...).hostname` raises ValueError on inputs like
+    "http://[::1" (unterminated IPv6 literal). Layer 3 must never lose the
+    whole layer to a single bad reference URL (rule 6 fail-safe), so any
+    parse failure degrades to an empty host rather than propagating.
+    """
+    if not url:
+        return ""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
 _HIDDEN_STYLE_MARKERS = ("display:none", "display: none", "visibility:hidden", "visibility: hidden")
 
 
@@ -218,9 +234,9 @@ def _collect_refs(page: PageData) -> dict[str, set[str]]:
 def _domains(urls: set[str]) -> set[str]:
     out = set()
     for u in urls:
-        host = urlparse(u).hostname
+        host = _safe_hostname(u)
         if host:
-            out.add(host.lower())
+            out.add(host)
     return out
 
 
@@ -235,7 +251,7 @@ def layer3_link_audit(baseline: PageData, current: PageData) -> dict:
     new_domains_weighted = 0.0
     total_new_refs = 0
     baseline_domains = _domains(set().union(*b_refs.values())) if any(b_refs.values()) else set()
-    page_host = (urlparse(current.final_url or baseline.final_url).hostname or "").lower()
+    page_host = _safe_hostname(current.final_url or baseline.final_url)
     known_domains = baseline_domains | ({page_host} if page_host else set())
 
     # form_action/script/iframe pointing at a never-seen domain is the
@@ -252,7 +268,7 @@ def layer3_link_audit(baseline: PageData, current: PageData) -> dict:
         added = sorted(c_refs[kind] - b_refs[kind])
         removed = sorted(b_refs[kind] - c_refs[kind])
         added_new_domain = sorted(
-            {u for u in added if (urlparse(u).hostname or "").lower() not in known_domains}
+            {u for u in added if _safe_hostname(u) not in known_domains}
         )
         total_new_refs += len(added)
         new_domains_weighted += weights[kind] * len(_domains(set(added_new_domain)))

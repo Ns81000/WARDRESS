@@ -76,7 +76,9 @@ def _redis_component() -> HealthComponent:
     try:
         import redis
 
-        client = redis.from_url(get_settings().redis_url, socket_connect_timeout=2)
+        client = redis.from_url(
+            get_settings().redis_url, socket_connect_timeout=2, socket_timeout=2
+        )
         try:
             client.ping()
             return HealthComponent(status="ok")
@@ -92,7 +94,9 @@ def _queue_depth() -> int | None:
     try:
         import redis
 
-        client = redis.from_url(get_settings().redis_url, socket_connect_timeout=2)
+        client = redis.from_url(
+            get_settings().redis_url, socket_connect_timeout=2, socket_timeout=2
+        )
         try:
             return int(client.llen("celery"))
         finally:
@@ -123,7 +127,9 @@ def _dispatch_heartbeat() -> datetime | None:
     try:
         import redis
 
-        client = redis.from_url(get_settings().redis_url, socket_connect_timeout=2)
+        client = redis.from_url(
+            get_settings().redis_url, socket_connect_timeout=2, socket_timeout=2
+        )
         try:
             raw = client.get("wardress:heartbeat:dispatch")
         finally:

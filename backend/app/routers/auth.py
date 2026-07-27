@@ -13,6 +13,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import record_audit
 from app.config import get_settings
 from app.db import get_db
 from app.deps import CurrentUser
@@ -92,6 +93,14 @@ async def login(
         user.password_hash = hash_password(body.password)
 
     raw_refresh = await _issue_refresh_token(db, user)
+    record_audit(
+        db,
+        actor=user,
+        action="auth.login",
+        target_type="user",
+        target_id=user.id,
+        target_label=user.email,
+    )
     await db.commit()
     _set_refresh_cookie(response, raw_refresh)
     settings = get_settings()

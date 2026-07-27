@@ -120,15 +120,14 @@ To update Wardress to the latest release while maintaining all database records,
 
 ### What the Updater Does (Behind the Scenes)
 1.  **Code Check**: Performs a fast-forward Git pull (`git pull --ff-only`) if a git remote is active.
-2.  **Changelog**: Reads and prints the first 40 lines of `CHANGELOG.md` to inform you of recent changes.
-3.  **Container Upgrades**: Rebuilds the application and worker images using the `--pull` parameter to grab base updates, sharing local cache layers where possible.
-4.  **Database Migrations**: Runs Alembic migrations to apply any structural changes to the database.
-5.  **Force Re-Creation**: Restarts the services. It specifically passes the `--force-recreate` flag to the Celery Beat and Telegram-bot containers.
+2.  **Container Upgrades**: Rebuilds the application and worker images using the `--pull` parameter to grab base updates, sharing local cache layers where possible.
+3.  **Database Migrations**: Runs Alembic migrations to apply any structural changes to the database.
+4.  **Force Re-Creation**: Restarts the services. It specifically passes the `--force-recreate` flag to the Celery Beat and Telegram-bot containers.
 
 > [!NOTE]
 > Re-creating the Celery Beat scheduler container is mandatory. Since it shares images with the worker container, Docker Compose would otherwise ignore image updates and keep running the old code in Celery Beat.
 
-6.  **Liveness Verification**: Monitors `/api/health/live` for 120 seconds to confirm services are online and responding.
+5.  **Liveness Verification**: Monitors `/api/health/live` for 120 seconds to confirm services are online and responding.
 
 ---
 
