@@ -1,5 +1,8 @@
 """Wardress API entrypoint."""
 
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -8,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
+from app.ai_startup import bootstrap_catalog, bootstrap_migration
 from app.config import get_settings
 from app.ratelimit import enforce_ip_rate_limit
 from app.routers import (
@@ -26,10 +30,28 @@ from app.routers import (
     users,
 )
 
+logger = logging.getLogger(__name__)
+
+_bg_tasks: set[asyncio.Task] = set()
+
+
+@asynccontextmanager
+async def lifespan(app: "FastAPI"):
+    # Migrate legacy AI settings before serving (fast, local) so the AI works
+    # on the first request; refresh the models.dev catalog in the background so
+    # a slow/absent network never delays startup (bundled snapshot covers it).
+    await bootstrap_migration()
+    task = asyncio.create_task(bootstrap_catalog())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    yield
+
+
 app = FastAPI(
     title="Wardress",
     description="Self-hosted website defacement detection and monitoring.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -139,6 +161,7 @@ app.include_router(artifacts.router)
 app.include_router(alerts.router)
 app.include_router(settings.router)
 app.include_router(settings.channels_router)
+app.include_router(settings.ai_router)
 app.include_router(reports.router)
 app.include_router(agent.router)
 

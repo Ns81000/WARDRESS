@@ -435,19 +435,27 @@ def test_prompts_embed_the_exact_model_inputs():
     assert "Example" in e and "flagged" in e and "HACKED BY" in e
 
 
-async def test_gemini_unavailable_without_key():
-    from app.llm import KeyPool, LLMUnavailable
+async def test_explanation_unavailable_without_provider(db_factory):
+    """No configured provider -> resolve_task returns None, and explain()
+    degrades to None (never a crash)."""
+    from app.llm import resolve_task
 
-    # An empty pool (no configured keys) degrades to LLMUnavailable, never a crash.
-    with pytest.raises(LLMUnavailable):
-        await KeyPool([]).generate("hello")
+    async with db_factory() as db:
+        assert await resolve_task(db, "explanation") is None
 
 
-async def test_ollama_unavailable_without_model():
-    from app.llm import LLMUnavailable, ollama_generate
+async def test_provider_with_no_keys_degrades(db_factory):
+    """A provider row with zero usable keys yields no deployments and cannot
+    answer — treated as unconfigured, never a crash."""
+    from app.ai_config import create_provider
+    from app.llm import provider_api_keys
 
-    with pytest.raises(LLMUnavailable):
-        await ollama_generate("http://localhost:11434/v1", None, "hello")
+    async with db_factory() as db:
+        p = await create_provider(
+            db, label="empty", provider_type="google", api_keys=[], base_url=None
+        )
+        await db.commit()
+        assert provider_api_keys(p) == []
 
 
 # --- bot helpers ---

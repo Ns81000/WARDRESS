@@ -10,6 +10,9 @@ from sqlalchemy import select
 
 from app.crypto import decrypt_json
 from app.models import (
+    AiProvider,
+    AiTaskAssignment,
+    AiTaskType,
     Alert,
     AlertDelivery,
     AlertDeliveryStatus,
@@ -346,6 +349,59 @@ async def test_ollama_settings_flow(client, auth_headers):
     )
     body = resp.json()
     assert body["configured"] is True and body["enabled"] is True and body["model"] == "llama3.2"
+
+
+async def test_legacy_gemini_adapter_writes_new_tables_not_app_settings(
+    client, auth_headers, db_factory
+):
+    """Regression guard (forensic finding C1): the DEPRECATED /settings/gemini
+    adapter must proxy into the unified ai_providers / ai_task_assignments
+    tables — never the old app_settings 'gemini' row — so the legacy API and the
+    new Settings UI can't diverge into two sources of truth."""
+    from app.llm import provider_api_keys
+
+    resp = await client.put(
+        "/api/settings/gemini", json={"api_key": "AIzaAdapterKey1234"}, headers=auth_headers
+    )
+    assert resp.status_code == 200 and resp.json()["configured"] is True
+
+    async with db_factory() as db:
+        # Landed in the NEW provider table, decryptable, carrying the real key.
+        providers = list(await db.scalars(select(AiProvider)))
+        assert len(providers) == 1
+        assert providers[0].provider_type == "google"
+        assert provider_api_keys(providers[0]) == ["AIzaAdapterKey1234"]
+        # The tool-capable default model is assigned to the explanation task.
+        expl = await db.scalar(
+            select(AiTaskAssignment).where(AiTaskAssignment.task == AiTaskType.explanation)
+        )
+        assert expl is not None and expl.provider_id == providers[0].id
+        # The OLD app_settings 'gemini' row is never written by the adapter.
+        assert await db.scalar(select(AppSetting).where(AppSetting.key == "gemini")) is None
+
+
+async def test_legacy_ollama_adapter_writes_new_tables_not_app_settings(
+    client, auth_headers, db_factory
+):
+    """Regression guard (forensic finding C1) for the Ollama adapter: it must
+    create an ai_providers row and assign the explanation task, never touching
+    the legacy app_settings 'ollama' row."""
+    resp = await client.put(
+        "/api/settings/ollama",
+        json={"enabled": True, "model": "llama3.2"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200 and resp.json()["configured"] is True
+
+    async with db_factory() as db:
+        providers = list(await db.scalars(select(AiProvider)))
+        assert len(providers) == 1 and providers[0].provider_type == "ollama"
+        expl = await db.scalar(
+            select(AiTaskAssignment).where(AiTaskAssignment.task == AiTaskType.explanation)
+        )
+        assert expl is not None and expl.provider_id == providers[0].id
+        assert expl.model_id == "llama3.2"
+        assert await db.scalar(select(AppSetting).where(AppSetting.key == "ollama")) is None
 
 
 async def test_settings_require_auth(client):

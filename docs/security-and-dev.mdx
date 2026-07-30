@@ -17,6 +17,8 @@ Wardress incorporates robust security mechanisms to protect both the platform it
   </Accordion>
   <Accordion title="Fernet Encryption at Rest">
     Integration secrets (like SMTP passwords, Telegram bot tokens, API keys, and Apprise Webhook URLs) are encrypted in the PostgreSQL database using a Fernet key (`CREDENTIALS_ENCRYPTION_KEY`). They are never exposed via the API.
+
+    **AI provider API keys** are Fernet-encrypted at rest exactly like other credentials and are never returned to the frontend (a masked hint only). The model catalog synced from [models.dev](https://models.dev/catalog.json) is public reference data and contains no secrets.
   </Accordion>
   <Accordion title="Hashed API Keys">
     API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted.

@@ -246,6 +246,11 @@ export interface BulkImportResult {
   results: BulkImportRowResult[]
 }
 
+export interface SelectOption {
+  value: string
+  label: string
+}
+
 export type BaselineStatus = "pending" | "capturing" | "ready" | "failed"
 export type ScanStatus = "pending" | "running" | "completed" | "failed"
 export type ScanVerdict = "clean" | "changed" | "flagged" | "error" | null
@@ -475,6 +480,60 @@ export interface TestResult {
   detail: string
 }
 
+// --- Unified AI layer (catalog-driven, any-provider) ---
+
+export interface CatalogProvider {
+  id: string
+  name: string
+  env: string[]
+  api_base: string | null
+  doc: string | null
+}
+
+export interface CatalogModel {
+  id: string // "provider/model"
+  provider_id: string
+  model_id: string
+  display_name: string
+  context_window: number | null
+  max_output_tokens: number | null
+  tool_calling: boolean
+  reasoning: boolean
+  cost_input: number | null
+  cost_output: number | null
+}
+
+export type AiValidationStatus = "unknown" | "ok" | "failed"
+
+export interface AiProvider {
+  id: string
+  label: string
+  provider_type: string
+  base_url: string | null
+  enabled: boolean
+  key_count: number
+  key_hints: string[]
+  validation_status: AiValidationStatus
+  validation_detail: string | null
+  validated_at: string | null
+}
+
+export type AiTask = "explanation" | "agent_chat"
+
+export interface AiTaskAssignment {
+  task: AiTask
+  provider_id: string | null
+  model_id: string | null
+  fallback_provider_id: string | null
+  fallback_model_id: string | null
+}
+
+export interface OllamaModel {
+  name: string
+  size: number | null
+  is_cloud: boolean
+}
+
 export type ChannelType = "email" | "telegram" | "apprise_url"
 
 export interface NotificationChannel {
@@ -570,6 +629,62 @@ export const putOllamaSettings = (body: {
   model?: string | null
 }) => api<OllamaSettings>("/api/settings/ollama", { method: "PUT", body: JSON.stringify(body) })
 export const testOllama = () => api<TestResult>("/api/settings/ollama/test", { method: "POST" })
+
+// --- Unified AI layer API ---
+
+export const listCatalogProviders = () =>
+  api<CatalogProvider[]>("/api/settings/ai/catalog/providers")
+export const listCatalogModels = (opts?: { providerId?: string; toolsOnly?: boolean }) => {
+  const params = new URLSearchParams()
+  if (opts?.providerId) params.set("provider_id", opts.providerId)
+  if (opts?.toolsOnly) params.set("tools_only", "true")
+  const qs = params.toString()
+  return api<CatalogModel[]>(`/api/settings/ai/catalog/models${qs ? `?${qs}` : ""}`)
+}
+export const listAiProviders = () => api<AiProvider[]>("/api/settings/ai/providers")
+export const createAiProvider = (body: {
+  label: string
+  provider_type: string
+  api_keys?: string[]
+  base_url?: string | null
+}) =>
+  api<AiProvider>("/api/settings/ai/providers", { method: "POST", body: JSON.stringify(body) })
+export const updateAiProvider = (
+  providerId: string,
+  body: {
+    label?: string
+    api_keys?: string[] | null
+    base_url?: string | null
+    enabled?: boolean
+  },
+) =>
+  api<AiProvider>(`/api/settings/ai/providers/${providerId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+export const deleteAiProvider = (providerId: string) =>
+  api<void>(`/api/settings/ai/providers/${providerId}`, { method: "DELETE" })
+export const validateAiProvider = (providerId: string, modelId: string) =>
+  api<TestResult>(`/api/settings/ai/providers/${providerId}/validate`, {
+    method: "POST",
+    body: JSON.stringify({ model_id: modelId }),
+  })
+export const listOllamaModels = (providerId: string) =>
+  api<OllamaModel[]>(`/api/settings/ai/providers/${providerId}/ollama-models`)
+export const getAiAssignments = () => api<AiTaskAssignment[]>("/api/settings/ai/assignments")
+export const putAiAssignment = (
+  task: AiTask,
+  body: {
+    provider_id: string | null
+    model_id: string | null
+    fallback_provider_id?: string | null
+    fallback_model_id?: string | null
+  },
+) =>
+  api<AiTaskAssignment>(`/api/settings/ai/assignments/${task}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  })
 
 export const listChannels = () => api<NotificationChannel[]>("/api/notification-channels")
 export const createChannel = (body: {
@@ -734,6 +849,75 @@ export async function streamAgentTurn(
         onEvent(JSON.parse(payload) as AgentStreamEvent)
       } catch {
         // A partial/garbled frame is skipped rather than killing the turn.
+      }
+    }
+  }
+}
+
+export interface OllamaPullEvent {
+  status?: string
+  total?: number
+  completed?: number
+  digest?: string
+  error?: string
+  done?: boolean
+}
+
+/*
+ * Stream an Ollama model download as Server-Sent Events, mirroring
+ * streamAgentTurn: POST with a fetch-stream reader so the Authorization
+ * header rides along, parse `data:` frames, refresh-once on 401.
+ */
+export async function streamOllamaPull(
+  providerId: string,
+  model: string,
+  onEvent: (event: OllamaPullEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const path = "/api/settings/ai/ollama/pull"
+  const doFetch = () =>
+    fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({ provider_id: providerId, model }),
+      signal,
+    })
+
+  let resp = await doFetch()
+  if (resp.status === 401) {
+    if (await refreshSession()) resp = await doFetch()
+    else {
+      onSessionExpired?.()
+      throw new ApiError(401, "Session expired")
+    }
+  }
+  if (!resp.ok) throw new ApiError(resp.status, await parseDetail(resp))
+  if (!resp.body) throw new ApiError(0, "The download stream is unavailable.")
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      const payload = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("")
+      if (!payload) continue
+      try {
+        onEvent(JSON.parse(payload) as OllamaPullEvent)
+      } catch {
+        // Skip a partial/garbled frame rather than killing the download view.
       }
     }
   }

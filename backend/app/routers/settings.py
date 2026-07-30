@@ -11,6 +11,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,12 +23,27 @@ from app.alerting import (
     smtp_settings_usable,
 )
 from app.audit import record_audit
-from app.config import get_settings
 from app.crypto import DecryptionError, decrypt_json, encrypt_json
 from app.db import get_db
 from app.deps import AdminUser
-from app.models import NotificationChannel, NotificationChannelType, User
+from app.models import (
+    AiProvider,
+    AiTaskType,
+    ModelCatalogEntry,
+    ModelCatalogProvider,
+    NotificationChannel,
+    NotificationChannelType,
+    User,
+)
 from app.schemas import (
+    AiProviderCreate,
+    AiProviderOut,
+    AiProviderUpdate,
+    AiProviderValidateRequest,
+    AiTaskAssignmentIn,
+    AiTaskAssignmentOut,
+    CatalogModelOut,
+    CatalogProviderOut,
     GeminiKeyIn,
     GeminiKeyOut,
     GeminiSettingsIn,
@@ -35,6 +51,8 @@ from app.schemas import (
     NotificationChannelCreate,
     NotificationChannelOut,
     NotificationChannelUpdate,
+    OllamaModelOut,
+    OllamaPullRequest,
     OllamaSettingsIn,
     OllamaSettingsOut,
     SettingsTestResult,
@@ -45,8 +63,6 @@ from app.schemas import (
     TelegramSettingsOut,
 )
 from app.settings_store import (
-    GEMINI_KEY,
-    OLLAMA_KEY,
     SMTP_KEY,
     TELEGRAM_KEY,
     delete_setting,
@@ -268,57 +284,114 @@ async def test_telegram(user: AdminUser, db: DB) -> SettingsTestResult:
     return SettingsTestResult(ok=ok, detail="Test message sent" if ok else detail)
 
 
-# --- Gemini (§8 optional cloud intelligence; multi-key rotation pool) ---
+# --- Unified AI provider layer (§8: catalog-driven, any-provider) --------
 #
-# Stored shape: {"keys": [{"id", "api_key", "label", "added_at"}], "enabled"}.
-# A legacy single-key row ({"api_key", "enabled"}) is normalized on first
-# write; readers (llm.keys_from_setting) accept both shapes forever.
+# The real configuration lives in ai_providers / ai_task_assignments (see
+# app/ai_config.py + app/llm.py). The /gemini and /ollama endpoints below are
+# thin, DEPRECATED adapters kept so older clients keep working through a
+# deprecation window; they mutate the same new tables. Removal plan: drop them
+# one minor release after the frontend ships the new AI settings UI (which uses
+# the /api/settings/ai/* endpoints exclusively).
+
+from app.ai_config import (  # noqa: E402
+    assignment_out as _assignment_out,
+)
+from app.ai_config import (  # noqa: E402 — grouped with the AI section it serves
+    create_provider,
+    delete_provider,
+    get_provider,
+    key_hints,
+    list_providers,
+    provider_out,
+    resolve_tool_capability,
+    set_assignment,
+    update_provider,
+)
+from app.ai_config import (  # noqa: E402
+    get_assignment as _get_assignment,
+)
+
+_SENTINEL_PROVIDER_TYPES = {"ollama", "openai_compatible"}
 
 
-def _normalize_gemini(g: dict | None) -> dict:
-    """Return the stored payload in pool shape (legacy rows auto-wrapped)."""
-    if not g:
-        return {"keys": [], "enabled": True}
-    if isinstance(g.get("keys"), list):
-        return {"keys": g["keys"], "enabled": bool(g.get("enabled", True))}
-    if g.get("api_key"):
-        return {
-            "keys": [{"id": uuid.uuid4().hex[:12], "api_key": g["api_key"], "label": "default"}],
-            "enabled": bool(g.get("enabled", True)),
-        }
-    return {"keys": [], "enabled": bool(g.get("enabled", True))}
+async def _provider_type_is_valid(db: DB, provider_type: str) -> bool:
+    if provider_type in _SENTINEL_PROVIDER_TYPES:
+        return True
+    return (
+        await db.scalar(
+            select(ModelCatalogProvider.id).where(ModelCatalogProvider.id == provider_type)
+        )
+        is not None
+    )
 
 
-def _gemini_out(g: dict) -> GeminiSettingsOut:
-    from app.llm import KeyPool, keys_from_setting
+async def _require_provider(db: DB, provider_id: str) -> AiProvider:
+    try:
+        pid = uuid.UUID(provider_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found") from None
+    provider = await get_provider(db, pid)
+    if provider is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
+    return provider
 
-    pool = KeyPool(keys_from_setting({**g, "enabled": True}))
-    keys = [GeminiKeyOut(**snap) for snap in pool.health_snapshot()]
+
+# --- Legacy Gemini adapters (DEPRECATED) ---------------------------------
+
+_LEGACY_GEMINI_MODEL = "gemini-flash-latest"
+
+
+async def _legacy_google_provider(db: DB) -> AiProvider | None:
+    return await db.scalar(
+        select(AiProvider)
+        .where(AiProvider.provider_type == "google")
+        .order_by(AiProvider.created_at)
+    )
+
+
+async def _ensure_task_assigned(db: DB, provider: AiProvider, model: str) -> None:
+    """Point any *unset* task at this provider, preserving the old "add a key
+    and the AI just works" behaviour. gemini-flash-latest is tool-capable, so
+    both explanation and agent_chat are eligible."""
+    for task in (AiTaskType.explanation, AiTaskType.agent_chat):
+        current = await _get_assignment(db, task)
+        if current is None or current.provider_id is None:
+            await set_assignment(db, task=task, provider_id=provider.id, model_id=model)
+
+
+def _gemini_out_from_provider(provider: AiProvider | None) -> GeminiSettingsOut:
+    if provider is None:
+        return GeminiSettingsOut(configured=False, model=_LEGACY_GEMINI_MODEL)
+    hints = key_hints(provider)
+    keys = [
+        GeminiKeyOut(id=str(i), label="", hint=h, health="healthy", used_today=0, daily_budget=0)
+        for i, h in enumerate(hints)
+    ]
     return GeminiSettingsOut(
-        configured=bool(g["keys"]),
-        enabled=bool(g.get("enabled", True)) and bool(g["keys"]),
-        key_hint=keys[0].hint if keys else None,
-        model=get_settings().gemini_model,
+        configured=bool(hints),
+        enabled=provider.enabled and bool(hints),
+        key_hint=hints[0] if hints else None,
+        model=_LEGACY_GEMINI_MODEL,
         keys=keys,
     )
 
 
-@router.get("/gemini", response_model=GeminiSettingsOut)
+@router.get("/gemini", response_model=GeminiSettingsOut, deprecated=True)
 async def get_gemini(user: AdminUser, db: DB) -> GeminiSettingsOut:
-    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
-    if not g["keys"]:
-        return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
-    return _gemini_out(g)
+    return _gemini_out_from_provider(await _legacy_google_provider(db))
 
 
-@router.put("/gemini", response_model=GeminiSettingsOut)
+@router.put("/gemini", response_model=GeminiSettingsOut, deprecated=True)
 async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiSettingsOut:
-    """Legacy single-key PUT, kept so older clients work: sets/clears the
-    whole pool. New clients use POST/DELETE /gemini/keys instead."""
-    existing = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    """DEPRECATED single-key setter. Prefer POST /api/settings/ai/providers."""
+    from app.llm import provider_api_keys
+
+    provider = await _legacy_google_provider(db)
     if body.api_key is not None:
         key = body.api_key.strip()
         if not key:
+            if provider is not None:
+                await delete_provider(db, provider)
             record_audit(
                 db,
                 actor=user,
@@ -328,10 +401,18 @@ async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiS
                 target_label="Gemini settings",
                 after={"configured": False},
             )
-            await delete_setting(db, GEMINI_KEY)
-            return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
-        existing["keys"] = [{"id": uuid.uuid4().hex[:12], "api_key": key, "label": "default"}]
-    existing["enabled"] = body.enabled
+            await db.commit()
+            return GeminiSettingsOut(configured=False, model=_LEGACY_GEMINI_MODEL)
+        if provider is None:
+            provider = await create_provider(
+                db, label="Gemini", provider_type="google", api_keys=[key], base_url=None
+            )
+        else:
+            await update_provider(db, provider, api_keys=[key])
+    if provider is not None:
+        await update_provider(db, provider, enabled=body.enabled)
+        if body.enabled and provider_api_keys(provider):
+            await _ensure_task_assigned(db, provider, _LEGACY_GEMINI_MODEL)
     record_audit(
         db,
         actor=user,
@@ -339,29 +420,36 @@ async def put_gemini(body: GeminiSettingsIn, user: AdminUser, db: DB) -> GeminiS
         target_type="settings",
         target_id="gemini",
         target_label="Gemini settings",
-        after={"configured": bool(existing["keys"]), "enabled": body.enabled},
+        after={"configured": provider is not None, "enabled": body.enabled},
     )
-    await save_setting(db, GEMINI_KEY, existing)
-    return await get_gemini(user, db)
+    await db.commit()
+    return _gemini_out_from_provider(provider)
 
 
-@router.post("/gemini/keys", response_model=GeminiSettingsOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/gemini/keys",
+    response_model=GeminiSettingsOut,
+    status_code=status.HTTP_201_CREATED,
+    deprecated=True,
+)
 async def add_gemini_key(body: GeminiKeyIn, user: AdminUser, db: DB) -> GeminiSettingsOut:
-    """Add one key to the rotation pool (duplicates rejected)."""
-    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
+    """DEPRECATED. Add one key to the Gemini provider's rotation pool."""
+    from app.llm import provider_api_keys
+
+    provider = await _legacy_google_provider(db)
+    existing = provider_api_keys(provider) if provider else []
     key = body.api_key.strip()
-    if any(k.get("api_key") == key for k in g["keys"]):
+    if key in existing:
         raise HTTPException(status.HTTP_409_CONFLICT, "That key is already in the pool")
-    if len(g["keys"]) >= 10:
+    if len(existing) >= 10:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Key pool is capped at 10 keys")
-    g["keys"].append(
-        {
-            "id": uuid.uuid4().hex[:12],
-            "api_key": key,
-            "label": body.label.strip() or f"key {len(g['keys']) + 1}",
-        }
-    )
-    g["enabled"] = True
+    if provider is None:
+        provider = await create_provider(
+            db, label="Gemini", provider_type="google", api_keys=[key], base_url=None
+        )
+    else:
+        await update_provider(db, provider, api_keys=[*existing, key])
+    await _ensure_task_assigned(db, provider, _LEGACY_GEMINI_MODEL)
     record_audit(
         db,
         actor=user,
@@ -369,19 +457,26 @@ async def add_gemini_key(body: GeminiKeyIn, user: AdminUser, db: DB) -> GeminiSe
         target_type="settings",
         target_id="gemini",
         target_label="Gemini key pool",
-        after={"pool_size": len(g["keys"])},
+        after={"pool_size": len(provider_api_keys(provider))},
     )
-    await save_setting(db, GEMINI_KEY, g)
-    return _gemini_out(g)
+    await db.commit()
+    return _gemini_out_from_provider(provider)
 
 
-@router.delete("/gemini/keys/{key_id}", response_model=GeminiSettingsOut)
+@router.delete("/gemini/keys/{key_id}", response_model=GeminiSettingsOut, deprecated=True)
 async def remove_gemini_key(key_id: str, user: AdminUser, db: DB) -> GeminiSettingsOut:
-    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
-    remaining = [k for k in g["keys"] if k.get("id") != key_id]
-    if len(remaining) == len(g["keys"]):
+    """DEPRECATED. Remove one key (identified by its list index)."""
+    from app.llm import provider_api_keys
+
+    provider = await _legacy_google_provider(db)
+    existing = provider_api_keys(provider) if provider else []
+    try:
+        idx = int(key_id)
+        remaining = [k for i, k in enumerate(existing) if i != idx]
+    except ValueError:
+        remaining = existing
+    if provider is None or len(remaining) == len(existing):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Key not found in the pool")
-    g["keys"] = remaining
     record_audit(
         db,
         actor=user,
@@ -389,57 +484,81 @@ async def remove_gemini_key(key_id: str, user: AdminUser, db: DB) -> GeminiSetti
         target_type="settings",
         target_id="gemini",
         target_label="Gemini key pool",
-        after={"pool_size": len(g["keys"])},
+        after={"pool_size": len(remaining)},
     )
-    if g["keys"]:
-        await save_setting(db, GEMINI_KEY, g)
-        return _gemini_out(g)
-    await delete_setting(db, GEMINI_KEY)
-    return GeminiSettingsOut(configured=False, model=get_settings().gemini_model)
+    if remaining:
+        await update_provider(db, provider, api_keys=remaining)
+    else:
+        await delete_provider(db, provider)
+        provider = None
+    await db.commit()
+    return _gemini_out_from_provider(provider)
 
 
-@router.post("/gemini/test", response_model=SettingsTestResult)
+@router.post("/gemini/test", response_model=SettingsTestResult, deprecated=True)
 async def test_gemini(user: AdminUser, db: DB) -> SettingsTestResult:
-    """One cheap gemini-flash-latest call through the rotation pool to
-    confirm at least one stored key works (§7)."""
-    from app.llm import KeyPool, LLMUnavailable, keys_from_setting
+    """DEPRECATED. One cheap live call through the Gemini provider."""
+    from app.llm import validate_provider_call
 
-    g = _normalize_gemini(await load_setting(db, GEMINI_KEY))
-    keys = keys_from_setting({**g, "enabled": True})
-    if not keys:
+    provider = await _legacy_google_provider(db)
+    if provider is None or not key_hints(provider):
         return SettingsTestResult(ok=False, detail="No Gemini API keys configured yet")
-    try:
-        await KeyPool(keys).generate("Reply with the single word: ok")
-        return SettingsTestResult(
-            ok=True, detail=f"Pool works — {get_settings().gemini_model} answered"
-        )
-    except LLMUnavailable as exc:
-        return SettingsTestResult(ok=False, detail=f"Gemini test failed: {exc}")
+    ok, detail = await validate_provider_call(provider, _LEGACY_GEMINI_MODEL)
+    return SettingsTestResult(ok=ok, detail=detail)
 
 
-# --- Ollama (§8 optional local LLM) ---
+# --- Legacy Ollama adapters (DEPRECATED) ---------------------------------
+
+from app.ai_ollama import DEFAULT_OLLAMA_BASE_URL  # noqa: E402
 
 
-@router.get("/ollama", response_model=OllamaSettingsOut)
+async def _legacy_ollama_provider(db: DB) -> AiProvider | None:
+    return await db.scalar(
+        select(AiProvider)
+        .where(AiProvider.provider_type == "ollama")
+        .order_by(AiProvider.created_at)
+    )
+
+
+@router.get("/ollama", response_model=OllamaSettingsOut, deprecated=True)
 async def get_ollama(user: AdminUser, db: DB) -> OllamaSettingsOut:
-    o = await load_setting(db, OLLAMA_KEY)
-    if not o:
-        return OllamaSettingsOut(configured=False, base_url=get_settings().ollama_base_url)
+    provider = await _legacy_ollama_provider(db)
+    assignment = await _get_assignment(db, AiTaskType.explanation)
+    model = (
+        assignment.model_id
+        if assignment and provider and assignment.provider_id == provider.id
+        else None
+    )
+    if provider is None:
+        return OllamaSettingsOut(configured=False, base_url=DEFAULT_OLLAMA_BASE_URL)
     return OllamaSettingsOut(
         configured=True,
-        enabled=bool(o.get("enabled")),
-        base_url=o.get("base_url") or get_settings().ollama_base_url,
-        model=o.get("model"),
+        enabled=provider.enabled,
+        base_url=provider.base_url or DEFAULT_OLLAMA_BASE_URL,
+        model=model,
     )
 
 
-@router.put("/ollama", response_model=OllamaSettingsOut)
+@router.put("/ollama", response_model=OllamaSettingsOut, deprecated=True)
 async def put_ollama(body: OllamaSettingsIn, user: AdminUser, db: DB) -> OllamaSettingsOut:
-    value = {
-        "enabled": body.enabled,
-        "base_url": (body.base_url or "").strip() or get_settings().ollama_base_url,
-        "model": (body.model or "").strip() or None,
-    }
+    """DEPRECATED. Prefer POST /api/settings/ai/providers with type 'ollama'."""
+    provider = await _legacy_ollama_provider(db)
+    base = (body.base_url or "").strip() or DEFAULT_OLLAMA_BASE_URL
+    model = (body.model or "").strip() or None
+    if provider is None:
+        provider = await create_provider(
+            db, label="Ollama", provider_type="ollama", api_keys=[], base_url=base
+        )
+    else:
+        await update_provider(db, provider, base_url=base, enabled=body.enabled)
+    if body.enabled and model:
+        # Ollama drives explanation only (agent chat needs a tool-capable model
+        # the operator opts in explicitly through the new UI).
+        current = await _get_assignment(db, AiTaskType.explanation)
+        if current is None or current.provider_id is None or current.provider_id == provider.id:
+            await set_assignment(
+                db, task=AiTaskType.explanation, provider_id=provider.id, model_id=model
+            )
     record_audit(
         db,
         actor=user,
@@ -447,23 +566,301 @@ async def put_ollama(body: OllamaSettingsIn, user: AdminUser, db: DB) -> OllamaS
         target_type="settings",
         target_id="ollama",
         target_label="Ollama settings",
-        after={"enabled": value["enabled"], "base_url": value["base_url"], "model": value["model"]},
+        after={"enabled": body.enabled, "base_url": base, "model": model},
     )
-    await save_setting(db, OLLAMA_KEY, value)
+    await db.commit()
     return await get_ollama(user, db)
 
 
-@router.post("/ollama/test", response_model=SettingsTestResult)
+@router.post("/ollama/test", response_model=SettingsTestResult, deprecated=True)
 async def test_ollama(user: AdminUser, db: DB) -> SettingsTestResult:
-    o = await load_setting(db, OLLAMA_KEY)
-    if not o or not o.get("enabled"):
-        return SettingsTestResult(ok=False, detail="Ollama is not enabled yet — save it first")
-    from app.llm import ollama_test_call
+    """DEPRECATED. Live call through the Ollama provider's explanation model."""
+    from app.llm import validate_provider_call
 
-    ok, detail = await ollama_test_call(
-        o.get("base_url") or get_settings().ollama_base_url, o.get("model")
-    )
+    provider = await _legacy_ollama_provider(db)
+    assignment = await _get_assignment(db, AiTaskType.explanation)
+    if provider is None or not provider.enabled:
+        return SettingsTestResult(ok=False, detail="Ollama is not enabled yet — save it first")
+    if assignment is None or assignment.provider_id != provider.id or not assignment.model_id:
+        return SettingsTestResult(ok=False, detail="No Ollama model configured yet")
+    ok, detail = await validate_provider_call(provider, assignment.model_id)
     return SettingsTestResult(ok=ok, detail=detail)
+
+
+# --- New unified AI settings API (/api/settings/ai/*) --------------------
+
+ai_router = APIRouter(prefix="/api/settings/ai", tags=["settings", "ai"])
+
+
+@ai_router.get("/catalog/providers", response_model=list[CatalogProviderOut])
+async def list_catalog_providers(user: AdminUser, db: DB) -> list[CatalogProviderOut]:
+    """The models.dev provider catalog (searchable add-provider dropdown), with
+    the two non-catalog entries (Ollama, custom OpenAI-compatible) prepended."""
+    rows = await db.scalars(
+        select(ModelCatalogProvider).order_by(ModelCatalogProvider.name)
+    )
+    out = [
+        CatalogProviderOut(id="ollama", name="Ollama (local / cloud)"),
+        CatalogProviderOut(id="openai_compatible", name="Custom (OpenAI-compatible)"),
+    ]
+    out += [
+        CatalogProviderOut(id=r.id, name=r.name, env=r.env or [], api_base=r.api_base, doc=r.doc)
+        for r in rows
+    ]
+    return out
+
+
+@ai_router.get("/catalog/models", response_model=list[CatalogModelOut])
+async def list_catalog_models(
+    user: AdminUser,
+    db: DB,
+    provider_id: str | None = None,
+    tools_only: bool = False,
+) -> list[CatalogModelOut]:
+    q = select(ModelCatalogEntry)
+    if provider_id:
+        q = q.where(ModelCatalogEntry.provider_id == provider_id)
+    if tools_only:
+        q = q.where(ModelCatalogEntry.tool_calling.is_(True))
+    rows = await db.scalars(q.order_by(ModelCatalogEntry.display_name))
+    return [
+        CatalogModelOut(
+            id=r.id,
+            provider_id=r.provider_id,
+            model_id=r.model_id,
+            display_name=r.display_name,
+            context_window=r.context_window,
+            max_output_tokens=r.max_output_tokens,
+            tool_calling=r.tool_calling,
+            reasoning=r.reasoning,
+            cost_input=r.cost_input,
+            cost_output=r.cost_output,
+        )
+        for r in rows
+    ]
+
+
+@ai_router.get("/providers", response_model=list[AiProviderOut])
+async def list_ai_providers(user: AdminUser, db: DB) -> list[AiProviderOut]:
+    return [AiProviderOut(**provider_out(p)) for p in await list_providers(db)]
+
+
+@ai_router.post(
+    "/providers", response_model=AiProviderOut, status_code=status.HTTP_201_CREATED
+)
+async def create_ai_provider(
+    body: AiProviderCreate, user: AdminUser, db: DB
+) -> AiProviderOut:
+    if not await _provider_type_is_valid(db, body.provider_type):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Unknown provider type '{body.provider_type}'",
+        )
+    if body.provider_type == "openai_compatible" and not (body.base_url or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "A custom OpenAI-compatible provider requires a base URL",
+        )
+    provider = await create_provider(
+        db,
+        label=body.label,
+        provider_type=body.provider_type,
+        api_keys=body.api_keys,
+        base_url=body.base_url,
+    )
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.provider_create",
+        target_type="ai_provider",
+        target_id=str(provider.id),
+        target_label=provider.label,
+        after={"provider_type": provider.provider_type, "key_count": len(body.api_keys)},
+    )
+    await db.commit()
+    return AiProviderOut(**provider_out(provider))
+
+
+@ai_router.patch("/providers/{provider_id}", response_model=AiProviderOut)
+async def update_ai_provider(
+    provider_id: str, body: AiProviderUpdate, user: AdminUser, db: DB
+) -> AiProviderOut:
+    provider = await _require_provider(db, provider_id)
+    await update_provider(
+        db,
+        provider,
+        label=body.label,
+        api_keys=body.api_keys,
+        base_url=body.base_url,
+        enabled=body.enabled,
+    )
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.provider_update",
+        target_type="ai_provider",
+        target_id=str(provider.id),
+        target_label=provider.label,
+        after={"enabled": provider.enabled, "keys_changed": body.api_keys is not None},
+    )
+    await db.commit()
+    return AiProviderOut(**provider_out(provider))
+
+
+@ai_router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ai_provider(provider_id: str, user: AdminUser, db: DB) -> None:
+    provider = await _require_provider(db, provider_id)
+    label = provider.label
+    await delete_provider(db, provider)
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.provider_delete",
+        target_type="ai_provider",
+        target_id=provider_id,
+        target_label=label,
+        after={"deleted": True},
+    )
+    await db.commit()
+
+
+@ai_router.post("/providers/{provider_id}/validate", response_model=SettingsTestResult)
+async def validate_ai_provider(
+    provider_id: str, body: AiProviderValidateRequest, user: AdminUser, db: DB
+) -> SettingsTestResult:
+    """A real, cheap completion to confirm the provider+model works; the result
+    is persisted on the provider so the UI can show ok/failed state."""
+    from datetime import UTC, datetime
+
+    from app.llm import validate_provider_call
+
+    provider = await _require_provider(db, provider_id)
+    ok, detail = await validate_provider_call(provider, body.model_id)
+    provider.validation_status = "ok" if ok else "failed"
+    provider.validation_detail = detail[:500]
+    provider.validated_at = datetime.now(UTC)
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.provider_validate",
+        target_type="ai_provider",
+        target_id=str(provider.id),
+        target_label=provider.label,
+        after={"ok": ok, "model": body.model_id},
+    )
+    await db.commit()
+    return SettingsTestResult(ok=ok, detail=detail)
+
+
+@ai_router.get("/providers/{provider_id}/ollama-models", response_model=list[OllamaModelOut])
+async def list_ollama_models(provider_id: str, user: AdminUser, db: DB) -> list[OllamaModelOut]:
+    from app.ai_ollama import OllamaError, list_models
+    from app.llm import provider_api_keys
+
+    provider = await _require_provider(db, provider_id)
+    if provider.provider_type != "ollama":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an Ollama provider")
+    keys = provider_api_keys(provider)
+    try:
+        models = await list_models(provider.base_url, keys[0] if keys else None)
+    except OllamaError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
+    return [OllamaModelOut(**m) for m in models]
+
+
+@ai_router.get("/assignments", response_model=list[AiTaskAssignmentOut])
+async def get_assignments(user: AdminUser, db: DB) -> list[AiTaskAssignmentOut]:
+    return [
+        AiTaskAssignmentOut(**await _assignment_out(db, task))
+        for task in (AiTaskType.explanation, AiTaskType.agent_chat)
+    ]
+
+
+@ai_router.put("/assignments/{task}", response_model=AiTaskAssignmentOut)
+async def put_assignment(
+    task: str, body: AiTaskAssignmentIn, user: AdminUser, db: DB
+) -> AiTaskAssignmentOut:
+    try:
+        task_type = AiTaskType(task)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown task") from None
+
+    provider = None
+    if body.provider_id:
+        provider = await _require_provider(db, body.provider_id)
+    if body.provider_id and not body.model_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A model is required")
+
+    # Tool-calling gate: a non-tool model can never back agent chat.
+    if task_type == AiTaskType.agent_chat and provider is not None and body.model_id:
+        capable = await resolve_tool_capability(db, provider, body.model_id)
+        if capable is False:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"{body.model_id} does not support tool calling, so it can't back agent chat",
+            )
+
+    fb_provider_id = None
+    if body.fallback_provider_id:
+        fb = await _require_provider(db, body.fallback_provider_id)
+        fb_provider_id = fb.id
+    await set_assignment(
+        db,
+        task=task_type,
+        provider_id=provider.id if provider else None,
+        model_id=body.model_id,
+        fallback_provider_id=fb_provider_id,
+        fallback_model_id=body.fallback_model_id,
+    )
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.assign",
+        target_type="ai_task",
+        target_id=task,
+        target_label=f"AI task: {task}",
+        after={"provider_id": body.provider_id, "model_id": body.model_id},
+    )
+    await db.commit()
+    return AiTaskAssignmentOut(**await _assignment_out(db, task_type))
+
+
+@ai_router.post("/ollama/pull")
+async def pull_ollama_model(body: OllamaPullRequest, user: AdminUser, db: DB) -> StreamingResponse:
+    """Stream an Ollama model download (`/api/pull`) to the client as SSE with
+    live progress. Local-download UX only — unrelated to cloud models."""
+    import json as _json
+
+    from app.ai_ollama import OllamaError, pull_stream
+    from app.llm import provider_api_keys
+
+    provider = await _require_provider(db, body.provider_id)
+    if provider.provider_type != "ollama":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an Ollama provider")
+    keys = provider_api_keys(provider)
+    base_url = provider.base_url
+    model = body.model
+    api_key = keys[0] if keys else None
+    record_audit(
+        db,
+        actor=user,
+        action="settings.ai.ollama_pull",
+        target_type="ai_provider",
+        target_id=str(provider.id),
+        target_label=provider.label,
+        after={"model": model},
+    )
+    await db.commit()
+
+    async def _events():
+        try:
+            async for chunk in pull_stream(base_url, model, api_key):
+                yield f"data: {_json.dumps(chunk)}\n\n"
+            yield f"data: {_json.dumps({'status': 'success', 'done': True})}\n\n"
+        except OllamaError as exc:
+            yield f"data: {_json.dumps({'status': 'error', 'error': str(exc), 'done': True})}\n\n"
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 # --- Notification channels (§6/§8) ---

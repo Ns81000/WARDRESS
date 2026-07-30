@@ -698,3 +698,122 @@ class AgentPendingAction(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+# --- Unified AI provider layer (catalog-driven, any-provider) -------------
+#
+# Replaces the two-provider (Gemini pool + single Ollama) model with a
+# catalog-driven design: the model catalog is synced from models.dev; the
+# operator configures one or more providers (each a models.dev provider id,
+# `ollama`, or a generic OpenAI-compatible endpoint) with encrypted keys;
+# and each AI *task* (explanation / agent chat) is pointed at one model with
+# an optional cross-provider fallback. Every provider call goes through one
+# litellm.Router call-site (see app/llm.py).
+
+
+class AiTaskType(enum.StrEnum):
+    """The two AI use-cases a model can be assigned to. `agent_chat` requires
+    a tool-calling-capable model (the function-calling assistant); `explanation`
+    is plain text generation (incident explain + worker escalation + summaries)."""
+
+    explanation = "explanation"
+    agent_chat = "agent_chat"
+
+
+class ModelCatalogProvider(Base):
+    """Provider metadata synced from models.dev `catalog.json` (`providers`).
+    Reference data only — no secrets. Powers the "add provider" dropdown and
+    the models.dev-id -> litellm-prefix / default-base-url resolution."""
+
+    __tablename__ = "model_catalog_providers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # models.dev provider id
+    name: Mapped[str] = mapped_column(String(120))
+    # models.dev `env` list (the env var names that provider reads) and the
+    # optional default `api` base URL, kept for display/bootstrap hints.
+    env: Mapped[dict] = mapped_column(JSONDict, default=dict)
+    api_base: Mapped[str | None] = mapped_column(String(512), default=None)
+    doc: Mapped[str | None] = mapped_column(String(512), default=None)
+    npm: Mapped[str | None] = mapped_column(String(120), default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ModelCatalogEntry(Base):
+    """One model synced from models.dev. `id` is the fully-qualified
+    "<provider>/<model>" key. Capability flags gate task assignment
+    (`tool_calling` decides agent-chat eligibility); pricing/limits are shown
+    in the picker. Reference data only — refreshed on startup + on a schedule
+    (worker/beat_tasks.py) with a bundled offline snapshot as the fallback."""
+
+    __tablename__ = "model_catalog"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)  # "provider/model"
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(160))
+    display_name: Mapped[str] = mapped_column(String(200))
+    context_window: Mapped[int | None] = mapped_column(Integer, default=None)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    tool_calling: Mapped[bool] = mapped_column(Boolean, default=False)
+    reasoning: Mapped[bool] = mapped_column(Boolean, default=False)
+    # USD per 1M tokens as published by models.dev; None when the model has no
+    # listed price (e.g. open-weight entries).
+    cost_input: Mapped[float | None] = mapped_column(Float, default=None)
+    cost_output: Mapped[float | None] = mapped_column(Float, default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AiProvider(Base):
+    """One operator-configured provider instance. `provider_type` is a
+    models.dev provider id, `ollama`, or `openai_compatible` (generic custom
+    endpoint). `credentials_encrypted` is a Fernet-encrypted JSON blob
+    (`{"api_keys": [...]}` — one or many keys for rotation, matching the old
+    Gemini pool's resilience) using app/crypto.py exactly. Secrets are never
+    returned to the frontend (hint-only, like the old `_key_hint`)."""
+
+    __tablename__ = "ai_providers"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    label: Mapped[str] = mapped_column(String(120))
+    provider_type: Mapped[str] = mapped_column(String(64), index=True)
+    # Fernet-encrypted {"api_keys": [str, ...]}; None when the provider needs
+    # no key (a local Ollama daemon).
+    credentials_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
+    base_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Live-validation state surfaced to the UI: "unknown" | "ok" | "failed".
+    validation_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    validation_detail: Mapped[str | None] = mapped_column(String(500), default=None)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AiTaskAssignment(Base):
+    """Which model serves each AI task, with an optional ordered fallback
+    across providers/models (wired into the litellm.Router fallback list).
+    One row per task; `task` is the primary key so assignment is a singleton
+    per use-case. Assigning a model is what "enables" it — there is no
+    separate enabled-models table (avoids a redundant second source of truth)."""
+
+    __tablename__ = "ai_task_assignments"
+
+    task: Mapped[AiTaskType] = mapped_column(
+        _enum(AiTaskType, "ai_task_type"), primary_key=True
+    )
+    provider_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_providers.id", ondelete="CASCADE"), default=None
+    )
+    model_id: Mapped[str | None] = mapped_column(String(160), default=None)
+    fallback_provider_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_providers.id", ondelete="SET NULL"), default=None
+    )
+    fallback_model_id: Mapped[str | None] = mapped_column(String(160), default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

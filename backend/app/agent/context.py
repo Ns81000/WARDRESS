@@ -56,9 +56,10 @@ def build_system_instruction(user, surface: str) -> str:
 
 
 async def build_contents(db: AsyncSession, conversation: AgentConversation, user_message: str):
-    """Assemble the `contents` list for generate_content: optional rolling
-    summary primer, the recent window (minus the just-persisted user turn),
-    then the new user message. Plain dicts — the SDK accepts them."""
+    """Assemble the conversation `messages` (OpenAI chat shape) for the model:
+    optional rolling-summary primer, the recent window (minus the
+    just-persisted user turn), then the new user message. The engine prepends
+    the system message. Plain dicts — provider-agnostic via litellm."""
     window, _overflowed = await load_window(db, conversation)
     # The engine persists the user turn before calling us; drop it from the
     # window so it isn't doubled.
@@ -97,24 +98,21 @@ async def load_window(db: AsyncSession, conversation: AgentConversation) -> tupl
 
 
 def assemble_contents(summary: str | None, window: list[dict], user_message: str) -> list[dict]:
-    """Pure assembly of the `contents` list: optional summary primer, the
-    recent window, then the new user message. Uses plain dicts
-    ({'role', 'parts': [{'text': ...}]}) — the SDK accepts them and tests
-    don't need SDK types."""
-    contents: list[dict] = []
+    """Pure assembly of the chat `messages` list (OpenAI shape): optional
+    summary primer, the recent window, then the new user message. Plain dicts
+    ({'role': 'user'|'assistant', 'content': ...}) so litellm can send them to
+    any provider and tests don't need SDK types."""
+    messages: list[dict] = []
     if summary:
-        contents.append(
-            {
-                "role": "user",
-                "parts": [{"text": f"(Conversation so far, summarized: {_clip(summary)})"}],
-            }
+        messages.append(
+            {"role": "user", "content": f"(Conversation so far, summarized: {_clip(summary)})"}
         )
-        contents.append({"role": "model", "parts": [{"text": "Understood."}]})
+        messages.append({"role": "assistant", "content": "Understood."})
     for msg in window:
-        role = "model" if msg["role"] == "assistant" else "user"
-        contents.append({"role": role, "parts": [{"text": msg["text"]}]})
-    contents.append({"role": "user", "parts": [{"text": _clip(user_message)}]})
-    return contents
+        role = "assistant" if msg["role"] == "assistant" else "user"
+        messages.append({"role": role, "content": msg["text"]})
+    messages.append({"role": "user", "content": _clip(user_message)})
+    return messages
 
 
 def build_summary_prompt(previous_summary: str | None, aged_out: list[dict]) -> str:
@@ -153,18 +151,18 @@ async def _aged_out_turns(db: AsyncSession, conversation: AgentConversation) -> 
     return [{"role": r.role.value, "text": _clip(r.content)} for r in reversed(rows) if r.content]
 
 
-async def maybe_summarize(db: AsyncSession, conversation: AgentConversation, pool) -> None:
+async def maybe_summarize(db: AsyncSession, conversation: AgentConversation, llm_task) -> None:
     """Collapse turns that have aged out of the live window into the rolling
     one-paragraph summary. Lazy: only runs once history overflows the window,
     and best-effort — a failed summary just leaves the prior one in place, it
-    never fails the turn. Does not commit (the caller does). `pool` is the
-    Gemini KeyPool; regeneration is one short, cheap completion."""
+    never fails the turn. Does not commit (the caller does). `llm_task` is the
+    resolved agent-chat task; regeneration is one short, cheap completion."""
     aged_out = await _aged_out_turns(db, conversation)
     if not aged_out:
         return
     prompt = build_summary_prompt(conversation.summary, aged_out)
     try:
-        summary = (await pool.generate(prompt) or "").strip()
+        summary = (await llm_task.generate(prompt) or "").strip()
     except Exception:  # noqa: BLE001 — summary is best-effort context compression
         logger.warning("Rolling summary regeneration failed; keeping prior summary")
         return

@@ -7,8 +7,12 @@ icon: "robot"
 Wardress ships a conversational AI agent that helps operators analyze incidents and manage the system. It is an interface *over* the platform: every tool the agent can call runs the same domain logic as the REST routers, so RBAC, SSRF protection, audit logging, and detection semantics stay identical across surfaces. Nothing the model emits is trusted — role and confirmation gating happen in the dispatcher, not in the declarations the model sees.
 
 <Info>
-  Source: `backend/app/agent/` (`engine.py`, `tools.py`, `guard.py`, `context.py`). The model is Gemini (configurable in Settings), with optional offline Ollama.
+  Source: `backend/app/agent/` (`engine.py`, `tools.py`, `guard.py`, `context.py`). The assistant runs on **any tool-calling-capable model** assigned to the **Agent Chat** task in **Settings → AI providers** — any cloud provider (OpenAI, Groq, OpenRouter, Cerebras, Google/Gemini, Anthropic, Mistral, …) or a tool-capable Ollama model, local or cloud.
 </Info>
+
+<Note>
+  A model **without** tool-calling support cannot back the assistant — the UI hides or disables the Agent Chat assignment for such models. If no agent-capable model is configured, the assistant replies with a clear prompt to assign a tool-capable model in **Settings → AI providers**.
+</Note>
 
 ## Operating surfaces
 

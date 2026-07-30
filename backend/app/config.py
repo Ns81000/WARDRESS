@@ -59,13 +59,13 @@ class Settings(BaseSettings):
     # Secure-flagged. Defaults false for the localhost self-hosted case.
     cookie_secure: bool = False
 
-    # --- Optional intelligence layer (§8). The DB settings rows (Settings
-    # screen) are the source of truth; these env values act only as
-    # bootstrap defaults for a fresh install that pre-set them in .env.
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-flash-latest"
-    enable_ollama: bool = False
-    ollama_base_url: str = "http://ollama:11434/v1"
+    # --- AI layer (§8) ---
+    # There are intentionally NO AI env vars. Every provider, API key, model
+    # assignment and endpoint is configured from the dashboard (Settings → AI
+    # providers) and stored — keys Fernet-encrypted — in the database. This is
+    # the single source of truth; nothing about the AI layer is read from the
+    # environment. The local-Ollama default endpoint is a code constant
+    # (app/ai_ollama.py::DEFAULT_OLLAMA_BASE_URL), not a setting.
 
     # Shown in alert emails/messages as the dashboard link target; the
     # self-hosted default is the local port from install.ps1.

@@ -1,14 +1,14 @@
-"""Agent tool registry — the bridge between Gemini function calls and the
+"""Agent tool registry — the bridge between the model's tool calls and the
 same domain logic the REST routers run.
 
-Each tool is a :class:`Tool`: a Gemini function declaration (name +
-description + JSON-schema parameters) plus an async executor, a `tier`
-(auto vs confirm-required) and a `min_role`. Executors call the *same*
-code paths the routers use — site lookup, scan-now stale-supersede, mute
-clamp, explain_scan, interval clamp — so RBAC, SSRF, audit logging and
-detection semantics stay identical across surfaces. Nothing here trusts
-the model: role and confirmation gating happen in the dispatcher, not in
-the declarations the model sees.
+Each tool is a :class:`Tool`: an OpenAI-style tool schema (name +
+description + JSON-schema parameters), normalised across providers by
+litellm, plus an async executor, a `tier` (auto vs confirm-required) and a
+`min_role`. Executors call the *same* code paths the routers use — site
+lookup, scan-now stale-supersede, mute clamp, explain_scan, interval clamp —
+so RBAC, SSRF, audit logging and detection semantics stay identical across
+surfaces. Nothing here trusts the model: role and confirmation gating happen
+in the dispatcher, not in the schemas the model sees.
 
 Executors return compact, JSON-serialisable dicts (ids truncated, no raw
 HTML / evidence blobs) — token efficiency and prompt-injection containment
@@ -96,12 +96,17 @@ class Tool:
     # One-line human summary for the confirmation card (tier >= 2 only).
     summarize: Callable[[dict], str] | None = None
 
-    def declaration(self) -> dict:
-        """OpenAPI-subset function declaration for types.Tool."""
+    def openai_tool(self) -> dict:
+        """OpenAI-style tool schema litellm normalises across every provider
+        (translated per-provider internally). `parameters` is already a
+        JSON-Schema object, so this is a thin wrapper."""
         return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": self.parameters,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
         }
 
 

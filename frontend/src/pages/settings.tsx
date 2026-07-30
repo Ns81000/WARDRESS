@@ -10,7 +10,8 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
 import { ApiKeysCard } from "@/components/api-keys-card"
-import { StatusDot, type DotState } from "@/components/status-dot"
+import { AiSettingsCard } from "@/components/ai-settings-card"
+import { StatusDot } from "@/components/status-dot"
 import { UsersCard } from "@/components/users-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -245,33 +246,6 @@ function errMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-// Rotation-pool key health -> status dot + label. A cooled-down key is
-// resting after a rate-limit; exhausted has spent its daily budget.
-function geminiKeyDot(health: apiClient.GeminiKeyHealth): DotState {
-  switch (health) {
-    case "healthy":
-      return "clean"
-    case "cooldown":
-      return "pending"
-    case "exhausted":
-      return "threat"
-    default:
-      return "idle"
-  }
-}
-
-function geminiKeyHealthLabel(health: apiClient.GeminiKeyHealth): string {
-  switch (health) {
-    case "healthy":
-      return "Healthy"
-    case "cooldown":
-      return "Cooling down"
-    case "exhausted":
-      return "Daily budget spent"
-    default:
-      return health
-  }
-}
 
 // --- SMTP card (§8: a passing Send Test gates the Save action) ---
 
@@ -663,228 +637,6 @@ function TelegramCard() {
               Disconnect
             </Button>
           )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-// --- AI providers card (Gemini + Ollama, §8) ---
-
-function AiCard() {
-  const queryClient = useQueryClient()
-  const gemini = useQuery({ queryKey: ["settings", "gemini"], queryFn: apiClient.getGeminiSettings })
-  const ollama = useQuery({ queryKey: ["settings", "ollama"], queryFn: apiClient.getOllamaSettings })
-
-  const [apiKey, setApiKey] = useState("")
-  const [keyLabel, setKeyLabel] = useState("")
-  const [ollamaModel, setOllamaModel] = useState("")
-  const [ollamaHydrated, setOllamaHydrated] = useState(false)
-
-  useEffect(() => {
-    if (ollama.data && !ollamaHydrated) {
-      setOllamaModel(ollama.data.model ?? "")
-      setOllamaHydrated(true)
-    }
-  }, [ollama.data, ollamaHydrated])
-
-  const addKey = useMutation({
-    mutationFn: (body: { api_key: string; label?: string }) => apiClient.addGeminiKey(body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["settings", "gemini"] })
-      setApiKey("")
-      setKeyLabel("")
-      toast.success("Key added to the pool")
-    },
-    onError: (err) => toast.error(errMessage(err, "Could not add the key")),
-  })
-
-  const removeKey = useMutation({
-    mutationFn: (keyId: string) => apiClient.removeGeminiKey(keyId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["settings", "gemini"] })
-      toast.success("Key removed from the pool")
-    },
-    onError: (err) => toast.error(errMessage(err, "Could not remove the key")),
-  })
-
-  const testGeminiM = useMutation({
-    mutationFn: apiClient.testGemini,
-    onSuccess: (r) => (r.ok ? toast.success(r.detail) : toast.error(r.detail)),
-    onError: (err) => toast.error(errMessage(err, "Test failed")),
-  })
-
-  const keys = gemini.data?.keys ?? []
-
-  const saveOllama = useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiClient.putOllamaSettings({ enabled, model: ollamaModel || null }),
-    onSuccess: (data) => {
-      void queryClient.invalidateQueries({ queryKey: ["settings", "ollama"] })
-      toast.success(data.enabled ? "Ollama enabled" : "Ollama settings saved")
-    },
-    onError: (err) => toast.error(errMessage(err, "Could not save Ollama settings")),
-  })
-
-  const testOllamaM = useMutation({
-    mutationFn: apiClient.testOllama,
-    onSuccess: (r) => (r.ok ? toast.success(r.detail) : toast.error(r.detail)),
-    onError: (err) => toast.error(errMessage(err, "Test failed")),
-  })
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {getChannelIcon("gemini", "size-5")}
-          AI analysis
-        </CardTitle>
-        <CardDescription>
-          Optional. Ambiguous scans get a semantic second opinion, and incident
-          pages gain an &ldquo;Explain this incident&rdquo; summary. Detection works fully
-          without it — an unavailable provider is skipped silently, never
-          blocking a scan.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-body-sm text-body">
-              <StatusDot state={keys.length > 0 ? "clean" : "idle"} />
-              {getChannelIcon("gemini", "size-4.5 text-accent-blue")}
-              Google Gemini ({gemini.data?.model ?? "gemini-flash-latest"})
-              {keys.length > 0 && (
-                <span className="text-caption text-mute">
-                  {keys.length} key{keys.length === 1 ? "" : "s"} in rotation
-                </span>
-              )}
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={keys.length === 0 || testGeminiM.isPending}
-              onClick={() => testGeminiM.mutate()}
-            >
-              {testGeminiM.isPending ? "Testing" : "Test pool"}
-            </Button>
-          </div>
-
-          {/* Rotation pool — the agent and ambiguous-scan calls fail over
-              across these keys, each with its own free-tier budget. */}
-          {keys.length > 0 && (
-            <ul className="divide-y divide-hairline rounded-md border border-hairline">
-              {keys.map((key) => (
-                <li key={key.id} className="flex items-center gap-3 px-3 py-2.5">
-                  <StatusDot state={geminiKeyDot(key.health)} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-body-sm text-body">
-                      <span className="truncate">{key.label || "unnamed key"}</span>
-                      {key.hint && (
-                        <span className="text-caption text-mute">{key.hint}</span>
-                      )}
-                    </div>
-                    <p className="text-caption text-mute">
-                      {geminiKeyHealthLabel(key.health)}
-                      {key.daily_budget > 0 && (
-                        <> · {key.used_today}/{key.daily_budget} today</>
-                      )}
-                      {key.last_used && <> · last used {key.last_used}</>}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Remove ${key.label || "key"}`}
-                    disabled={removeKey.isPending}
-                    onClick={() => removeKey.mutate(key.id)}
-                  >
-                    <Trash2 className="text-mute" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <Label htmlFor="gemini-key">Add API key</Label>
-              <Input
-                id="gemini-key"
-                type="password"
-                autoComplete="off"
-                placeholder="AIza..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5 sm:w-40">
-              <Label htmlFor="gemini-label">Label</Label>
-              <Input
-                id="gemini-label"
-                autoComplete="off"
-                placeholder="optional"
-                value={keyLabel}
-                onChange={(e) => setKeyLabel(e.target.value)}
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={apiKey.trim().length < 8 || addKey.isPending}
-              onClick={() => addKey.mutate({ api_key: apiKey.trim(), label: keyLabel.trim() })}
-            >
-              {addKey.isPending ? "Adding" : "Add key"}
-            </Button>
-          </div>
-          <p className="text-caption text-mute">
-            Add several free-tier keys — Wardress rotates across them and cools
-            down any that hit a rate limit, so the assistant keeps working well
-            inside the free quota.
-          </p>
-        </div>
-
-        <div className="space-y-3 border-t border-hairline pt-5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-body-sm text-body">
-              <StatusDot state={ollama.data?.enabled ? "clean" : "idle"} />
-              {getChannelIcon("ollama", "size-4.5 text-ink")}
-              Ollama (local, no cloud)
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!ollama.data?.enabled || testOllamaM.isPending}
-                onClick={() => testOllamaM.mutate()}
-              >
-                {testOllamaM.isPending ? "Testing" : "Test"}
-              </Button>
-            </div>
-          </div>
-          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
-            <div className="min-w-0 flex-1 space-y-1.5 sm:min-w-64">
-              <Label htmlFor="ollama-model">Model</Label>
-              <Input
-                id="ollama-model"
-                placeholder="llama3.2"
-                value={ollamaModel}
-                onChange={(e) => setOllamaModel(e.target.value)}
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={saveOllama.isPending || (!ollama.data?.enabled && !ollamaModel)}
-              onClick={() => saveOllama.mutate(!ollama.data?.enabled)}
-            >
-              {ollama.data?.enabled ? "Disable" : "Enable"}
-            </Button>
-          </div>
-          <p className="text-caption text-mute">
-            Needs the ollama compose profile running (
-            <span className="text-code-md">docker compose --profile ollama up -d</span>) with the
-            model pulled. Gemini is preferred when both are enabled.
-          </p>
         </div>
       </CardContent>
     </Card>
@@ -1380,7 +1132,7 @@ export function SettingsPage() {
             <ChannelsCard />
             <SmtpCard />
             <TelegramCard />
-            <AiCard />
+            <AiSettingsCard />
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

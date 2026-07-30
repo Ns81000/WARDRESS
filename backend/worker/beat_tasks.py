@@ -64,6 +64,11 @@ REDELIVERY_SWEEP_SECONDS = 5 * 60
 REDELIVERY_GRACE = timedelta(minutes=5)
 REDELIVERY_MAX_PER_RUN = 200
 
+# Model catalog (models.dev) refresh cadence. The catalog changes slowly; a
+# twice-daily refresh keeps new models/pricing current without hammering the
+# endpoint. The API also refreshes once at startup.
+CATALOG_REFRESH_SECONDS = 12 * 60 * 60
+
 # Redis heartbeat key the health page reads (Phase 5 §7): proof that
 # Beat is scheduling AND a worker is executing (the tick runs on a
 # worker). Written best-effort — a Redis blip must not fail the tick.
@@ -340,6 +345,22 @@ def resweep_undelivered() -> dict:
         return {"error": True}
 
 
+@celery_app.task(name="wardress.sync_model_catalog")
+def sync_model_catalog() -> dict:
+    """Refresh the models.dev model catalog on a schedule (the API also syncs
+    at startup). Best-effort — a fetch failure keeps the existing catalog and
+    must never crash the worker (rule 6)."""
+    try:
+        from app.ai_catalog import sync_catalog
+
+        result = asyncio.run(_run_with_session(sync_catalog))
+        logger.info("Model catalog refresh: %s", result)
+        return result
+    except Exception:
+        logger.exception("Model catalog refresh failed")
+        return {"error": True}
+
+
 async def _run_with_session(fn):
     async with task_session() as db:
         return await fn(db)
@@ -372,4 +393,10 @@ def setup_periodic_tasks(sender, **kwargs) -> None:
         resweep_undelivered.s(),
         name="re-deliver stranded alerts and remediations",
         expires=REDELIVERY_SWEEP_SECONDS,
+    )
+    sender.add_periodic_task(
+        CATALOG_REFRESH_SECONDS,
+        sync_model_catalog.s(),
+        name="refresh model catalog from models.dev",
+        expires=CATALOG_REFRESH_SECONDS,
     )

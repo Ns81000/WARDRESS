@@ -1,19 +1,21 @@
 """The agent turn loop — one shared core for the web chat and the Telegram bot.
 
-A user turn drives a bounded Gemini function-calling loop:
+A user turn drives a bounded tool-calling loop against whatever model is
+assigned to the ``agent_chat`` task (any tool-capable provider — see
+:mod:`app.llm`), through litellm's provider-agnostic ``tools`` parameter:
 
   1. Build a compact context (system instruction + rolling summary + recent
-     transcript) via :mod:`app.agent.context`.
-  2. Call gemini-flash-latest through the multi-key rotation pool
-     (:class:`app.llm.KeyPool`) with the tools the user's *role* permits —
-     nothing above their permissions is ever declared.
-  3. For each function call the model emits: look up the tool, enforce RBAC
-     in code (never trust the model), and either
+     transcript) via :mod:`app.agent.context`, as OpenAI-style chat messages.
+  2. Call the assigned model through :func:`app.llm.resolve_task` with the
+     tools the user's *role* permits — nothing above their permissions is ever
+     declared.
+  3. For each tool call the model emits: look up the tool, enforce RBAC in code
+     (never trust the model), and either
        - execute it now (tier 0/1: reads and safe writes), or
-       - freeze it for confirmation (tier >= 2) and stop the loop, surfacing
-         a confirmation card the user must approve with a button press.
-  4. Feed tool results back and repeat, capped at ``MAX_ITERATIONS`` calls
-     so a misbehaving model can't spin.
+       - freeze it for confirmation (tier >= 2) and stop the loop, surfacing a
+         confirmation card the user must approve with a button press.
+  4. Feed tool results back and repeat, capped at ``MAX_ITERATIONS`` calls so a
+     misbehaving model can't spin.
 
 The loop emits a stream of :class:`AgentEvent` objects. Both surfaces consume
 the same events: the web router serialises them as SSE, the Telegram bot folds
@@ -40,7 +42,7 @@ from app.agent.tools import (
     get_tool,
     tools_for_role,
 )
-from app.llm import LLMUnavailable, resolve_provider
+from app.llm import LLMUnavailable, resolve_task
 from app.models import (
     AgentConversation,
     AgentMessage,
@@ -128,27 +130,44 @@ async def _persist_message(
     await db.commit()
 
 
-def _gemini_config(tools: list, system_instruction: str):
-    """Build the GenerateContentConfig for a tools turn. Automatic function
-    calling is disabled so *we* gate every call (RBAC + confirmation); the
-    SDK must hand back raw function_call parts instead of executing them."""
-    from google.genai import types
+def _assistant_tool_call_message(message: Any) -> dict:
+    """Serialise the model's tool-call turn to a plain OpenAI-style assistant
+    message so the follow-up request carries the required call ids."""
+    calls = []
+    for tc in getattr(message, "tool_calls", None) or []:
+        calls.append(
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}",
+                },
+            }
+        )
+    return {
+        "role": "assistant",
+        "content": getattr(message, "content", "") or "",
+        "tool_calls": calls,
+    }
 
-    declarations = [t.declaration() for t in tools]
-    return types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        tools=[types.Tool(function_declarations=declarations)],
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        tool_config=types.ToolConfig(
-            function_calling_config=types.FunctionCallingConfig(mode="AUTO")
-        ),
-    )
+
+def _tool_result_message(tool_call_id: str, name: str, result: dict) -> dict:
+    """One OpenAI-style tool-result message, matched to its call id."""
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "name": name,
+        "content": json.dumps({"result": result})[:2000],
+    }
 
 
-def _new_user_content(text: str):
-    from google.genai import types
-
-    return types.Content(role="user", parts=[types.Part(text=text)])
+def _parse_tool_args(raw: str | None) -> dict:
+    try:
+        parsed = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 async def run_turn(
@@ -173,63 +192,69 @@ async def run_turn(
 
     await _persist_message(db, conversation.id, AgentMessageRole.user, user_message)
 
-    provider = await resolve_provider(db)
-    if provider is None or provider.kind != "gemini" or provider.pool is None:
-        # The agent needs Gemini tool-calling specifically; Ollama has no
-        # function-calling contract here. Degrade with a clear message.
+    task = await resolve_task(db, "agent_chat")
+    if task is None:
+        # No model assigned to the assistant. Provider-agnostic message: any
+        # tool-capable model on any provider works — not Gemini specifically.
         msg = (
-            "The assistant needs a Gemini API key. Add one in Settings → AI providers "
-            "to chat with Wardress."
+            "No AI model is configured for the assistant. An admin can assign a "
+            "tool-capable model to Agent Chat in Settings → AI providers."
+        )
+        await _persist_message(db, conversation.id, AgentMessageRole.assistant, msg)
+        yield AgentEvent("done", msg)
+        return
+    if not task.supports_tools:
+        # Defence in depth: the config API refuses to assign a non-tool model
+        # to agent chat, but never let a stale/edge config attempt tool calls.
+        msg = (
+            "The model assigned to the assistant doesn't support tool calling. "
+            "Assign a tool-capable model to Agent Chat in Settings → AI providers."
         )
         await _persist_message(db, conversation.id, AgentMessageRole.assistant, msg)
         yield AgentEvent("done", msg)
         return
 
     tools = tools_for_role(user.role)
+    openai_tools = [t.openai_tool() for t in tools]
     system_instruction = agent_context.build_system_instruction(user, surface)
-    try:
-        config = _gemini_config(tools, system_instruction)
-    except ImportError:
-        yield AgentEvent("error", "The Gemini SDK is unavailable on the server.")
-        return
 
-    # Seed the model contents from the compact transcript, then append the
-    # new user turn.
-    contents = await agent_context.build_contents(db, conversation, user_message)
+    # Seed messages: system rules + the compact transcript + new user turn.
+    messages: list[dict] = [{"role": "system", "content": system_instruction}]
+    messages += await agent_context.build_contents(db, conversation, user_message)
 
     final_text = ""
     for _ in range(MAX_ITERATIONS):
         try:
-            response = await provider.pool.call(contents=contents, config=config)
+            response = await task.acompletion(
+                messages=messages, tools=openai_tools, tool_choice="auto"
+            )
         except LLMUnavailable as exc:
             msg = f"The assistant is unavailable right now: {exc}"
             await _persist_message(db, conversation.id, AgentMessageRole.assistant, msg)
             yield AgentEvent("error", msg)
             return
 
-        calls = list(getattr(response, "function_calls", None) or [])
-        if not calls:
-            final_text = (getattr(response, "text", None) or "").strip()
+        message = response.choices[0].message
+        tool_calls = list(getattr(message, "tool_calls", None) or [])
+        if not tool_calls:
+            final_text = (getattr(message, "content", None) or "").strip()
             break
 
-        # Record the model's function-call turn verbatim so the follow-up
-        # request has the required call/thought signatures.
-        model_content = response.candidates[0].content
-        contents.append(model_content)
+        # Record the model's tool-call turn verbatim so the follow-up request
+        # carries the required call ids.
+        messages.append(_assistant_tool_call_message(message))
 
-        # Execute (or gate) each requested call, collecting tool responses.
-        tool_response_parts = []
         stop_for_confirm = False
-        for fc in calls:
-            name = fc.name
-            args = dict(fc.args or {})
+        for tc in tool_calls:
+            name = tc.function.name
+            args = _parse_tool_args(tc.function.arguments)
             tool = get_tool(name)
             if tool is None or not can_call(tool, user.role):
                 # Unknown tool, or above the user's role: report a refusal to
                 # the model as the tool result (it never saw the declaration,
                 # but a hallucinated call still gets a clean answer).
                 result = {"error": "That action is not available to you."}
-                tool_response_parts.append(_function_response(name, result))
+                messages.append(_tool_result_message(tc.id, name, result))
                 continue
 
             if needs_confirmation(tool):
@@ -281,13 +306,11 @@ async def run_turn(
                 tool_payload=result if isinstance(result, dict) else None,
             )
             yield AgentEvent("tool", _tool_label(name), {"tool": name, "state": "done", "ok": ok})
-            tool_response_parts.append(_function_response(name, result))
+            messages.append(_tool_result_message(tc.id, name, result))
 
         if stop_for_confirm:
             # The turn pauses here; confirming resumes via the confirm endpoint.
             return
-
-        contents.append(_tool_content(tool_response_parts))
     else:
         # Loop exhausted without a plain-text answer.
         final_text = (
@@ -303,18 +326,6 @@ async def run_turn(
     # Collapse aged-out turns into the rolling summary once the window
     # overflows — token-efficiency without losing continuity. Best-effort:
     # a failed summary keeps the prior one and never breaks the turn.
-    await agent_context.maybe_summarize(db, conversation, provider.pool)
+    await agent_context.maybe_summarize(db, conversation, task)
     await db.commit()
     yield AgentEvent("done", final_text)
-
-
-def _function_response(name: str, result: dict):
-    from google.genai import types
-
-    return types.Part.from_function_response(name=name, response={"result": result})
-
-
-def _tool_content(parts: list):
-    from google.genai import types
-
-    return types.Content(role="tool", parts=parts)

@@ -1,9 +1,10 @@
 """Conversational agent tests (§ agent): tool RBAC filtering, tier
-interception + confirmation guard, key-pool rotation/failover, and the
-/api/agent/* surface (ownership isolation, degraded-without-key path).
+interception + confirmation guard, provider rotation/failover through the
+unified litellm.Router layer, and the /api/agent/* surface (ownership
+isolation, degraded-without-model path).
 
-The Gemini SDK is never called: the engine tests stub the KeyPool, and the
-degradation path needs no provider at all.
+No real provider is called: the Router's underlying litellm.acompletion is
+monkeypatched, and the degradation path needs no provider at all.
 """
 
 import uuid
@@ -62,11 +63,12 @@ def test_high_impact_tools_have_summaries():
             assert len(t.summarize({"site": "x", "url": "y", "name": "z", "minutes": 30})) <= 500
 
 
-def test_declarations_are_openapi_shaped():
+def test_tool_schemas_are_openai_shaped():
     for t in tools.all_tools():
-        decl = t.declaration()
-        assert decl["name"] == t.name
-        assert decl["parameters"]["type"] == "object"
+        schema = t.openai_tool()
+        assert schema["type"] == "function"
+        assert schema["function"]["name"] == t.name
+        assert schema["function"]["parameters"]["type"] == "object"
 
 
 # --- Guard: tier interception + confirmation lifecycle --------------------
@@ -220,102 +222,87 @@ async def test_mute_site_clamps_to_cap(db_factory, analyst_user):
     assert result["muted"] is True
 
 
-# --- Key pool rotation / failover -----------------------------------------
+# --- Provider rotation / failover (unified litellm.Router layer) ----------
 
 
-def test_keys_from_setting_normalizes_shapes():
-    from app.llm import keys_from_setting
+async def test_agent_provider_redacts_keys(db_factory):
+    """A configured provider never leaks its keys — hint-only, as before."""
+    from app.ai_config import create_provider, key_hints
 
-    legacy = keys_from_setting({"api_key": "AIzaLEGACY", "enabled": True})
-    assert legacy == [{"id": "legacy", "api_key": "AIzaLEGACY", "label": "default"}]
-    pool = keys_from_setting(
-        {"keys": [{"id": "a", "api_key": "AIzaA", "label": "k1"}], "enabled": True}
-    )
-    assert pool[0]["api_key"] == "AIzaA"
-    assert keys_from_setting({"api_key": "x", "enabled": False}) == []
-    assert keys_from_setting(None) == []
-
-
-def test_key_pool_health_snapshot_redacts():
-    from app.llm import KeyPool
-
-    pool = KeyPool([{"id": "a", "api_key": "AIzaSECRETKEY", "label": "primary"}])
-    snap = pool.health_snapshot()
-    assert snap[0]["health"] == "healthy"
-    assert "SECRET" not in snap[0]["hint"]
-    assert snap[0]["hint"].startswith("AIzaSE")
+    async with db_factory() as db:
+        provider = await create_provider(
+            db, label="g", provider_type="google", api_keys=["AIzaSECRETKEY"], base_url=None
+        )
+        await db.commit()
+        hints = key_hints(provider)
+        assert "SECRET" not in hints[0]
+        assert hints[0].startswith("AIzaSE")
 
 
-async def test_key_pool_fails_over_to_next_key(monkeypatch):
-    """First key raises a 429; the pool must cool it down and succeed on the
-    second key — returning the good response, not raising."""
-    from app import llm
+async def test_agent_chat_multi_key_rotation_and_failover(db_factory, monkeypatch):
+    """Two agent-chat keys: the first completion 429s, the Router retries/fails
+    over across the deployments and the turn's model call succeeds — no request
+    lost on a transient failure."""
+    import litellm
+    from litellm import RateLimitError
+    from litellm.types.utils import Choices, Message, ModelResponse
 
-    llm._key_states.clear()
-    calls = []
+    from app.ai_config import create_provider, set_assignment
+    from app.llm import clear_router_cache, resolve_task
+    from app.models import AiTaskType
 
-    class FakeResp:
-        text = "ok"
+    clear_router_cache()
+    n = {"c": 0}
 
-    class FakeClient:
-        def __init__(self, api_key):
-            self.api_key = api_key
-            self.aio = self
+    async def flaky(**kwargs):
+        n["c"] += 1
+        if n["c"] == 1:  # first attempt fails; failover/retry must recover
+            raise RateLimitError("quota", llm_provider="gemini", model=kwargs.get("model"))
+        return ModelResponse(choices=[Choices(message=Message(content="ok"))])
 
-        @property
-        def models(self):
-            return self
-
-        async def generate_content(self, *, model, contents, config=None):
-            calls.append(self.api_key)
-            if self.api_key == "bad":
-                raise RuntimeError("429 quota exceeded")
-            return FakeResp()
-
-        async def aclose(self):
-            pass
-
-    import google.genai as genai_mod
-
-    monkeypatch.setattr(genai_mod, "Client", FakeClient)
-    pool = llm.KeyPool(
-        [
-            {"id": "1", "api_key": "bad", "label": "bad"},
-            {"id": "2", "api_key": "good", "label": "good"},
-        ]
-    )
-    text = await pool.generate("hi")
-    assert text == "ok"
-    assert calls == ["bad", "good"]
-    # The bad key should now be cooling down.
-    assert llm._state_for("bad").health() == "cooldown"
+    monkeypatch.setattr(litellm, "acompletion", flaky)
+    async with db_factory() as db:
+        provider = await create_provider(
+            db, label="g", provider_type="google", api_keys=["k1", "k2"], base_url=None
+        )
+        await set_assignment(
+            db, task=AiTaskType.agent_chat, provider_id=provider.id, model_id="gemini-flash-latest"
+        )
+        await db.commit()
+        task = await resolve_task(db, "agent_chat")
+        assert task.supports_tools is True
+        text = await task.generate("hi")
+        assert text == "ok"
+        assert n["c"] >= 2  # proved a failed attempt was retried, not lost
+    clear_router_cache()
 
 
-async def test_key_pool_all_exhausted_raises(monkeypatch):
-    from app import llm
+async def test_agent_chat_all_keys_exhausted_raises(db_factory, monkeypatch):
+    import litellm
+    from litellm import RateLimitError
 
-    llm._key_states.clear()
+    from app.ai_config import create_provider, set_assignment
+    from app.llm import LLMUnavailable, clear_router_cache, resolve_task
+    from app.models import AiTaskType
 
-    class FakeClient:
-        def __init__(self, api_key):
-            self.aio = self
+    clear_router_cache()
 
-        @property
-        def models(self):
-            return self
+    async def always_fail(**kwargs):
+        raise RateLimitError("quota", llm_provider="gemini", model=kwargs.get("model"))
 
-        async def generate_content(self, *, model, contents, config=None):
-            raise RuntimeError("429 quota exceeded")
-
-        async def aclose(self):
-            pass
-
-    import google.genai as genai_mod
-
-    monkeypatch.setattr(genai_mod, "Client", FakeClient)
-    pool = llm.KeyPool([{"id": "1", "api_key": "k1", "label": "k1"}])
-    with pytest.raises(llm.LLMUnavailable):
-        await pool.generate("hi")
+    monkeypatch.setattr(litellm, "acompletion", always_fail)
+    async with db_factory() as db:
+        provider = await create_provider(
+            db, label="g", provider_type="google", api_keys=["k1"], base_url=None
+        )
+        await set_assignment(
+            db, task=AiTaskType.agent_chat, provider_id=provider.id, model_id="gemini-flash-latest"
+        )
+        await db.commit()
+        task = await resolve_task(db, "agent_chat")
+        with pytest.raises(LLMUnavailable):
+            await task.generate("hi")
+    clear_router_cache()
 
 
 # --- API surface -----------------------------------------------------------
@@ -342,9 +329,9 @@ async def test_conversation_crud_and_isolation(client, analyst_headers, viewer_h
     assert not any(c["id"] == conv_id for c in theirs.json())
 
 
-async def test_message_without_gemini_key_degrades(client, analyst_headers):
-    """With no provider configured, the turn must end with a clear, calm
-    'add a key' message — never a 500."""
+async def test_message_without_agent_model_degrades(client, analyst_headers):
+    """With no agent-chat model configured, the turn must end with a clear,
+    calm 'assign a model' message — never a 500, and not Gemini-specific."""
     resp = await client.post("/api/agent/conversations", headers=analyst_headers)
     conv_id = resp.json()["id"]
     async with client.stream(
@@ -357,7 +344,7 @@ async def test_message_without_gemini_key_degrades(client, analyst_headers):
         body = ""
         async for chunk in stream.aiter_text():
             body += chunk
-    assert "Gemini" in body
+    assert "assistant" in body.lower()
     assert "Settings" in body
 
 

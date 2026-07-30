@@ -52,6 +52,7 @@ dependencies = [
     "argon2-cffi==25.1.0",
     "pyjwt==2.13.0",
     "cryptography==49.0.0",
+    "litellm==1.93.0",
 ]
 
 [dependency-groups]

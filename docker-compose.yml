@@ -42,10 +42,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${WARDRESS_HTTP_PORT:-8321}}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
-      ENABLE_OLLAMA: ${ENABLE_OLLAMA:-false}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      # No AI env vars: every provider, key, model and endpoint is configured in
+      # the dashboard (Settings → AI providers) and stored in the DB. See §8.
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Phase 5 hardening knobs (API-only; workers never see requests).
@@ -88,10 +86,7 @@ services:
       # Alert dispatch decrypts stored channel configs/SMTP credentials.
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${WARDRESS_HTTP_PORT:-8321}}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
-      ENABLE_OLLAMA: ${ENABLE_OLLAMA:-false}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      # No AI env vars — AI config lives entirely in the DB/UI (see §8).
     volumes:
       - scan-artifacts:/data/artifacts
     depends_on:

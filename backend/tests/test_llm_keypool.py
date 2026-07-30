@@ -1,192 +1,202 @@
-"""Regression tests for the KeyPool LRU/round-robin and budget fixes."""
+"""Regression tests for the unified litellm.Router LLM layer (formerly the
+Gemini KeyPool). The implementation changed — the *behaviour* under test did
+not: multi-key rotation, rate-limit failover, cross-provider fallback, and the
+silent-degradation contract (LLMUnavailable / None), all exercised against the
+real litellm Router with the underlying completion call mocked.
+"""
 
-from datetime import UTC, datetime, timedelta
-
+import litellm
 import pytest
+from litellm import RateLimitError
+from litellm.types.utils import Choices, Message, ModelResponse
 
+from app.ai_catalog import litellm_model_string
+from app.ai_config import create_provider, set_assignment
 from app.llm import (
-    KeyPool,
     LLMUnavailable,
-    _KeyState,
-    keys_from_setting,
+    _deployments,
+    _litellm_api_base,
+    clear_router_cache,
+    provider_api_keys,
+    resolve_task,
 )
+from app.models import AiTaskType
 
 
-def _fresh_state(api_key: str, *, last_used_offset_s: float | None = None) -> _KeyState:
-    st = _KeyState(api_key)
-    if last_used_offset_s is not None:
-        st.last_used = datetime.now(UTC) - timedelta(seconds=last_used_offset_s)
-    return st
+def _ok_response(content: str = "ok") -> ModelResponse:
+    return ModelResponse(choices=[Choices(message=Message(content=content))])
 
 
-# ---------------------------------------------------------------------------
-# keys_from_setting
-# ---------------------------------------------------------------------------
+async def _make_task(db, *, provider_type, keys, model, base_url=None, task=AiTaskType.explanation):
+    provider = await create_provider(
+        db, label=provider_type, provider_type=provider_type, api_keys=keys, base_url=base_url
+    )
+    await set_assignment(db, task=task, provider_id=provider.id, model_id=model)
+    await db.commit()
+    return provider
 
 
-def test_keys_from_setting_pool_shape() -> None:
-    g = {"enabled": True, "keys": [{"id": "k1", "api_key": "abc", "label": "main"}]}
-    assert keys_from_setting(g) == [{"id": "k1", "api_key": "abc", "label": "main"}]
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    clear_router_cache()
+    yield
+    clear_router_cache()
 
 
-def test_keys_from_setting_legacy_shape() -> None:
-    g = {"enabled": True, "api_key": "legacy-key"}
-    result = keys_from_setting(g)
-    assert len(result) == 1
-    assert result[0]["api_key"] == "legacy-key"
+# --- Provider-type -> litellm model string mapping -----------------------
 
 
-def test_keys_from_setting_disabled_returns_empty() -> None:
-    g = {"enabled": False, "api_key": "key"}
-    assert keys_from_setting(g) == []
+def test_model_string_mapping() -> None:
+    # models.dev "google" is litellm "gemini/"
+    assert litellm_model_string("google", "gemini-flash-latest") == "gemini/gemini-flash-latest"
+    # ollama uses the tool-capable chat API prefix
+    assert litellm_model_string("ollama", "llama3.1") == "ollama_chat/llama3.1"
+    # a generic custom endpoint rides litellm's openai shim
+    assert litellm_model_string("openai_compatible", "my-model") == "openai/my-model"
+    # identity for aligned providers
+    assert litellm_model_string("groq", "llama-3.1-70b") == "groq/llama-3.1-70b"
 
 
-def test_keys_from_setting_none_returns_empty() -> None:
-    assert keys_from_setting(None) == []
+def test_ollama_base_strips_v1(db_factory) -> None:
+    from app.models import AiProvider
+
+    p = AiProvider(label="o", provider_type="ollama", base_url="http://ollama:11434/v1")
+    assert _litellm_api_base(p) == "http://ollama:11434"
 
 
-# ---------------------------------------------------------------------------
-# KeyPool._sorted_keys — LRU ordering
-# ---------------------------------------------------------------------------
+# --- Credential handling + redaction -------------------------------------
 
 
-async def test_sorted_keys_lru_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The key used least recently should sort first."""
-    keys = [
-        {"api_key": "key-a"},
-        {"api_key": "key-b"},
-        {"api_key": "key-c"},
-    ]
-    states = {
-        "key-a": _fresh_state("key-a", last_used_offset_s=10),   # used 10s ago
-        "key-b": _fresh_state("key-b", last_used_offset_s=100),  # used 100s ago (oldest)
-        "key-c": _fresh_state("key-c", last_used_offset_s=5),    # used 5s ago (newest)
-    }
-    monkeypatch.setattr("app.llm._key_states", states)
-    pool = KeyPool.__new__(KeyPool)
-    pool.keys = keys
-    sorted_keys = pool._sorted_keys()
-    # key-b (oldest) should be first
-    assert sorted_keys[0]["api_key"] == "key-b"
-    assert sorted_keys[-1]["api_key"] == "key-c"
+async def test_provider_keys_roundtrip_and_hint(db_factory) -> None:
+    async with db_factory() as db:
+        provider = await create_provider(
+            db,
+            label="g",
+            provider_type="google",
+            api_keys=["AIzaSECRET123", "AIzaSECOND456"],
+            base_url=None,
+        )
+        await db.commit()
+        keys = provider_api_keys(provider)
+        assert keys == ["AIzaSECRET123", "AIzaSECOND456"]
+        from app.ai_config import key_hints
+
+        hints = key_hints(provider)
+        assert all("SECRET" not in h and "SECOND" not in h for h in hints)
+        assert hints[0].startswith("AIzaSE")
 
 
-# ---------------------------------------------------------------------------
-# KeyPool — spend() only on success
-# ---------------------------------------------------------------------------
+# --- Multi-key rotation: N keys -> N Router deployments ------------------
 
 
-async def test_spend_only_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A failed call must not increment the daily budget counter — spend()
-    runs only after generate_content returns. Exercises the real
-    KeyPool.call path with the SDK mocked to raise."""
-    from app import llm
-
-    llm._key_states.clear()
-
-    class FakeClient:
-        def __init__(self, api_key):
-            self.api_key = api_key
-            self.aio = self
-
-        @property
-        def models(self):
-            return self
-
-        async def generate_content(self, *, model, contents, config=None):
-            raise RuntimeError("network error")
-
-        async def aclose(self):
-            pass
-
-    import google.genai as genai_mod
-
-    monkeypatch.setattr(genai_mod, "Client", FakeClient)
-    pool = llm.KeyPool([{"api_key": "test-key-spend"}])
-
-    with pytest.raises(LLMUnavailable):
-        await pool.call(contents="test")
-
-    # The call failed, so the budget counter must not have advanced.
-    st = llm._state_for("test-key-spend")
-    assert st.count == 0
+async def test_multi_key_creates_multiple_deployments(db_factory) -> None:
+    async with db_factory() as db:
+        provider = await create_provider(
+            db, label="g", provider_type="google", api_keys=["k1", "k2", "k3"], base_url=None
+        )
+        await db.commit()
+        deps = _deployments(provider, "gemini-flash-latest", "primary")
+        assert len(deps) == 3
+        assert all(d["model_name"] == "primary" for d in deps)
+        assert {d["litellm_params"]["api_key"] for d in deps} == {"k1", "k2", "k3"}
 
 
-async def test_spend_increments_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A successful call increments the budget counter exactly once."""
-    from app import llm
-
-    llm._key_states.clear()
-
-    class FakeResp:
-        text = "ok"
-
-    class FakeClient:
-        def __init__(self, api_key):
-            self.api_key = api_key
-            self.aio = self
-
-        @property
-        def models(self):
-            return self
-
-        async def generate_content(self, *, model, contents, config=None):
-            return FakeResp()
-
-        async def aclose(self):
-            pass
-
-    import google.genai as genai_mod
-
-    monkeypatch.setattr(genai_mod, "Client", FakeClient)
-    pool = llm.KeyPool([{"api_key": "test-key-ok"}])
-
-    await pool.call(contents="test")
-    assert llm._state_for("test-key-ok").count == 1
+# --- Degradation: unconfigured -> None -----------------------------------
 
 
-# ---------------------------------------------------------------------------
-# KeyPool — _key_states pruned on rebuild
-# ---------------------------------------------------------------------------
+async def test_resolve_task_none_when_unconfigured(db_factory) -> None:
+    async with db_factory() as db:
+        assert await resolve_task(db, "explanation") is None
 
 
-def test_key_states_pruned_on_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keys removed from the pool must be pruned from _key_states."""
-    states = {
-        "old-key": _fresh_state("old-key"),
-        "current-key": _fresh_state("current-key"),
-    }
-    monkeypatch.setattr("app.llm._key_states", states)
-
-    # Build a new pool that only contains current-key
-    KeyPool([{"api_key": "current-key"}])
-
-    assert "old-key" not in states
-    assert "current-key" in states
+async def test_resolve_task_none_when_provider_disabled(db_factory) -> None:
+    async with db_factory() as db:
+        provider = await _make_task(
+            db, provider_type="google", keys=["k1"], model="gemini-flash-latest"
+        )
+        provider.enabled = False
+        await db.commit()
+        clear_router_cache()
+        assert await resolve_task(db, "explanation") is None
 
 
-# ---------------------------------------------------------------------------
-# KeyPool — all keys cooling down raises LLMUnavailable
-# ---------------------------------------------------------------------------
+# --- Rate-limit failover: a request is never lost while a key has capacity -
 
 
-async def test_all_keys_cooling_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = "cooling-key"
-    st = _KeyState(key)
-    st.cooldown_until = datetime.now(UTC) + timedelta(hours=1)
-    monkeypatch.setattr("app.llm._key_states", {key: st})
+async def test_failover_recovers_from_rate_limit(db_factory, monkeypatch) -> None:
+    async with db_factory() as db:
+        await _make_task(db, provider_type="google", keys=["k1", "k2"], model="gemini-flash-latest")
+        n = {"c": 0}
 
-    pool = KeyPool([{"api_key": key}])
-    with pytest.raises(LLMUnavailable, match="cooling down"):
-        await pool.call(contents="test")
+        async def flaky(**kwargs):
+            n["c"] += 1
+            if n["c"] == 1:
+                raise RateLimitError("quota", llm_provider="gemini", model=kwargs.get("model"))
+            return _ok_response("recovered")
+
+        monkeypatch.setattr(litellm, "acompletion", flaky)
+        task = await resolve_task(db, "explanation")
+        text = await task.generate("hi")
+        assert text == "recovered"
+        assert n["c"] >= 2  # first attempt failed, retried, succeeded
 
 
-# ---------------------------------------------------------------------------
-# KeyPool — empty pool raises LLMUnavailable
-# ---------------------------------------------------------------------------
+# --- All keys failing -> LLMUnavailable (silent-degradation contract) -----
 
 
-async def test_empty_pool_raises() -> None:
-    pool = KeyPool([])
-    with pytest.raises(LLMUnavailable, match="no API key"):
-        await pool.call(contents="test")
+async def test_all_keys_failing_raises_llm_unavailable(db_factory, monkeypatch) -> None:
+    async with db_factory() as db:
+        await _make_task(db, provider_type="google", keys=["k1", "k2"], model="gemini-flash-latest")
+
+        async def always_fail(**kwargs):
+            raise RateLimitError("quota", llm_provider="gemini", model=kwargs.get("model"))
+
+        monkeypatch.setattr(litellm, "acompletion", always_fail)
+        task = await resolve_task(db, "explanation")
+        with pytest.raises(LLMUnavailable):
+            await task.generate("hi")
+
+
+async def test_empty_response_raises(db_factory, monkeypatch) -> None:
+    async with db_factory() as db:
+        await _make_task(db, provider_type="google", keys=["k1"], model="gemini-flash-latest")
+
+        async def empty(**kwargs):
+            return _ok_response("")
+
+        monkeypatch.setattr(litellm, "acompletion", empty)
+        task = await resolve_task(db, "explanation")
+        with pytest.raises(LLMUnavailable):
+            await task.generate("hi")
+
+
+# --- Cross-provider fallback (Router fallbacks) --------------------------
+
+
+async def test_cross_provider_fallback(db_factory, monkeypatch) -> None:
+    async with db_factory() as db:
+        primary = await create_provider(
+            db, label="p", provider_type="google", api_keys=["pk"], base_url=None
+        )
+        fallback = await create_provider(
+            db, label="f", provider_type="groq", api_keys=["fk"], base_url=None
+        )
+        await set_assignment(
+            db,
+            task=AiTaskType.explanation,
+            provider_id=primary.id,
+            model_id="gemini-flash-latest",
+            fallback_provider_id=fallback.id,
+            fallback_model_id="llama-3.1-70b",
+        )
+        await db.commit()
+
+        async def only_groq_ok(**kwargs):
+            if "groq/" in (kwargs.get("model") or ""):
+                return _ok_response("from-fallback")
+            raise RateLimitError("quota", llm_provider="gemini", model=kwargs.get("model"))
+
+        monkeypatch.setattr(litellm, "acompletion", only_groq_ok)
+        task = await resolve_task(db, "explanation")
+        text = await task.generate("hi")
+        assert text == "from-fallback"

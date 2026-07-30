@@ -155,7 +155,7 @@ To update Wardress to the latest release while maintaining all database records,
 
 *   **Adaptive Cadence Scanning**: To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies. If a scan crosses the material change threshold (`fused_risk >= 0.15`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).
 *   **Guarded Remediation Hooks**: Flagged scans can trigger outbound webhooks (e.g. rollback endpoints or maintenance pages). By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator. A webhook endpoint timeout of 20 seconds is enforced, and execution tasks are isolated in a separate Celery queue so that slow/broken endpoints never block the scan engine.
-*   **AI Incident Assistant Cache**: The plain-English analysis of an incident is generated via a structured prompt built from active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences) and requested from Gemini or a local Ollama model. The final description is cached directly in the `scans` table column to eliminate duplicate API requests.
+*   **AI Incident Assistant Cache**: The plain-English analysis of an incident is generated via a structured prompt built from active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences) and requested from whichever model you have assigned to the **Explanations** task (any cloud provider from the models.dev catalog, or a local/cloud Ollama model). The final description is cached directly in the `scans` table column to eliminate duplicate API requests.
 
 ---
 
@@ -244,7 +244,7 @@ Shows the exact differences in HTTP response headers, SSL certificates, outgoing
 ![Scan Report Analytics](docs/screenshots/scan-report-analytics.png)
 
 ### 7. AI Incident Assistant
-Leverages Gemini or local Ollama models to translate deep cryptographic and technical diff signatures into plain-English incident summaries.
+Leverages any AI provider you configure in the dashboard — a cloud model (OpenAI, Groq, Anthropic, Google, Mistral, and more, from the models.dev catalog) or a local/cloud Ollama model — to translate deep cryptographic and technical diff signatures into plain-English incident summaries. Providers, keys and model assignments are managed entirely in **Settings → AI providers**; there are no AI environment variables.
 ![Incident Assistant](docs/screenshots/assitant.png)
 
 ### 8. Alerts Registry
@@ -337,15 +337,14 @@ These environment variables are written to `.env` during installation.
 | `CREDENTIALS_ENCRYPTION_KEY` | *generated* | A Fernet key used to encrypt SMTP and API integration credentials at rest. |
 | `ADMIN_EMAIL` | `admin@example.com` | Default email for the first administrator. |
 | `ADMIN_PASSWORD` | *generated* | The seeded administrator password. |
-| `GEMINI_API_KEY` | *empty* | Optional. API key for Gemini models to generate incident explanations. |
-| `GEMINI_MODEL` | `gemini-flash-latest` | The model variation used for explaining incidents. |
-| `ENABLE_OLLAMA` | `false` | Set to `true` to start the local-LLM container for offline AI explanations. |
 | `TELEGRAM_BOT_TOKEN` | *empty* | Optional. Telegram bot token for interactive system queries. |
 | `RATE_LIMIT_PER_IP` | `300` | Pre-auth API rate limits per client IP per window. Set to `0` to disable. |
 | `RATE_LIMIT_PER_USER` | `240` | Post-auth rate limits per authenticated user account. |
 | `RATE_LIMIT_WINDOW_SECONDS`| `60` | Time window length for rate-limit evaluations. |
 | `TRUST_PROXY_HEADERS` | `false` | Enable this *only* if Wardress is fronted by a reverse proxy. |
 | `COOKIE_SECURE` | `false` | Forces session cookies to be transmitted via HTTPS only. |
+
+> **AI configuration is not in `.env`.** There are no AI environment variables. Every AI provider, API key, model assignment and endpoint is configured from the dashboard under **Settings → AI providers** and stored in the database (keys Fernet-encrypted). On a fresh install a local Ollama provider is created and enabled automatically — start it with `docker compose --profile ollama up -d` (the UI shows this command) and download a model from the same screen, or add any cloud provider with its API key.
 
 ---
 

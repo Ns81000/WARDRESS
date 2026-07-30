@@ -44,17 +44,13 @@ These environment variables are written to `.env` during the installation proces
   The seeded administrator password (shown exactly once during installation).
 </ParamField>
 
-<ParamField path="GEMINI_API_KEY" type="string" default="(empty)">
-  Optional. API key for Gemini models to generate incident explanations.
-</ParamField>
-
-<ParamField path="GEMINI_MODEL" type="string" default="gemini-flash-latest">
-  The model variation used for explaining incidents.
-</ParamField>
-
-<ParamField path="ENABLE_OLLAMA" type="boolean" default="false">
-  Set to `true` to start the local-LLM container for offline AI explanations.
-</ParamField>
+<Note>
+  **There are no AI environment variables.** Every AI provider, API key, model
+  assignment and endpoint is configured from the dashboard under **Settings → AI
+  providers** and stored in the database (keys Fernet-encrypted). See the
+  [AI Providers](#ai-providers-settings-ui) section below. On a fresh install a
+  local Ollama provider is created and enabled for you.
+</Note>
 
 <ParamField path="TELEGRAM_BOT_TOKEN" type="string" default="(empty)">
   Optional. Telegram bot token for interactive system queries.
@@ -79,6 +75,41 @@ These environment variables are written to `.env` during the installation proces
 <ParamField path="COOKIE_SECURE" type="boolean" default="false">
   Forces session cookies to be transmitted via HTTPS only. Set to `true` if serving Wardress over HTTPS.
 </ParamField>
+
+
+## AI Providers (Settings UI)
+
+AI is configured entirely in the dashboard under **Settings → AI providers** — no `.env` edits or container restarts are needed, ever. There are no AI environment variables; keys and endpoints live only in the database (keys Fernet-encrypted).
+
+**AI is on by default.** On a fresh install Wardress creates an **enabled local Ollama provider** for you. To make it answer, start the bundled Ollama container once and download a model — both surfaced directly in the Settings UI:
+
+```powershell
+docker compose --profile ollama up -d
+```
+
+The card shows this exact command (with a copy button) whenever the local daemon isn't reachable yet. Prefer a cloud model instead? Just add any provider with an API key — the local Ollama default can be deleted or left unassigned.
+
+A model catalog is synced from [models.dev](https://models.dev/catalog.json) into the database on startup and every 12 hours via a Celery-beat schedule. A bundled offline snapshot (`backend/app/data/models_dev_catalog.json`) ships as a network-less fallback.
+
+<Steps>
+  <Step title="Add a provider">
+    Choose any models.dev provider (OpenAI, Groq, OpenRouter, Cerebras, Google/Gemini, Anthropic, Mistral, and more) with an API key, a local or cloud **Ollama** instance, or a custom **OpenAI-compatible** endpoint. Provider API keys are Fernet-encrypted at rest.
+  </Step>
+  <Step title="Download a model (Ollama) or validate">
+    For local Ollama, download a model straight from the UI with a live progress bar (recommended: `llama3.2`, `qwen2.5`); Ollama Cloud models need only a cloud key, no download. For any provider, run a live test call from the UI to confirm the provider and key work — the result shows `ok` or `failed`.
+  </Step>
+  <Step title="Assign models to tasks">
+    Assign any enabled model to the two tasks independently: **Explanations** (incident explanations and worker escalation) and **Agent Chat** (the conversational assistant). One model can serve both, or they can be split. Each task also supports an optional cross-provider **fallback** model.
+  </Step>
+</Steps>
+
+<Note>
+  **Agent Chat requires tool-calling.** The UI and backend gate the Agent Chat task on tool-calling capability — a model without tool support cannot be assigned to it. Explanations have no such requirement.
+</Note>
+
+<Note>
+  **Ollama Cloud** is supported by adding an API key to an Ollama provider (targets `https://ollama.com` with a Bearer header); cloud models are flagged distinctly (`:cloud`). Local Ollama model **downloads** stream live progress in the UI.
+</Note>
 
 
 ## Role-Based Access Control (RBAC)

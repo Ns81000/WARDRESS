@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm import LLMUnavailable, build_explain_prompt, resolve_provider
+from app.llm import LLMUnavailable, build_explain_prompt, resolve_task
 from app.models import Scan, ScanFinding, Site
 
 logger = logging.getLogger(__name__)
@@ -148,10 +148,10 @@ async def explain_scan(db: AsyncSession, scan_id: uuid.UUID, *, force: bool = Fa
             "cached": True,
         }
 
-    provider = await resolve_provider(db)
-    if provider is None:
+    task = await resolve_task(db, "explanation")
+    if task is None:
         raise ExplainError(
-            "No AI provider is configured — add a Gemini API key or enable Ollama in Settings"
+            "No AI provider is configured for explanations — add one in Settings → AI providers"
         )
 
     site = await db.scalar(select(Site).where(Site.id == scan.site_id))
@@ -171,17 +171,17 @@ async def explain_scan(db: AsyncSession, scan_id: uuid.UUID, *, force: bool = Fa
         findings_notes=_findings_notes(list(findings)),
     )
     try:
-        text = await provider.generate(prompt)
+        text = await task.generate(prompt)
     except LLMUnavailable as exc:
         raise ExplainError(f"The AI provider could not answer right now: {exc}") from None
 
     scan.explanation = text
-    scan.explanation_provider = provider.kind
+    scan.explanation_provider = task.label
     scan.explanation_at = datetime.now(UTC)
     await db.commit()
     return {
         "explanation": text,
-        "provider": provider.kind,
+        "provider": task.label,
         "generated_at": scan.explanation_at,
         "cached": False,
     }

@@ -466,6 +466,89 @@ class SettingsTestResult(BaseModel):
     detail: str
 
 
+# --- Unified AI provider layer (catalog-driven, any-provider) ---
+
+class CatalogModelOut(BaseModel):
+    id: str  # "provider/model"
+    provider_id: str
+    model_id: str
+    display_name: str
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    tool_calling: bool = False
+    reasoning: bool = False
+    cost_input: float | None = None
+    cost_output: float | None = None
+
+
+class CatalogProviderOut(BaseModel):
+    id: str
+    name: str
+    env: list[str] = Field(default_factory=list)
+    api_base: str | None = None
+    doc: str | None = None
+
+
+class AiProviderOut(BaseModel):
+    id: str
+    label: str
+    provider_type: str
+    base_url: str | None = None
+    enabled: bool = True
+    key_count: int = 0
+    key_hints: list[str] = Field(default_factory=list)
+    validation_status: str = "unknown"
+    validation_detail: str | None = None
+    validated_at: str | None = None
+
+
+class AiProviderCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    provider_type: str = Field(min_length=1, max_length=64)
+    # One or more API keys (rotation pool); optional for a keyless local Ollama.
+    api_keys: list[str] = Field(default_factory=list, max_length=10)
+    base_url: str | None = Field(default=None, max_length=512)
+
+
+class AiProviderUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    # None keeps stored keys; [] clears; a list replaces.
+    api_keys: list[str] | None = Field(default=None, max_length=10)
+    base_url: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+
+
+class AiProviderValidateRequest(BaseModel):
+    # Model to validate against (a cheap real call). Defaults handled server-side.
+    model_id: str = Field(min_length=1, max_length=160)
+
+
+class AiTaskAssignmentIn(BaseModel):
+    provider_id: str | None = None
+    model_id: str | None = Field(default=None, max_length=160)
+    fallback_provider_id: str | None = None
+    fallback_model_id: str | None = Field(default=None, max_length=160)
+
+
+class AiTaskAssignmentOut(BaseModel):
+    task: str
+    provider_id: str | None = None
+    model_id: str | None = None
+    fallback_provider_id: str | None = None
+    fallback_model_id: str | None = None
+
+
+class OllamaModelOut(BaseModel):
+    name: str
+    size: int | None = None
+    is_cloud: bool = False
+
+
+class OllamaPullRequest(BaseModel):
+    provider_id: str
+    model: str = Field(min_length=1, max_length=160)
+
+
 # --- Phase 4: alerts (§6/§7) ---
 
 

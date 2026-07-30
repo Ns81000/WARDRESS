@@ -46,6 +46,13 @@ $Project = "wardress"   # docker-compose.yml `name:` - volumes are $Project_<vol
 # Shared helpers (Fail/Step/Invoke-*, dynamic image discovery).
 . (Join-Path $PSScriptRoot "lib.ps1")
 
+# Set total steps for progress tracking (conditional on backup)
+if ($SkipBackup) {
+    Set-TotalSteps 4
+} else {
+    Set-TotalSteps 8
+}
+
 # --- 1. Preconditions ----------------------------------------------------
 
 Step "Checking Docker Desktop"
@@ -59,6 +66,7 @@ if (-not (Invoke-Quiet { docker info })) {
 }
 
 Set-Location $RepoRoot
+Write-Progress-Done "Docker Desktop is running"
 
 # --- 2. Confirm ----------------------------------------------------------
 
@@ -99,15 +107,16 @@ if (-not $SkipBackup) {
         $backupDir = Join-Path (Split-Path -Parent $RepoRoot) "wardress-backup-$stamp"
     }
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-    Step "Backing up to: $backupDir"
+    Write-Host "    Backup location: $backupDir" -ForegroundColor Cyan
 
     # 3a. .env (holds every secret + admin credentials).
+    Step "Backing up .env configuration"
     if (Test-Path $EnvFile) {
         Copy-Item $EnvFile (Join-Path $backupDir ".env") -Force
-        Write-Host "  Saved .env"
+        Write-Progress-Done "Saved .env"
     }
     else {
-        Write-Host "  No .env found - skipping (nothing to save)." -ForegroundColor Yellow
+        Write-Host "    No .env found - skipping" -ForegroundColor Yellow
     }
 
     # Read DB user/name for the dump (defaults match docker-compose.yml).
@@ -121,39 +130,45 @@ if (-not $SkipBackup) {
 
     # 3b. Postgres logical dump. Bring db up (safe if already running),
     # wait for readiness, then pg_dump through the running container.
-    Step "Backing up the database (pg_dump)"
+    Step "Backing up database with pg_dump"
     if (Invoke-Quiet { docker compose up -d db }) {
         $ready = $false
         $deadline = (Get-Date).AddSeconds(60)
+        Write-Progress-Inline "Waiting for database to be ready..."
+        
         while ((Get-Date) -lt $deadline) {
             if (Invoke-Quiet { docker compose exec -T db pg_isready -U $pgUser -d $pgDb }) {
                 $ready = $true; break
             }
             Start-Sleep -Seconds 2
         }
+        
         if ($ready) {
             $dumpFile = Join-Path $backupDir "database.sql"
             $prev = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
-            # --clean --if-exists makes the dump safely re-runnable on restore.
+            
+            Write-Progress-Inline "Dumping database..."
             docker compose exec -T db pg_dump -U $pgUser --clean --if-exists $pgDb `
                 > $dumpFile 2>$null
             $dumpOk = ($LASTEXITCODE -eq 0)
             $ErrorActionPreference = $prev
+            
             if ($dumpOk -and (Test-Path $dumpFile) -and (Get-Item $dumpFile).Length -gt 0) {
-                Write-Host "  Saved database.sql"
+                $sizeMB = [math]::Round((Get-Item $dumpFile).Length / 1MB, 2)
+                Write-Progress-Done "Saved database.sql ($sizeMB MB)"
             }
             else {
-                Write-Host "  Database dump did not complete - the DB may already be gone. Continuing." -ForegroundColor Yellow
+                Write-Host "    Database dump failed - database may already be gone" -ForegroundColor Yellow
                 if (Test-Path $dumpFile) { Remove-Item $dumpFile -ErrorAction SilentlyContinue }
             }
         }
         else {
-            Write-Host "  Database did not become ready in time - skipping the dump." -ForegroundColor Yellow
+            Write-Host "    Database did not become ready - skipping dump" -ForegroundColor Yellow
         }
     }
     else {
-        Write-Host "  Could not start the database container - skipping the dump." -ForegroundColor Yellow
+        Write-Host "    Could not start database container - skipping dump" -ForegroundColor Yellow
     }
 
     # 3c. Scan-artifacts volume (screenshots/HTML). Tar it out via a
@@ -161,31 +176,41 @@ if (-not $SkipBackup) {
     # db service's own image (already present locally, and it has tar) so
     # the uninstaller never pulls a new image just to make a backup. The
     # image ref is discovered from compose config - nothing hardcoded.
-    Step "Backing up scan artifacts"
+    Step "Backing up scan artifacts volume"
     $artVol = "${Project}_scan-artifacts"
     $helperImage = Get-ComposeServiceImage "db"
     if (Invoke-Quiet { docker volume inspect $artVol }) {
         if (-not $helperImage) {
-            Write-Host "  Could not resolve a helper image from compose config - skipping artifact archive." -ForegroundColor Yellow
+            Write-Host "    Could not resolve helper image - skipping artifact archive" -ForegroundColor Yellow
         }
         else {
             $prev = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             $srcMount = $artVol + ":/data:ro"
             $dstMount = $backupDir + ":/backup"
+            
+            Write-Progress-Inline "Archiving scan artifacts..."
             docker run --rm -v $srcMount -v $dstMount --entrypoint tar $helperImage `
                 czf /backup/scan-artifacts.tar.gz -C /data . 2>$null
             $tarOk = ($LASTEXITCODE -eq 0)
             $ErrorActionPreference = $prev
-            if ($tarOk) { Write-Host "  Saved scan-artifacts.tar.gz" }
-            else { Write-Host "  Could not archive scan artifacts - continuing." -ForegroundColor Yellow }
+            
+            if ($tarOk) { 
+                $tarFile = Join-Path $backupDir "scan-artifacts.tar.gz"
+                $sizeMB = [math]::Round((Get-Item $tarFile).Length / 1MB, 2)
+                Write-Progress-Done "Saved scan-artifacts.tar.gz ($sizeMB MB)" 
+            }
+            else { 
+                Write-Host "    Could not archive scan artifacts" -ForegroundColor Yellow 
+            }
         }
     }
     else {
-        Write-Host "  No scan-artifacts volume found - skipping." -ForegroundColor Yellow
+        Write-Host "    No scan-artifacts volume found - skipping" -ForegroundColor Yellow
     }
 
     # 3d. A short restore note so the backup is self-describing.
+    Step "Writing restore instructions"
     $readme = @"
 Wardress backup - $stamp
 =========================
@@ -211,7 +236,7 @@ To restore into a fresh install:
         docker compose up -d
 "@
     Set-Content -Path (Join-Path $backupDir "RESTORE.txt") -Value $readme -Encoding UTF8
-    Write-Host "  Wrote RESTORE.txt"
+    Write-Progress-Done "Backup completed successfully"
 }
 
 # --- 4. Tear down Docker resources --------------------------------------

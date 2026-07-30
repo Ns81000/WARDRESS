@@ -17,6 +17,7 @@ react-bits-main
 .agents
 .claude
 presentation
+build_app.err.log
 EXample
 Build
 uuuu
@@ -32,6 +33,9 @@ docs-cache/
 
 # --- Runtime data volumes (never commit user data) ---
 data/
+# ...except the bundled models.dev catalog snapshot (offline fallback, not user data).
+!backend/app/data/
+!backend/app/data/models_dev_catalog.json
 *.sqlite3
 
 # --- OS / editor noise ---

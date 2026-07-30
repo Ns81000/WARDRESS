@@ -91,8 +91,14 @@ The Telegram bot and the offline Ollama LLM are opt-in Compose profiles and are 
 
 ```bash
 docker compose --profile telegram up -d   # two-way Telegram agent surface
-docker compose --profile ollama up -d      # fully offline incident explanations
+docker compose --profile ollama up -d      # local Ollama container for AI
 ```
+
+Running `docker compose --profile ollama up -d` is what starts the local Ollama container. Wardress already creates an enabled local Ollama provider on first install, so once the container is up and you download a model from **Settings → AI providers**, AI works with no further configuration. The Settings screen shows this exact command whenever the local daemon isn't reachable yet.
+
+<Note>
+  **AI providers are configured after install** in **Settings → AI providers** — no `.env` editing, ever, and no AI environment variables exist. A local Ollama provider is enabled by default; you can also add any provider (OpenAI, Groq, Google/Gemini, Anthropic, Ollama Cloud, a custom OpenAI-compatible endpoint, …) with its API key, validate it, and assign models to the Explanations and Agent Chat tasks from the dashboard.
+</Note>
 
 <Warning>
   **The generated admin credentials are shown exactly once** during first installation. They are stored locally in your `.env` file (`ADMIN_PASSWORD`) and are not saved or transmitted anywhere else. Keep your `.env` file secure.

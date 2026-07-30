@@ -19,7 +19,7 @@ from app.llm import (
     LLMUnavailable,
     build_classification_prompt,
     parse_classification,
-    resolve_provider,
+    resolve_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,18 +50,18 @@ async def escalate_scan(
     shape: {"status": ..., "provider"?, "classification"?, "confidence"?,
     "rationale"?}. Never raises."""
     try:
-        provider = await resolve_provider(db)
-        if provider is None:
+        task = await resolve_task(db, "explanation")
+        if task is None:
             return {"status": "not configured"}
         prompt = build_classification_prompt(
             site_url=site_url, risk_score=risk, layer_scores=layer_scores, new_text=new_text
         )
-        reply = await provider.generate(prompt)
+        reply = await task.generate(prompt)
         parsed = parse_classification(reply)
         if parsed is None:
             logger.warning("LLM escalation reply was unparseable")
-            return {"status": "unparseable reply", "provider": provider.kind}
-        return {"status": "ok", "provider": provider.kind, **parsed}
+            return {"status": "unparseable reply", "provider": task.label}
+        return {"status": "ok", "provider": task.label, **parsed}
     except LLMUnavailable as exc:
         # §8: degrade silently — log it, skip the semantic layer, continue.
         logger.info("LLM escalation unavailable: %s", exc)

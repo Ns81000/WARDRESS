@@ -1,264 +1,75 @@
-"""Optional LLM intelligence layer (§8): Gemini (`gemini-flash-latest`)
-and Ollama (OpenAI-compatible local endpoint).
+"""Unified LLM layer — one litellm call-site for every provider (§8).
 
-Used for exactly two things:
-(a) semantic classification of scans whose fused risk lands in the
-    ambiguous middle band (worker, scan pipeline) — never every scan;
-(b) the "Explain this incident" button (API + Telegram bot).
+Replaces the old two-provider design (a bespoke Gemini multi-key ``KeyPool``
+plus a hand-rolled Ollama httpx client) with a single, catalog-driven layer
+built on **litellm**:
 
-Hard rules (master prompt §8):
-- One model string everywhere, sourced from ``settings.gemini_model``
-  (env ``GEMINI_MODEL``, default ``gemini-flash-latest`` — Google's stable
-  alias for the current flash model; the previously pinned
-  ``gemini-2.5-flash`` was retired for new API keys in 2026). The pool reads
-  it at construction so what the Settings UI displays is exactly what is sent.
-- Rate limiting via aiolimiter, tuned conservatively under the free
-  tier (~8 requests/minute), plus a per-key daily budget and cooldown
-  ladder on HTTP 429.
-- **Silent degradation**: a missing/invalid key, exhausted quota, or a
-  dead endpoint raises LLMUnavailable, which every caller treats as
-  "feature unavailable" — it can never block or crash a scan.
+- Each AI *task* (``explanation`` / ``agent_chat``) is resolved from the
+  ``ai_task_assignments`` row into a :class:`litellm.Router`. Multiple API keys
+  on one provider become multiple Router deployments sharing a ``model_name``,
+  which reproduces the old pool's behaviour — automatic rotation, rate-limit
+  aware selection, cooldown-on-failure, failover — with a maintained library
+  instead of ~300 lines of hand-rolled state.
+- An optional per-task fallback model (possibly on a *different* provider) is
+  wired through the Router's ``fallbacks`` list, generalising redundancy across
+  providers with no bespoke pooling code.
+- Tool/function calling is provider-agnostic via litellm's OpenAI-style
+  ``tools`` parameter, so the agent is no longer Gemini-only.
 
-There is a single Gemini call path — :class:`KeyPool` — used by the explain
-feature, the worker escalation, the agent, and the Settings key-test button.
+The silent-degradation contract is unchanged: any failure (unconfigured, bad
+key, quota, network, malformed reply) raises :class:`LLMUnavailable`, which
+every caller treats as "feature unavailable" — it can never block or crash a
+scan.
+
+Routers are cached per provider-config generation (keyed on the rows'
+``updated_at``) so cooldown state persists across requests, yet a Settings
+change takes effect immediately with no restart.
 """
 
+from __future__ import annotations
+
+import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, field
+from typing import Any
 
-import httpx
-from aiolimiter import AsyncLimiter
+import litellm
+from litellm import Router
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.ai_catalog import (
+    OLLAMA_TYPE,
+    litellm_model_string,
+)
+from app.crypto import DecryptionError, decrypt_json
+from app.models import AiProvider, AiTaskAssignment, AiTaskType
 
 logger = logging.getLogger(__name__)
 
-# Conservative token bucket: the published free-tier ceilings shift, so
-# stay well below them (§8 assumes ~8 req/min, ~200/day). Both limits are
-# per key (multi-key pool) and per process; escalations only fire in the
-# ambiguous band, so real volume is a small fraction of scan volume.
-_PER_KEY_RATE = (8, 60)  # requests, seconds
-_DAILY_BUDGET = 200  # per key
-
-# Cooldown ladder applied to a key after consecutive quota failures:
-# 1 min, then 5, then 30 (repeats at 30). Success resets the strike count.
-_COOLDOWN_STEPS_SECONDS = (60, 300, 1800)
+# litellm globals (set once): drop provider-unsupported params instead of
+# erroring (e.g. temperature on models that forbid it), stay quiet, no phone-home.
+litellm.drop_params = True
+litellm.telemetry = False
+litellm.suppress_debug_info = True
 
 _REQUEST_TIMEOUT = 30
 _MAX_OUTPUT_CHARS = 4_000
+# Conservative per-key request-rate hint (the old pool used ~8/min). litellm's
+# Router uses rpm for rate-limit-aware deployment selection.
+_PER_KEY_RPM = 8
+# Cooldown a deployment after this many failures in a minute; matches the old
+# "penalize on first quota/transient error" behaviour closely (0 = first fail).
+_ALLOWED_FAILS = 0
+_COOLDOWN_SECONDS = 60
+_NUM_RETRIES = 2
 
 
 class LLMUnavailable(Exception):
     """The optional LLM could not answer (unconfigured, bad key, quota,
     network). Callers degrade silently — this is not an error state."""
-
-
-def _is_rate_limit(exc: Exception) -> bool:
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    return code == 429 or "429" in str(exc)[:200]
-
-
-# --- Multi-key rotation pool (robustness + quota headroom) ---------------
-#
-# Multiple Gemini keys are pooled behind one interface. A request tries
-# healthy keys round-robin; a key that hits a quota/429 (or any transient
-# error) is cooled down on the ladder above and the request fails over to
-# the next key. `LLMUnavailable` is raised only when *every* key is cooling
-# down or over budget — the silent-degradation contract (§8) is preserved:
-# scans and the explain feature treat that identically to "no key".
-#
-# Per-key state lives in a module-level registry keyed by the key string so
-# health survives pool rebuilds (a fresh KeyPool is constructed from DB
-# settings on every request, but the limiter/cooldown/budget persist).
-
-
-class _KeyState:
-    """Live health for one API key (rate limiter, daily budget, cooldown)."""
-
-    __slots__ = ("api_key", "limiter", "day", "count", "strikes", "cooldown_until", "last_used")
-
-    def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
-        self.limiter = AsyncLimiter(*_PER_KEY_RATE)
-        self.day: object = None
-        self.count = 0
-        self.strikes = 0
-        self.cooldown_until: datetime | None = None
-        self.last_used: datetime | None = None
-
-    def _roll_day(self) -> None:
-        today = datetime.now(UTC).date()
-        if self.day != today:
-            self.day = today
-            self.count = 0
-
-    def available(self) -> bool:
-        self._roll_day()
-        if self.cooldown_until is not None and datetime.now(UTC) < self.cooldown_until:
-            return False
-        return self.count < _DAILY_BUDGET
-
-    def spend(self) -> None:
-        self._roll_day()
-        self.count += 1
-        self.last_used = datetime.now(UTC)
-
-    def penalize(self) -> None:
-        """Apply the next cooldown step and bump the strike count."""
-        step = _COOLDOWN_STEPS_SECONDS[min(self.strikes, len(_COOLDOWN_STEPS_SECONDS) - 1)]
-        self.strikes += 1
-        self.cooldown_until = datetime.now(UTC) + timedelta(seconds=step)
-
-    def reset(self) -> None:
-        """A success clears the cooldown ladder."""
-        self.strikes = 0
-        self.cooldown_until = None
-
-    def health(self) -> str:
-        self._roll_day()
-        if self.cooldown_until is not None and datetime.now(UTC) < self.cooldown_until:
-            return "cooldown"
-        if self.count >= _DAILY_BUDGET:
-            return "exhausted"
-        return "healthy"
-
-
-_key_states: dict[str, _KeyState] = {}
-
-
-def _state_for(api_key: str) -> _KeyState:
-    st = _key_states.get(api_key)
-    if st is None:
-        st = _KeyState(api_key)
-        _key_states[api_key] = st
-    return st
-
-
-def keys_from_setting(g: dict | None) -> list[dict]:
-    """Normalize the stored Gemini payload to a key list. Accepts both the
-    new pool shape ``{keys: [{id, api_key, label}], enabled}`` and the legacy
-    single-key shape ``{api_key, enabled}`` (auto-wrapped as a one-key pool)."""
-    if not g or not g.get("enabled", True):
-        return []
-    keys = g.get("keys")
-    if isinstance(keys, list):
-        return [k for k in keys if isinstance(k, dict) and k.get("api_key")]
-    legacy = g.get("api_key")
-    if legacy:
-        return [{"id": "legacy", "api_key": legacy, "label": "default"}]
-    return []
-
-
-class KeyPool:
-    """A rotating pool of Gemini keys sharing one gemini-flash-latest call
-    path. Used by the explain feature, the worker escalation, and the agent."""
-
-    def __init__(self, keys: list[dict], model: str | None = None) -> None:
-        self.keys = [k for k in keys if k.get("api_key")]
-        # The model string is a single source of truth: read from settings
-        # (env GEMINI_MODEL) at construction so the Settings UI display and
-        # the string actually sent to Gemini can never diverge.
-        self.model = model or get_settings().gemini_model
-        # Prune _key_states entries that are no longer in this pool so the
-        # module-level registry doesn't grow unboundedly across key rotations.
-        active = {k["api_key"] for k in self.keys}
-        for stale in [k for k in list(_key_states) if k not in active]:
-            del _key_states[stale]
-
-    def __bool__(self) -> bool:
-        return bool(self.keys)
-
-    def _sorted_keys(self) -> list[dict]:
-        """Order keys so the best next candidate is first: a key whose rate
-        limiter currently has a token beats one that would block, and among
-        equals the least-recently-used wins. This spreads load evenly (LRU)
-        AND avoids waiting ~7.5s on one key's empty bucket when another key
-        has capacity right now (finding: limiter-blocking failover)."""
-
-        def _rank(entry: dict) -> tuple[int, float]:
-            st = _key_states.get(entry["api_key"])
-            if st is None:
-                # Never used — has full capacity, oldest possible.
-                return (0, 0.0)
-            has_capacity = st.limiter.has_capacity()
-            last_used = st.last_used.timestamp() if st.last_used else 0.0
-            # capacity-first (0 sorts before 1), then LRU ascending.
-            return (0 if has_capacity else 1, last_used)
-
-        return sorted(self.keys, key=_rank)
-
-    async def call(self, *, contents, config=None):
-        """Run one generate_content across the pool, returning the raw SDK
-        response. Fails over across keys on quota/transient errors. Raises
-        LLMUnavailable when no key can serve the request."""
-        if not self.keys:
-            raise LLMUnavailable("no API key configured")
-        try:
-            from google import genai
-        except ImportError as exc:  # pragma: no cover — pinned dependency
-            raise LLMUnavailable("google-genai SDK unavailable") from exc
-
-        last_exc: Exception | None = None
-        served = 0
-        for entry in self._sorted_keys():
-            st = _state_for(entry["api_key"])
-            if not st.available():
-                continue
-            served += 1
-            try:
-                async with st.limiter:
-                    client = genai.Client(api_key=st.api_key)
-                    try:
-                        response = await client.aio.models.generate_content(
-                            model=self.model, contents=contents, config=config
-                        )
-                    finally:
-                        await client.aio.aclose()
-                # Count the request only on success so a failed attempt
-                # doesn't consume daily budget before we know it worked.
-                st.spend()
-                st.reset()
-                return response
-            except Exception as exc:  # noqa: BLE001 — classify then fail over
-                last_exc = exc
-                st.penalize()
-                if _is_rate_limit(exc):
-                    logger.info("Gemini key hit quota — cooling down, trying next key")
-                continue
-        if served == 0:
-            raise LLMUnavailable("all Gemini keys are cooling down or over budget")
-        raise LLMUnavailable(
-            f"Gemini call failed on all keys: {type(last_exc).__name__ if last_exc else 'unknown'}"
-        )
-
-    async def generate(self, prompt: str) -> str:
-        """Plain-text convenience wrapper over :meth:`call`."""
-        response = await self.call(contents=prompt)
-        text = (getattr(response, "text", None) or "").strip()
-        if not text:
-            raise LLMUnavailable("Gemini returned an empty response")
-        return text[:_MAX_OUTPUT_CHARS]
-
-    def health_snapshot(self) -> list[dict]:
-        """Per-key health for the Settings UI (no secrets)."""
-        out = []
-        for entry in self.keys:
-            st = _state_for(entry["api_key"])
-            out.append(
-                {
-                    "id": entry.get("id"),
-                    "label": entry.get("label") or "",
-                    "hint": _key_hint(entry["api_key"]),
-                    "health": st.health(),
-                    "used_today": st.count,
-                    "daily_budget": _DAILY_BUDGET,
-                    "last_used": st.last_used.isoformat() if st.last_used else None,
-                }
-            )
-        return out
 
 
 def _key_hint(secret: str, keep: int = 6) -> str:
@@ -267,92 +78,265 @@ def _key_hint(secret: str, keep: int = 6) -> str:
     return secret[:keep] + "…" + secret[-2:]
 
 
-async def ollama_generate(base_url: str, model: str | None, prompt: str) -> str:
-    """One chat call against Ollama's OpenAI-compatible endpoint.
-    Raises LLMUnavailable on any failure."""
-    if not model:
-        raise LLMUnavailable("no Ollama model configured")
-    url = base_url.rstrip("/") + "/chat/completions"
+# --- Provider credential handling ----------------------------------------
+
+
+def provider_api_keys(provider: AiProvider) -> list[str]:
+    """Decrypt a provider's stored API keys. Returns [] when the provider has
+    no credentials (e.g. a local Ollama daemon) or the blob is undecryptable
+    (rotated key) — treated as unconfigured, never a crash."""
+    if not provider.credentials_encrypted:
+        return []
     try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
-            resp = await client.post(
-                url,
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-        text = (body["choices"][0]["message"]["content"] or "").strip()
-        if not text:
-            raise LLMUnavailable("Ollama returned an empty response")
-        return text[:_MAX_OUTPUT_CHARS]
-    except LLMUnavailable:
-        raise
-    except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
-        logger.warning("Ollama call failed: %s", str(exc)[:200])
-        raise LLMUnavailable(f"Ollama call failed: {type(exc).__name__}") from exc
+        blob = decrypt_json(provider.credentials_encrypted)
+    except DecryptionError:
+        logger.warning(
+            "AI provider %s credentials undecryptable — treating as keyless", provider.id
+        )
+        return []
+    keys = blob.get("api_keys")
+    if isinstance(keys, list):
+        return [k for k in keys if isinstance(k, str) and k]
+    single = blob.get("api_key")
+    return [single] if isinstance(single, str) and single else []
 
 
-# --- Settings test calls (§7: cheap confirmation endpoints) ---
+def _litellm_api_base(provider: AiProvider) -> str | None:
+    """The ``api_base`` to hand litellm for this provider, or None to use
+    litellm's provider default. Ollama uses the native chat API, so any
+    legacy OpenAI-compatible ``/v1`` suffix is stripped."""
+    base = (provider.base_url or "").strip()
+    if provider.provider_type == OLLAMA_TYPE:
+        from app.ai_ollama import DEFAULT_OLLAMA_BASE_URL
+
+        base = base or DEFAULT_OLLAMA_BASE_URL
+        base = base.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        return base or "http://localhost:11434"
+    return base or None
 
 
-async def ollama_test_call(base_url: str, model: str | None) -> tuple[bool, str]:
-    try:
-        await ollama_generate(base_url, model, "Reply with the single word: ok")
-        return True, f"Ollama works — {model} answered"
-    except LLMUnavailable as exc:
-        return False, f"Ollama test failed: {exc}"
+def _deployments(provider: AiProvider, model_id: str, alias: str) -> list[dict]:
+    """One Router deployment per API key (rotation), all sharing ``alias`` as
+    ``model_name``. A keyless provider (local Ollama) yields one deployment."""
+    model_str = litellm_model_string(provider.provider_type, model_id)
+    api_base = _litellm_api_base(provider)
+    keys = provider_api_keys(provider) or [None]
+    deployments: list[dict] = []
+    for key in keys:
+        params: dict[str, Any] = {"model": model_str, "timeout": _REQUEST_TIMEOUT}
+        if key:
+            params["api_key"] = key
+        if api_base:
+            params["api_base"] = api_base
+        if key:  # only meaningful when a key exists to rate-limit against
+            params["rpm"] = _PER_KEY_RPM
+        deployments.append({"model_name": alias, "litellm_params": params})
+    return deployments
 
 
-# --- Provider resolution (DB settings are the source of truth) ---
+# --- Router build + per-config-generation cache --------------------------
+
+_PRIMARY_ALIAS = "primary"
+_FALLBACK_ALIAS = "fallback"
+
+# Cache: signature -> ResolvedTask. Keyed on the config rows' updated_at so a
+# Settings edit invalidates it immediately (no restart) while cooldown state
+# persists across requests within one config generation.
+_router_cache: dict[str, ResolvedTask] = {}
+
+
+def _signature(*parts: Any) -> str:
+    raw = "|".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 @dataclass
-class LLMProvider:
-    kind: str  # "gemini" | "ollama"
-    base_url: str = ""
-    model: str = ""
-    pool: "KeyPool | None" = None
+class ResolvedTask:
+    """A task bound to a ready-to-call litellm Router."""
+
+    task: str
+    router: Router
+    label: str  # short provider-type tag stored as scan.explanation_provider / audit
+    supports_tools: bool
+    model_string: str  # the litellm model string of the primary (for capability checks)
+    _sig: str = field(default="", repr=False)
+
+    async def _acompletion(self, **kwargs) -> Any:
+        try:
+            return await self.router.acompletion(model=_PRIMARY_ALIAS, **kwargs)
+        except LLMUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 — every provider/litellm error degrades
+            logger.info("LLM task %s failed: %s", self.task, str(exc)[:200])
+            raise LLMUnavailable(f"{type(exc).__name__}: {str(exc)[:120]}") from exc
 
     async def generate(self, prompt: str) -> str:
-        if self.kind == "gemini":
-            if self.pool is None:
-                raise LLMUnavailable("no API key configured")
-            return await self.pool.generate(prompt)
-        return await ollama_generate(self.base_url, self.model, prompt)
+        """Plain-text completion (explain / escalation / rolling summary)."""
+        resp = await self._acompletion(messages=[{"role": "user", "content": prompt}])
+        text = _extract_text(resp)
+        if not text:
+            raise LLMUnavailable("model returned an empty response")
+        return text[:_MAX_OUTPUT_CHARS]
+
+    async def acompletion(
+        self,
+        *,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
+    ) -> Any:
+        """Full completion (agent turn) — returns the raw litellm response so
+        the engine can read tool_calls / content."""
+        kwargs: dict[str, Any] = {"messages": messages}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice or "auto"
+        return await self._acompletion(**kwargs)
 
 
-async def resolve_provider(db) -> LLMProvider | None:
-    """The configured+enabled provider, Gemini preferred (cloud opt-in
-    beats local when the user enabled both), or None. Env vars act as
-    bootstrap defaults when no DB row exists yet. Gemini rides the
-    multi-key rotation pool (a legacy single-key row is a one-key pool)."""
-    from app.settings_store import GEMINI_KEY, OLLAMA_KEY, load_setting
+def _extract_text(resp: Any) -> str:
+    try:
+        return (resp.choices[0].message.content or "").strip()
+    except (AttributeError, IndexError, TypeError):
+        return ""
 
-    settings = get_settings()
-    g = await load_setting(db, GEMINI_KEY)
-    if g is None and settings.gemini_api_key:
-        g = {"api_key": settings.gemini_api_key, "enabled": True}
-    keys = keys_from_setting(g)
-    if keys:
-        return LLMProvider(kind="gemini", pool=KeyPool(keys))
 
-    o = await load_setting(db, OLLAMA_KEY)
-    if o is None and settings.enable_ollama:
-        o = {"enabled": True, "base_url": settings.ollama_base_url, "model": None}
-    if o and o.get("enabled") and o.get("model"):
-        return LLMProvider(
-            kind="ollama",
-            base_url=o.get("base_url") or settings.ollama_base_url,
-            model=o["model"],
+def _supports_tools(provider_type: str, model_string: str) -> bool:
+    """Whether the resolved task can do tool/function calling — the agent-chat
+    capability flag the engine reads.
+
+    For catalog providers litellm's static registry is authoritative. For Ollama
+    and custom OpenAI-compatible endpoints litellm's registry has no entry and
+    returns False even for genuinely tool-capable models, so we trust the
+    assignment-time gate instead (``resolve_tool_capability`` probed Ollama's
+    ``/api/show`` and refused a non-tool model; a custom endpoint is trusted).
+    The engine still degrades cleanly if a tool call fails at runtime."""
+    from app.ai_catalog import OLLAMA_TYPE, OPENAI_COMPATIBLE_TYPE
+
+    if provider_type in (OLLAMA_TYPE, OPENAI_COMPATIBLE_TYPE):
+        return True
+    try:
+        return bool(litellm.supports_function_calling(model=model_string))
+    except Exception:  # noqa: BLE001 — an unknown model must degrade, not crash resolution
+        return False
+
+
+def _build_router(
+    primary: AiProvider,
+    primary_model: str,
+    fallback: AiProvider | None,
+    fallback_model: str | None,
+) -> Router:
+    model_list = _deployments(primary, primary_model, _PRIMARY_ALIAS)
+    fallbacks = None
+    if fallback is not None and fallback_model:
+        model_list += _deployments(fallback, fallback_model, _FALLBACK_ALIAS)
+        fallbacks = [{_PRIMARY_ALIAS: [_FALLBACK_ALIAS]}]
+    return Router(
+        model_list=model_list,
+        routing_strategy="simple-shuffle",
+        num_retries=_NUM_RETRIES,
+        cooldown_time=_COOLDOWN_SECONDS,
+        allowed_fails=_ALLOWED_FAILS,
+        fallbacks=fallbacks,
+        set_verbose=False,
+    )
+
+
+async def _load_provider(db: AsyncSession, provider_id) -> AiProvider | None:
+    if provider_id is None:
+        return None
+    return await db.scalar(select(AiProvider).where(AiProvider.id == provider_id))
+
+
+async def resolve_task(db: AsyncSession, task: str | AiTaskType) -> ResolvedTask | None:
+    """Resolve one AI task to a ready Router, or None when unconfigured. Reads
+    the ``ai_task_assignments`` row, loads the primary (and optional fallback)
+    provider, and returns a cached :class:`ResolvedTask` when the config is
+    unchanged. Never raises for config problems — returns None."""
+    task_value = task.value if isinstance(task, AiTaskType) else str(task)
+    assignment = await db.scalar(
+        select(AiTaskAssignment).where(AiTaskAssignment.task == task_value)
+    )
+    if assignment is None or assignment.provider_id is None or not assignment.model_id:
+        return None
+
+    primary = await _load_provider(db, assignment.provider_id)
+    if primary is None or not primary.enabled:
+        return None
+    fallback = await _load_provider(db, assignment.fallback_provider_id)
+    if fallback is not None and not fallback.enabled:
+        fallback = None
+    fb_model = assignment.fallback_model_id if fallback is not None else None
+
+    sig = _signature(
+        task_value,
+        primary.id,
+        primary.updated_at,
+        assignment.model_id,
+        assignment.updated_at,
+        fallback.id if fallback else None,
+        fallback.updated_at if fallback else None,
+        fb_model,
+    )
+    cached = _router_cache.get(sig)
+    if cached is not None:
+        return cached
+
+    try:
+        router = _build_router(primary, assignment.model_id, fallback, fb_model)
+    except Exception:  # noqa: BLE001 — a bad config must degrade, not crash
+        logger.exception("Failed to build router for task %s", task_value)
+        return None
+
+    model_string = litellm_model_string(primary.provider_type, assignment.model_id)
+    resolved = ResolvedTask(
+        task=task_value,
+        router=router,
+        label=primary.provider_type[:32],
+        supports_tools=_supports_tools(primary.provider_type, model_string),
+        model_string=model_string,
+        _sig=sig,
+    )
+    # Bound the cache: a handful of task/config generations at most.
+    if len(_router_cache) > 32:
+        _router_cache.clear()
+    _router_cache[sig] = resolved
+    return resolved
+
+
+def clear_router_cache() -> None:
+    """Drop cached Routers (tests; also called when providers are deleted)."""
+    _router_cache.clear()
+
+
+# --- One-off provider validation (cheap live call) -----------------------
+
+
+async def validate_provider_call(
+    provider: AiProvider, model_id: str
+) -> tuple[bool, str]:
+    """A cheap real completion to confirm a provider+model actually works.
+    Returns (ok, human message). Never raises."""
+    try:
+        router = _build_router(provider, model_id, None, None)
+        resp = await router.acompletion(
+            model=_PRIMARY_ALIAS,
+            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=16,
         )
-    return None
+        text = _extract_text(resp)
+        if text:
+            return True, f"{provider.label} answered ({model_id})"
+        return False, "Provider returned an empty response"
+    except Exception as exc:  # noqa: BLE001 — validation surfaces the error text
+        return False, f"{type(exc).__name__}: {str(exc)[:160]}"
 
 
-# --- Prompt builders (shared by worker escalation, API explain, bot) ---
+# --- Prompt builders (shared by worker escalation, API explain, bot) -----
+# Unchanged from the previous implementation — provider-agnostic already.
 
 _NEW_TEXT_SAMPLE_CHARS = 2_000
 
@@ -434,7 +418,6 @@ def parse_classification(text: str) -> dict | None:
     """Parse the strict-JSON classification reply; None when malformed
     (the caller records the escalation as unusable, never crashes)."""
     candidate = text.strip()
-    # Models occasionally wrap JSON in fences despite instructions.
     fence = re.search(r"\{.*\}", candidate, re.DOTALL)
     if fence:
         candidate = fence.group(0)

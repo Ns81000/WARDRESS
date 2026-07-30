@@ -96,7 +96,11 @@ RBAC is enforced per endpoint via dependency factories, so a `403` (valid creden
     | GET/POST/PATCH/DELETE | `/api/users[/{id}]` | admin |
     | GET/POST/DELETE | `/api/api-keys[/{id}]` | session (own keys) |
     | GET | `/api/audit-log` (paged) | admin |
-    | GET/PUT/POST | `/api/settings/{smtp,telegram,gemini,ollama}` (+ `/test`) | admin |
+    | GET/PUT/POST | `/api/settings/{smtp,telegram}` (+ `/test`) | admin |
+    | GET/POST/PATCH/DELETE | `/api/settings/ai/providers[/{id}]` | admin |
+    | POST | `/api/settings/ai/providers/{id}/{validate,ollama-models,pull}` | admin |
+    | GET/PUT | `/api/settings/ai/{catalog/providers,catalog/models,assignments}` | admin |
+    | GET/PUT/POST | `/api/settings/{gemini,ollama}` (deprecated adapters) | admin |
     | * | `/api/notification-channels` | admin |
   </Accordion>
   <Accordion title="Agent · /api/agent" icon="robot">

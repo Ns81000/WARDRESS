@@ -33,6 +33,9 @@ $EnvFile = Join-Path $RepoRoot ".env"
 # Shared helpers (Fail/Step/Invoke-*, dynamic image discovery, retries).
 . (Join-Path $PSScriptRoot "lib.ps1")
 
+# Set total steps for progress tracking
+Set-TotalSteps 11
+
 # --- 1. Preconditions ----------------------------------------------------
 
 Step "Checking Docker Desktop"
@@ -52,6 +55,8 @@ if (-not (Test-Path $EnvFile)) {
     Fail ".env not found - run scripts\install.ps1 first."
 }
 
+Write-Progress-Done "Prerequisites verified"
+
 # --- 2. Pull source ------------------------------------------------------
 
 if (-not $NoGitPull) {
@@ -64,27 +69,58 @@ if (-not $NoGitPull) {
                 Fail ("git pull failed (local changes or a diverged branch?). " +
                     "Resolve it manually, or re-run with -NoGitPull to update from the current checkout.")
             }
+            Write-Progress-Done "Source updated"
+        } else {
+            Write-Host "    No git remote configured, skipping source update" -ForegroundColor Yellow
         }
+    } else {
+        Write-Host "    Not a git repository or git not installed, skipping source update" -ForegroundColor Yellow
     }
+}
+
+# --- Pre-flight: TypeScript check ----------------------------------------
+
+Step "Pre-flight TypeScript validation"
+
+# Install/update frontend dependencies before TypeScript check
+$frontendPath = Join-Path $RepoRoot "frontend"
+if (Test-Path (Join-Path $frontendPath "package.json")) {
+    Push-Location $frontendPath
+    try {
+        Write-Progress-Inline "Updating frontend dependencies..."
+        pnpm install --frozen-lockfile | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Fail "Failed to install frontend dependencies"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+if (-not (Test-CompilationErrors $RepoRoot)) {
+    Fail "TypeScript compilation errors detected. Fix them before rebuilding Docker images."
 }
 
 # --- 3. Pull base images + rebuild (serially, in the foreground) ---------
 
-Step "Pre-pulling base images (retries transient registry errors)"
+Step "Discovering base images"
 # Discovered dynamically from the Dockerfiles + compose config (nothing
 # hardcoded), so it always matches the real stack.
 $baseImages = @()
 $baseImages += Get-BuildBaseImages $RepoRoot
 $baseImages += Get-ComposeRemoteImages
+Write-Progress-Done "Found $($baseImages.Length) base images"
+
+Step "Pre-pulling base images (with retry on network errors)"
 Warm-Images $baseImages
 
-Step "Rebuilding the app image"
+Step "Rebuilding app image"
 Build-Service @("--pull") "app" "Rebuilding the app image failed"
 
-Step "Rebuilding the worker image"
+Step "Rebuilding worker image"
 Build-Service @("--pull") "worker" "Rebuilding the worker image failed"
 
-Step "Rebuilding the scheduler image (shares the worker build cache)"
+Step "Rebuilding beat scheduler image"
 Build-Service @() "beat" "Rebuilding the beat image failed"
 
 # --- 4. Migrate ----------------------------------------------------------
@@ -129,7 +165,12 @@ $dashboardUrl = "http://localhost:$port"
 
 $deadline = (Get-Date).AddSeconds(120)
 $healthy = $false
+$attempts = 0
 while ((Get-Date) -lt $deadline) {
+    $attempts++
+    $remaining = [int](($deadline - (Get-Date)).TotalSeconds)
+    Write-Progress-Inline "Checking health endpoint (attempt $attempts, ${remaining}s remaining)..."
+    
     try {
         $resp = Invoke-WebRequest -Uri "$dashboardUrl/api/health/live" -UseBasicParsing -TimeoutSec 3
         if ($resp.StatusCode -eq 200) { $healthy = $true; break }
@@ -141,6 +182,7 @@ if (-not $healthy) {
     Fail ("The API did not become healthy within 120 seconds after the update. " +
         "Check the logs with: docker compose logs app")
 }
+Write-Progress-Done "Dashboard is healthy"
 
 Write-Host ""
 Write-Host "----------------------------------------------------------------" -ForegroundColor Green
