@@ -8,34 +8,46 @@ import { OllamaEnableHint, ProviderLogo } from "../src/components/ai-settings-ca
 // models.dev — never as inlined SVG markup (an XSS vector) — with a graceful
 // fallback for ids that have no logo and for load failures.
 describe("ProviderLogo", () => {
-  it("renders a models.dev <img> for a catalog provider (no inlined SVG)", () => {
+  it("renders a full-color <img> for a catalog provider (no inlined SVG)", () => {
     const { container } = render(<ProviderLogo providerType="anthropic" />)
     const img = container.querySelector("img")
     expect(img).not.toBeNull()
-    expect(img?.getAttribute("src")).toBe("https://models.dev/logos/anthropic.svg")
+    expect(img?.getAttribute("src")).toBe("https://www.google.com/s2/favicons?domain=anthropic.com&sz=128")
     // The raw SVG must never be inlined into the DOM.
     expect(container.querySelector("svg")).toBeNull()
     expect(container.innerHTML).not.toContain("<path")
   })
 
-  it("derives the url from the provider id", () => {
+  it("derives the full-color logo url from the provider domain/id", () => {
     const { container } = render(<ProviderLogo providerType="google" />)
     expect(container.querySelector("img")?.getAttribute("src")).toBe(
-      "https://models.dev/logos/google.svg",
+      "https://www.google.com/s2/favicons?domain=google.dev&sz=128",
     )
   })
 
-  it("falls back to the provider initial for a custom endpoint with no logo", () => {
+  it("renders the OpenAI logo for Custom (OpenAI-compatible) provider", () => {
     const { container } = render(<ProviderLogo providerType="openai_compatible" />)
-    expect(container.querySelector("img")).toBeNull()
-    expect(container.textContent).toBe("O")
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
+    )
   })
 
-  it("falls back to the initial when the logo fails to load (onError)", () => {
+  it("steps through multi-source candidates on error and falls back to initial when all fail", () => {
     const { container } = render(<ProviderLogo providerType="groq" />)
-    const img = container.querySelector("img")
+    let img = container.querySelector("img")
     expect(img).not.toBeNull()
+    expect(img?.getAttribute("src")).toContain("google.com/s2/favicons")
+
+    // Error on candidate 0 -> moves to candidate 1 (svgl)
     fireEvent.error(img as HTMLImageElement)
+    img = container.querySelector("img")
+    expect(img?.getAttribute("src")).toContain("svgl")
+
+    // Trigger errors for remaining candidates until initial fallback
+    while (container.querySelector("img")) {
+      fireEvent.error(container.querySelector("img") as HTMLImageElement)
+    }
+
     expect(container.querySelector("img")).toBeNull()
     expect(container.textContent).toBe("G")
   })

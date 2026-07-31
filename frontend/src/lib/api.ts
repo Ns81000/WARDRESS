@@ -42,8 +42,17 @@ export async function parseDetail(resp: Response): Promise<string> {
   try {
     const body = await resp.json()
     if (typeof body.detail === "string") return sanitizeApiDetail(body.detail)
-    if (Array.isArray(body.detail) && body.detail[0]?.msg)
-      return sanitizeApiDetail(String(body.detail[0].msg))
+    if (Array.isArray(body.detail) && body.detail.length > 0) {
+      const first = body.detail[0]
+      if (first && typeof first === "object") {
+        const fieldName = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : "field"
+        const formattedField = String(fieldName).replace(/_/g, " ")
+        if (first.msg === "Field required" || first.msg === "field required") {
+          return sanitizeApiDetail(`The '${formattedField}' field is required.`)
+        }
+        if (first.msg) return sanitizeApiDetail(String(first.msg))
+      }
+    }
     return `Request failed (${resp.status})`
   } catch {
     return `Request failed (${resp.status})`
@@ -869,8 +878,7 @@ export interface OllamaPullEvent {
  * header rides along, parse `data:` frames, refresh-once on 401.
  */
 export async function streamOllamaPull(
-  providerId: string,
-  model: string,
+  params: { providerId?: string; baseUrl?: string; model: string },
   onEvent: (event: OllamaPullEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -882,7 +890,11 @@ export async function streamOllamaPull(
         "Content-Type": "application/json",
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
-      body: JSON.stringify({ provider_id: providerId, model }),
+      body: JSON.stringify({
+        provider_id: params.providerId ?? null,
+        base_url: params.baseUrl ?? null,
+        model: params.model,
+      }),
       signal,
     })
 

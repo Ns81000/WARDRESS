@@ -600,12 +600,13 @@ async def list_catalog_providers(user: AdminUser, db: DB) -> list[CatalogProvide
         select(ModelCatalogProvider).order_by(ModelCatalogProvider.name)
     )
     out = [
-        CatalogProviderOut(id="ollama", name="Ollama (local / cloud)"),
+        CatalogProviderOut(id="ollama", name="Ollama"),
         CatalogProviderOut(id="openai_compatible", name="Custom (OpenAI-compatible)"),
     ]
     out += [
         CatalogProviderOut(id=r.id, name=r.name, env=r.env or [], api_base=r.api_base, doc=r.doc)
         for r in rows
+        if r.id not in ("ollama", "ollama-cloud", "ollama_cloud")
     ]
     return out
 
@@ -834,20 +835,31 @@ async def pull_ollama_model(body: OllamaPullRequest, user: AdminUser, db: DB) ->
     from app.ai_ollama import OllamaError, pull_stream
     from app.llm import provider_api_keys
 
-    provider = await _require_provider(db, body.provider_id)
-    if provider.provider_type != "ollama":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an Ollama provider")
-    keys = provider_api_keys(provider)
-    base_url = provider.base_url
+    base_url = body.base_url
+    api_key = None
+    target_id = "ollama"
+    target_label = "Ollama model pull"
+
+    if body.provider_id:
+        try:
+            provider = await _require_provider(db, body.provider_id)
+            if provider.provider_type == "ollama":
+                keys = provider_api_keys(provider)
+                base_url = provider.base_url or base_url
+                api_key = keys[0] if keys else None
+                target_id = str(provider.id)
+                target_label = provider.label
+        except Exception:
+            pass
+
     model = body.model
-    api_key = keys[0] if keys else None
     record_audit(
         db,
         actor=user,
         action="settings.ai.ollama_pull",
         target_type="ai_provider",
-        target_id=str(provider.id),
-        target_label=provider.label,
+        target_id=target_id,
+        target_label=target_label,
         after={"model": model},
     )
     await db.commit()

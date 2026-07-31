@@ -3,6 +3,7 @@
 import re
 import uuid
 from datetime import datetime
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
@@ -545,8 +546,26 @@ class OllamaModelOut(BaseModel):
 
 
 class OllamaPullRequest(BaseModel):
-    provider_id: str
+    provider_id: str | None = None
+    base_url: str | None = None
     model: str = Field(min_length=1, max_length=160)
+
+    @field_validator("provider_id", "base_url", mode="before")
+    @classmethod
+    def allow_empty_or_none(cls, v: Any) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def validate_model_id(cls, v: Any) -> str:
+        if v is None:
+            raise ValueError("Please provide a valid model identifier to download")
+        s = str(v).strip()
+        if not s:
+            raise ValueError("Please provide a valid model identifier to download")
+        return s
 
 
 # --- Phase 4: alerts (§6/§7) ---

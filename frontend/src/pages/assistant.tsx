@@ -95,16 +95,24 @@ export function AssistantPage() {
 
   // On first load (or after a delete), settle on a conversation to show.
   useEffect(() => {
-    if (!conversations.data) return
-    if (activeId && conversations.data.some((c) => c.id === activeId)) return
-    setActiveId(conversations.data[0]?.id ?? null)
-  }, [conversations.data, activeId])
+    if (!conversations.data || conversations.data.length === 0) return
+    setActiveId((current) => {
+      if (current && conversations.data.some((c) => c.id === current)) {
+        return current
+      }
+      return conversations.data[0]?.id ?? null
+    })
+  }, [conversations.data])
 
   const createConv = useMutation({
     mutationFn: apiClient.createConversation,
     onSuccess: (conv) => {
-      void queryClient.invalidateQueries({ queryKey: ["agent", "conversations"] })
+      queryClient.setQueryData<apiClient.AgentConversation[]>(
+        ["agent", "conversations"],
+        (old) => [conv, ...(old ?? [])],
+      )
       setActiveId(conv.id)
+      void queryClient.invalidateQueries({ queryKey: ["agent", "conversations"] })
     },
     onError: (err) => toast.error(errMessage(err, "Could not start a conversation")),
   })
