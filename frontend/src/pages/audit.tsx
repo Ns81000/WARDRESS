@@ -201,7 +201,7 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
           open && "bg-white/[0.01]"
         )}
       >
-        <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[180px_160px_1fr_220px_32px] sm:items-center sm:gap-4">
+        <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[160px_220px_1fr_200px_32px] sm:items-center sm:gap-4">
           {/* Timestamp */}
           <span className="font-mono text-code-md text-charcoal flex items-center gap-1.5">
             <Clock className="size-3.5 text-mute sm:hidden" />
@@ -209,8 +209,8 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
           </span>
 
           {/* Action Badge */}
-          <div className="flex items-center">
-            <Badge variant="outline" className={cn("px-2.5 py-0.5 text-[10px] font-mono tracking-wider", auditActionClass(entry.action))}>
+          <div className="flex items-center min-w-0">
+            <Badge variant="outline" className={cn("px-2.5 py-0.5 text-[10px] font-mono tracking-wider max-w-full truncate inline-block", auditActionClass(entry.action))} title={entry.action}>
               {entry.action}
             </Badge>
           </div>
@@ -367,7 +367,7 @@ export function AuditPage() {
       <div className="relative z-10 rounded-lg border border-hairline-strong bg-surface-card overflow-hidden">
         {/* Table header (visible on desktop) */}
         {!log.isLoading && !log.isError && (log.data?.items.length ?? 0) > 0 && (
-          <div className="hidden border-b border-hairline px-6 py-2.5 text-[10px] font-mono uppercase tracking-wider text-charcoal sm:grid sm:grid-cols-[180px_160px_1fr_220px_32px] sm:items-center sm:gap-4 bg-surface-deep/45">
+          <div className="hidden border-b border-hairline px-6 py-2.5 text-[10px] font-mono uppercase tracking-wider text-charcoal sm:grid sm:grid-cols-[160px_220px_1fr_200px_32px] sm:items-center sm:gap-4 bg-surface-deep/45">
             <span>Timestamp</span>
             <span>Action</span>
             <span>Target Label</span>
