@@ -28,10 +28,12 @@ change takes effect immediately with no restart.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,6 +56,27 @@ logger = logging.getLogger(__name__)
 litellm.drop_params = True
 litellm.telemetry = False
 litellm.suppress_debug_info = True
+
+# Redact anything resembling an API key/token from a string before it is
+# logged. Provider auth errors frequently echo the offending key (or a prefix)
+# in the exception message; those messages flow to persistent logs / SIEM /
+# support tickets, so scrub before writing. Covers common vendor prefixes
+# (OpenAI sk-, Google AIza) and any long base64/hex-ish run.
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),        # OpenAI / Anthropic style
+    re.compile(r"AIza[A-Za-z0-9_\-]{10,}"),      # Google API keys
+    re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"),       # any long opaque token/hash
+]
+
+
+def _scrub_secrets(text: str) -> str:
+    """Replace anything that looks like a credential with ``[REDACTED]``."""
+    if not text:
+        return text
+    scrubbed = text
+    for pat in _SECRET_PATTERNS:
+        scrubbed = pat.sub("[REDACTED]", scrubbed)
+    return scrubbed
 
 _REQUEST_TIMEOUT = 30
 _MAX_OUTPUT_CHARS = 4_000
@@ -143,8 +166,12 @@ _FALLBACK_ALIAS = "fallback"
 
 # Cache: signature -> ResolvedTask. Keyed on the config rows' updated_at so a
 # Settings edit invalidates it immediately (no restart) while cooldown state
-# persists across requests within one config generation.
-_router_cache: dict[str, ResolvedTask] = {}
+# persists across requests within one config generation. An OrderedDict gives
+# LRU eviction (see resolve_task) instead of a full-clear cliff, and an
+# asyncio.Lock serialises access so concurrent coroutines can't corrupt it.
+_router_cache: OrderedDict[str, ResolvedTask] = OrderedDict()
+_router_cache_lock = asyncio.Lock()
+_ROUTER_CACHE_MAX = 32
 
 
 def _signature(*parts: Any) -> str:
@@ -169,8 +196,9 @@ class ResolvedTask:
         except LLMUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001 — every provider/litellm error degrades
-            logger.info("LLM task %s failed: %s", self.task, str(exc)[:200])
-            raise LLMUnavailable(f"{type(exc).__name__}: {str(exc)[:120]}") from exc
+            scrubbed = _scrub_secrets(str(exc)[:200])
+            logger.info("LLM task %s failed [%s]: %s", self.task, type(exc).__name__, scrubbed)
+            raise LLMUnavailable(f"{type(exc).__name__}: {_scrub_secrets(str(exc)[:120])}") from exc
 
     async def generate(self, prompt: str) -> str:
         """Plain-text completion (explain / escalation / rolling summary)."""
@@ -281,14 +309,25 @@ async def resolve_task(db: AsyncSession, task: str | AiTaskType) -> ResolvedTask
         fallback.updated_at if fallback else None,
         fb_model,
     )
-    cached = _router_cache.get(sig)
-    if cached is not None:
-        return cached
+    async with _router_cache_lock:
+        cached = _router_cache.get(sig)
+        if cached is not None:
+            _router_cache.move_to_end(sig)  # LRU: mark most-recently used
+            return cached
 
+    # Build the Router *outside* the lock — it can do network/validation work
+    # and must not serialise every concurrent resolve behind one coroutine.
     try:
         router = _build_router(primary, assignment.model_id, fallback, fb_model)
     except Exception:  # noqa: BLE001 — a bad config must degrade, not crash
-        logger.exception("Failed to build router for task %s", task_value)
+        # ERR-3: actionable log — include the model/provider so misconfig is
+        # diagnosable from the error message alone.
+        logger.exception(
+            "Failed to build router for task %s (provider=%s, model=%s)",
+            task_value,
+            primary.provider_type,
+            assignment.model_id,
+        )
         return None
 
     model_string = litellm_model_string(primary.provider_type, assignment.model_id)
@@ -300,15 +339,32 @@ async def resolve_task(db: AsyncSession, task: str | AiTaskType) -> ResolvedTask
         model_string=model_string,
         _sig=sig,
     )
-    # Bound the cache: a handful of task/config generations at most.
-    if len(_router_cache) > 32:
-        _router_cache.clear()
-    _router_cache[sig] = resolved
+
+    async with _router_cache_lock:
+        # A concurrent coroutine may have built and stored the same sig while
+        # we were building — prefer the already-cached one to keep cooldown
+        # state shared, and discard our just-built duplicate.
+        existing = _router_cache.get(sig)
+        if existing is not None:
+            _router_cache.move_to_end(sig)
+            return existing
+        _router_cache[sig] = resolved
+        _router_cache.move_to_end(sig)
+        # LRU eviction: drop the oldest entries one at a time (preserving the
+        # cooldown/retry state of every surviving router) instead of a
+        # full-clear cliff that would trigger a thundering-herd rebuild.
+        while len(_router_cache) > _ROUTER_CACHE_MAX:
+            _router_cache.popitem(last=False)
     return resolved
 
 
 def clear_router_cache() -> None:
-    """Drop cached Routers (tests; also called when providers are deleted)."""
+    """Drop cached Routers (tests; also called when providers are deleted).
+
+    Not awaited under the lock: called from sync paths (tests, provider-delete
+    hooks) where no concurrent ``resolve_task`` is expected. Reassigning clears
+    atomically at the Python-object level.
+    """
     _router_cache.clear()
 
 
@@ -332,7 +388,7 @@ async def validate_provider_call(
             return True, f"{provider.label} answered ({model_id})"
         return False, "Provider returned an empty response"
     except Exception as exc:  # noqa: BLE001 — validation surfaces the error text
-        return False, f"{type(exc).__name__}: {str(exc)[:160]}"
+        return False, f"{type(exc).__name__}: {_scrub_secrets(str(exc)[:160])}"
 
 
 # --- Prompt builders (shared by worker escalation, API explain, bot) -----
@@ -418,15 +474,26 @@ def parse_classification(text: str) -> dict | None:
     """Parse the strict-JSON classification reply; None when malformed
     (the caller records the escalation as unusable, never crashes)."""
     candidate = text.strip()
-    fence = re.search(r"\{.*\}", candidate, re.DOTALL)
-    if fence:
-        candidate = fence.group(0)
+    # CB-4: try the full text as JSON first (common case: model replies with
+    # only the JSON object). Fall back to a non-greedy first-object regex if
+    # the model wraps it in prose.
     try:
         parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            pass  # use parsed below
+        else:
+            return None
     except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
+        # Non-greedy: prefer the first {...} span, not the widest.
+        fence = re.search(r"\{.*?\}", candidate, re.DOTALL)
+        if not fence:
+            return None
+        try:
+            parsed = json.loads(fence.group(0))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
     classification = parsed.get("classification")
     if classification not in ("defacement", "benign", "unclear"):
         return None

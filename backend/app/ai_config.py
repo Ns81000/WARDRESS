@@ -12,6 +12,7 @@ the backend — callers get key *hints* only.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -22,6 +23,38 @@ from app.ai_catalog import OLLAMA_TYPE, OPENAI_COMPATIBLE_TYPE, model_supports_t
 from app.crypto import DecryptionError, decrypt_json, encrypt_json
 from app.llm import _key_hint, clear_router_cache, provider_api_keys
 from app.models import AiProvider, AiTaskAssignment, AiTaskType, ModelCatalogEntry
+from app.ssrf import SSRFBlockedError, assert_url_allowed
+
+
+class ProviderConfigError(ValueError):
+    """A provider config is invalid (e.g. an SSRF-blocked base_url). Message
+    is user-safe; the settings router maps it to a 422."""
+
+
+async def validate_base_url(base_url: str | None, provider_type: str) -> None:
+    """Reject a provider ``base_url`` that would enable SSRF.
+
+    Requires an http/https scheme and a resolvable host, then runs the shared
+    SSRF policy (``app/ssrf.assert_url_allowed``) to block loopback / private /
+    link-local / cloud-metadata targets. Local providers legitimately point at
+    private hosts (a local Ollama at ``localhost:11434``), so the
+    private-network allowance is gated on the provider *type* — only the local
+    provider kinds (Ollama / OpenAI-compatible) may resolve to internal
+    addresses; hosted providers may not. The DNS-resolving check runs in a
+    thread so it never blocks the event loop.
+    """
+    if base_url is None:
+        return
+    url = base_url.strip()
+    if not url:
+        return
+    allow_private = provider_type in (OLLAMA_TYPE, OPENAI_COMPATIBLE_TYPE)
+    try:
+        await asyncio.to_thread(
+            assert_url_allowed, url, allow_private_networks=allow_private
+        )
+    except SSRFBlockedError as exc:
+        raise ProviderConfigError(str(exc)) from None
 
 # Kept in sync with the frontend AI settings card.
 MAX_KEYS_PER_PROVIDER = 10
@@ -38,6 +71,18 @@ def key_hints(provider: AiProvider) -> list[str]:
     return [_key_hint(k) for k in provider_api_keys(provider)]
 
 
+def _keys_unreadable(provider: AiProvider) -> bool:
+    """ERR-4: True when credentials are stored but can't be decrypted (e.g.
+    after a Fernet key rotation). The UI should prompt a re-save."""
+    if not provider.credentials_encrypted:
+        return False
+    try:
+        decrypt_json(provider.credentials_encrypted)
+        return False
+    except DecryptionError:
+        return True
+
+
 def provider_out(provider: AiProvider) -> dict:
     """Redacted provider view for API responses — no secrets, hint-only."""
     hints = key_hints(provider)
@@ -49,6 +94,7 @@ def provider_out(provider: AiProvider) -> dict:
         "enabled": provider.enabled,
         "key_count": len(hints),
         "key_hints": hints,
+        "keys_unreadable": _keys_unreadable(provider),
         "validation_status": provider.validation_status,
         "validation_detail": provider.validation_detail,
         "validated_at": provider.validated_at.isoformat() if provider.validated_at else None,
@@ -71,7 +117,14 @@ async def create_provider(
     provider_type: str,
     api_keys: list[str] | None,
     base_url: str | None,
+    validate_url: bool = True,
 ) -> AiProvider:
+    # validate_url=False is used only by the one-time legacy migration, whose
+    # base_url comes from already-trusted stored config (and may be a Docker
+    # service hostname that doesn't resolve at migration time). User-facing
+    # create/update always validate.
+    if validate_url:
+        await validate_base_url(base_url, provider_type)
     provider = AiProvider(
         label=label.strip() or provider_type,
         provider_type=provider_type,
@@ -100,6 +153,7 @@ async def update_provider(
     if label is not None:
         provider.label = label.strip() or provider.label
     if base_url is not None:
+        await validate_base_url(base_url, provider.provider_type)
         provider.base_url = base_url.strip() or None
     if enabled is not None:
         provider.enabled = enabled

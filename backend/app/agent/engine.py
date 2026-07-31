@@ -101,6 +101,8 @@ _TOOL_LABELS = {
     "set_flag_threshold": "Adjusting threshold",
     "set_scan_interval": "Adjusting interval",
     "create_suppression_rule": "Adding suppression rule",
+    "list_suppression_rules": "Checking suppression rules",
+    "list_remediation_hooks": "Checking remediation hooks",
     "delete_site": "Deleting site",
 }
 
@@ -152,13 +154,53 @@ def _assistant_tool_call_message(message: Any) -> dict:
     }
 
 
+# Field-level caps applied *before* serialization so the emitted JSON is
+# always valid (slicing the serialized string could cut mid-object/string).
+_MAX_STR_FIELD = 1000
+_MAX_LIST_ITEMS = 50
+_MAX_RESULT_CHARS = 4000
+
+
+def _bound_result(value: Any, _depth: int = 0) -> Any:
+    """Recursively clip a tool result's fields (long strings, long lists) so
+    it serializes to bounded, *valid* JSON. Truncation happens on the data,
+    never on the serialized string."""
+    if _depth > 6:
+        return "…"
+    if isinstance(value, str):
+        return value if len(value) <= _MAX_STR_FIELD else value[:_MAX_STR_FIELD] + "…"
+    if isinstance(value, dict):
+        return {k: _bound_result(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        clipped = [_bound_result(v, _depth + 1) for v in value[:_MAX_LIST_ITEMS]]
+        if len(value) > _MAX_LIST_ITEMS:
+            clipped.append(f"…(+{len(value) - _MAX_LIST_ITEMS} more)")
+        return clipped
+    return value
+
+
+def _dump_bounded(obj: Any) -> str:
+    """Serialize an already field-bounded object, with a final hard char cap
+    as a backstop. The field caps keep this from ever truncating mid-token in
+    practice; the outer slice only guards against pathologically wide dicts."""
+    text = json.dumps(obj)
+    if len(text) <= _MAX_RESULT_CHARS:
+        return text
+    # Backstop: re-serialize a trimmed marker object so output stays valid JSON.
+    return json.dumps({
+        "result": {"truncated": True, "note": "result too large to include in full"}
+    })
+
+
 def _tool_result_message(tool_call_id: str, name: str, result: dict) -> dict:
-    """One OpenAI-style tool-result message, matched to its call id."""
+    """One OpenAI-style tool-result message, matched to its call id. The result
+    fields are bounded before serialization so the content is always valid
+    JSON the model can parse."""
     return {
         "role": "tool",
         "tool_call_id": tool_call_id,
         "name": name,
-        "content": json.dumps({"result": result})[:2000],
+        "content": _dump_bounded({"result": _bound_result(result)}),
     }
 
 
@@ -242,7 +284,25 @@ async def run_turn(
 
         # Record the model's tool-call turn verbatim so the follow-up request
         # carries the required call ids.
-        messages.append(_assistant_tool_call_message(message))
+        assistant_msg = _assistant_tool_call_message(message)
+        messages.append(assistant_msg)
+        # CB-2: persist the assistant tool-call turn so the transcript is
+        # complete.  context.build_contents skips tool rows; this is an
+        # assistant row with tool_name/tool_payload metadata for replay.
+        first_call = tool_calls[0].function.name if tool_calls else None
+        await _persist_message(
+            db,
+            conversation.id,
+            AgentMessageRole.assistant,
+            getattr(message, "content", "") or "",
+            tool_name=first_call,
+            tool_payload={
+                "tool_calls": [
+                    {"name": tc.function.name, "args": _parse_tool_args(tc.function.arguments)}
+                    for tc in tool_calls
+                ]
+            },
+        )
 
         stop_for_confirm = False
         for tc in tool_calls:
@@ -297,13 +357,14 @@ async def run_turn(
                 logger.exception("Agent tool %r crashed", name)
                 result = {"error": "That action failed unexpectedly."}
                 ok = False
+            bounded_result = _bound_result(result)
             await _persist_message(
                 db,
                 conversation.id,
                 AgentMessageRole.tool,
-                json.dumps(result)[:2000],
+                _dump_bounded(bounded_result),
                 tool_name=name,
-                tool_payload=result if isinstance(result, dict) else None,
+                tool_payload=bounded_result if isinstance(bounded_result, dict) else None,
             )
             yield AgentEvent("tool", _tool_label(name), {"tool": name, "state": "done", "ok": ok})
             messages.append(_tool_result_message(tc.id, name, result))

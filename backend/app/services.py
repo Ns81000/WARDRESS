@@ -44,6 +44,7 @@ from app.models import (
     ScanStatus,
     ScanVerdict,
     Site,
+    SuppressionRule,
     User,
     utcnow,
 )
@@ -381,3 +382,71 @@ async def mute_site(
     )
     await db.commit()
     return site
+
+
+# --- suppression rules -----------------------------------------------------
+
+
+async def list_suppression_rules(
+    db: AsyncSession, site: Site
+) -> list[SuppressionRule]:
+    """List all suppression rules for a site. Used by REST, agent, and bot."""
+    rules = (
+        await db.scalars(
+            select(SuppressionRule)
+            .where(SuppressionRule.site_id == site.id)
+            .order_by(SuppressionRule.created_at)
+        )
+    ).all()
+    return list(rules)
+
+
+async def create_suppression_rule(
+    db: AsyncSession,
+    site: Site,
+    *,
+    type: str,
+    value: str,
+    note: str | None,
+    actor: User | None,
+    via: str,
+    actor_label: str | None = None,
+) -> SuppressionRule:
+    """Create a suppression rule for a site. Validates per-type constraints
+    (regex compiles, bbox in range, selector parseable) before persisting.
+    Used by REST, agent, and bot surfaces."""
+    from app.schemas import SuppressionRuleCreate, SuppressionRuleType
+
+    # Build a schema instance to reuse its validation logic.
+    try:
+        rule_type = SuppressionRuleType(type)
+    except ValueError:
+        raise ValidationError(f"Invalid suppression type: {type}") from None
+
+    body = SuppressionRuleCreate(type=rule_type, value=value, note=note)
+    try:
+        body.validate_for_type()
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from None
+
+    rule = SuppressionRule(
+        site_id=site.id,
+        type=body.type,
+        value=body.value,
+        note=body.note,
+        created_by=actor.id if actor is not None else None,
+    )
+    db.add(rule)
+    await db.flush()
+    record_audit(
+        db,
+        actor=actor,
+        actor_label=actor_label,
+        action="suppression_rule.create",
+        target_type="suppression_rule",
+        target_id=rule.id,
+        target_label=f"{site.name}: {rule.type.value}",
+        after={"type": rule.type.value, "value": rule.value, "note": rule.note, "via": via},
+    )
+    await db.commit()
+    return rule

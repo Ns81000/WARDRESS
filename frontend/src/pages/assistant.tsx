@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
@@ -7,6 +7,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  RotateCcw,
   SendHorizonal,
   Trash2,
   Wrench,
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { WardressMark } from "@/components/wardress-mark"
 import { cn } from "@/lib/utils"
 import * as apiClient from "@/lib/api"
+import { MarkdownMessage } from "@/components/markdown-message"
 import {
   ApiError,
   type AgentConversation,
@@ -64,6 +66,8 @@ const TOOL_LABELS: Record<string, string> = {
   set_flag_threshold: "Adjusting threshold",
   set_scan_interval: "Adjusting interval",
   create_suppression_rule: "Adding suppression rule",
+  list_suppression_rules: "Checking suppression rules",
+  list_remediation_hooks: "Checking remediation hooks",
   delete_site: "Deleting site",
 }
 
@@ -254,6 +258,7 @@ interface DraftState {
   text: string
   tools: ToolChip[]
   streaming: boolean
+  error: string | null  // ERR-1: inline error message for the failed turn
 }
 
 function ChatPanel({
@@ -273,7 +278,8 @@ function ChatPanel({
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [pending, setPending] = useState<AgentPendingAction | null>(null)
-  const [draft, setDraft] = useState<DraftState>({ text: "", tools: [], streaming: false })
+  const [draft, setDraft] = useState<DraftState>({ text: "", tools: [], streaming: false, error: null })
+  const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null)  // ERR-1
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -293,25 +299,47 @@ function ChatPanel({
   })
 
   // Hydrate local transcript when the loaded conversation changes.
+  // CON-3: gate on !streaming so a focus refetch can't clobber a live stream.
   useEffect(() => {
-    if (detail.data) {
-      // Tool rows are internal bookkeeping; the transcript shows user +
-      // assistant prose only (tool activity is surfaced live as chips).
-      setMessages(detail.data.messages.filter((m) => m.role !== "tool"))
+    if (detail.data && !draft.streaming) {
+      // Tool rows and assistant tool-call turns (CB-2) are internal
+      // bookkeeping; the transcript shows user + assistant prose only
+      // (tool activity is surfaced live as chips).
+      setMessages(
+        detail.data.messages.filter(
+          (m) => m.role !== "tool" && !(m.role === "assistant" && m.tool_name)
+        )
+      )
       setPending(detail.data.pending_action)
     }
-  }, [detail.data])
+  }, [detail.data, draft.streaming])
 
-  // Auto-scroll to the newest content as it arrives.
+  // PERF-3: only auto-scroll when the user is near the bottom.
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
+    if (nearBottom) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    }
+  }, [])
+
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
-  }, [messages, draft])
+    scrollToBottom()
+  }, [messages, draft, scrollToBottom])
 
   // Abort any in-flight stream when leaving the conversation.
   useEffect(() => () => abortRef.current?.abort(), [])
 
   const refreshList = () =>
     queryClient.invalidateQueries({ queryKey: ["agent", "conversations"] })
+
+  // STR-3: also invalidate the detail query so the transcript refreshes.
+  const refreshDetail = () => {
+    if (conversationId) {
+      void queryClient.invalidateQueries({ queryKey: ["agent", "conversation", conversationId] })
+    }
+  }
 
   async function send(text: string) {
     if (!conversationId || draft.streaming) return
@@ -330,7 +358,8 @@ function ChatPanel({
         created_at: new Date().toISOString(),
       },
     ])
-    setDraft({ text: "", tools: [], streaming: true })
+    setDraft({ text: "", tools: [], streaming: true, error: null })
+    setLastFailedMessage(trimmed)  // ERR-1: track for retry
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -343,8 +372,10 @@ function ChatPanel({
       )
     } catch (err) {
       if (!controller.signal.aborted) {
-        setDraft((d) => ({ ...d, streaming: false }))
-        toast.error(errMessage(err, "The assistant stream failed"))
+        // ERR-1: set inline error state (in addition to toast)
+        const msg = errMessage(err, "The assistant stream failed")
+        setDraft((d) => ({ ...d, streaming: false, error: msg }))
+        toast.error(msg)
       }
     } finally {
       abortRef.current = null
@@ -389,20 +420,38 @@ function ChatPanel({
       setDraft((d) => ({ ...d, streaming: false }))
     } else if (event.type === "done") {
       const finalText = event.text ?? ""
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: finalText,
-          tool_name: null,
-          created_at: new Date().toISOString(),
-        },
-      ])
-      setDraft({ text: "", tools: [], streaming: false })
+      // ERR-2: suppress empty assistant bubbles
+      if (finalText) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content: finalText,
+            tool_name: null,
+            created_at: new Date().toISOString(),
+          },
+        ])
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content: "(no response)",
+            tool_name: null,
+            created_at: new Date().toISOString(),
+          },
+        ])
+      }
+      setDraft({ text: "", tools: [], streaming: false, error: null })
+      setLastFailedMessage(null)
+      refreshDetail()  // STR-3
     } else if (event.type === "error") {
-      setDraft((d) => ({ ...d, streaming: false }))
-      toast.error(event.text || "The assistant hit an error.")
+      // ERR-1: inline error + toast
+      const msg = event.text || "The assistant hit an error."
+      setDraft((d) => ({ ...d, streaming: false, error: msg }))
+      toast.error(msg)
     }
   }
 
@@ -487,6 +536,34 @@ function ChatPanel({
                     <Loader2 className="size-3.5 animate-spin" />
                     Thinking…
                   </div>
+                </div>
+              )}
+
+              {/* ERR-1: inline error card with retry affordance */}
+              {draft.error && !draft.streaming && (
+                <div className="mt-6 rounded-xl border border-accent-red/40 bg-glow-red/40 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-accent-red" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-body-sm text-accent-red">Something went wrong</p>
+                      <p className="mt-1 text-body-sm text-charcoal">{draft.error}</p>
+                    </div>
+                  </div>
+                  {lastFailedMessage && (
+                    <div className="mt-3 flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setDraft((d) => ({ ...d, error: null }))
+                          void send(lastFailedMessage)
+                        }}
+                      >
+                        <RotateCcw className="size-3.5" />
+                        Retry
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -608,8 +685,8 @@ function MessageRow({ message }: { message: AgentMessage }) {
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full border border-hairline-strong bg-surface-card">
         <WardressMark size={15} />
       </div>
-      <div className="min-w-0 flex-1 whitespace-pre-wrap pt-0.5 text-body-sm text-body">
-        {message.content}
+      <div className="min-w-0 flex-1 pt-0.5">
+        <MarkdownMessage content={message.content} />
       </div>
     </div>
   )

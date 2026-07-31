@@ -71,3 +71,46 @@ class TestSSRFPinningTransport:
                 pytest.fail("loopback should be allowed with the opt-in")
             except httpx.HTTPError:
                 pass  # connection refused is the expected non-SSRF outcome
+
+
+class TestProviderBaseUrlSSRF:
+    """A4 (SEC-2): a provider base_url must not enable SSRF against internal
+    services, but a local Ollama at localhost is legitimate."""
+
+    async def test_rejects_metadata_endpoint_for_hosted_provider(self):
+        from app.ai_config import ProviderConfigError, validate_base_url
+
+        with pytest.raises(ProviderConfigError):
+            # AWS metadata endpoint on a hosted (non-local) provider type.
+            await validate_base_url("http://169.254.169.254/latest/meta-data/", "google")
+
+    async def test_rejects_loopback_redis_for_hosted_provider(self):
+        from app.ai_config import ProviderConfigError, validate_base_url
+
+        with pytest.raises(ProviderConfigError):
+            await validate_base_url("http://localhost:6379/", "openai")
+
+    async def test_allows_localhost_for_ollama(self):
+        from app.ai_config import validate_base_url
+
+        # Ollama legitimately runs on localhost — must pass validation.
+        await validate_base_url("http://localhost:11434", "ollama")
+
+    async def test_allows_localhost_for_openai_compatible(self):
+        from app.ai_config import validate_base_url
+
+        # A self-hosted OpenAI-compatible endpoint is also a local provider.
+        await validate_base_url("http://127.0.0.1:8000/v1", "openai_compatible")
+
+    async def test_rejects_non_http_scheme(self):
+        from app.ai_config import ProviderConfigError, validate_base_url
+
+        with pytest.raises(ProviderConfigError):
+            await validate_base_url("file:///etc/passwd", "ollama")
+
+    async def test_none_and_empty_are_noops(self):
+        from app.ai_config import validate_base_url
+
+        await validate_base_url(None, "google")
+        await validate_base_url("", "google")
+        await validate_base_url("   ", "google")

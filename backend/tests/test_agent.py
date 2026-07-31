@@ -222,6 +222,119 @@ async def test_mute_site_clamps_to_cap(db_factory, analyst_user):
     assert result["muted"] is True
 
 
+# --- Suppression grounding (DA-1/DA-2/FEAT-1/FEAT-2) ----------------------
+
+
+async def _seed_suppression(db_factory, site_id, count: int) -> None:
+    from app.models import SuppressionRule, SuppressionRuleType
+
+    async with db_factory() as db:
+        for i in range(count):
+            db.add(
+                SuppressionRule(
+                    site_id=site_id,
+                    type=SuppressionRuleType.regex,
+                    value=rf"dynamic-{i}-\d+",
+                    note=f"rule {i}",
+                )
+            )
+        await db.commit()
+
+
+async def test_list_suppression_rules_reports_true_count(db_factory, analyst_user):
+    """With N rules seeded, the tool reports N — the reported '0 rules' bug is gone."""
+    site = await _seed_site(db_factory)
+    await _seed_suppression(db_factory, site.id, 3)
+    async with db_factory() as db:
+        ctx = ToolContext(db=db, user=analyst_user, surface="agent-web")
+        result = await tools.get_tool("list_suppression_rules").executor(ctx, {"site": site.name})
+    assert result["count"] == 3
+    assert len(result["rules"]) == 3
+    assert all(r["type"] == "regex" for r in result["rules"])
+
+
+async def test_list_suppression_rules_empty_is_zero(db_factory, analyst_user):
+    """No rules -> count 0 with an empty list (grounded, not guessed)."""
+    site = await _seed_site(db_factory)
+    async with db_factory() as db:
+        ctx = ToolContext(db=db, user=analyst_user, surface="agent-web")
+        result = await tools.get_tool("list_suppression_rules").executor(ctx, {"site": site.name})
+    assert result["count"] == 0
+    assert result["rules"] == []
+
+
+async def test_list_suppression_available_to_viewer():
+    """Read tool is viewer-visible; create tool is not (analyst+ only)."""
+    viewer = {t.name for t in tools.tools_for_role(UserRole.viewer)}
+    analyst = {t.name for t in tools.tools_for_role(UserRole.analyst)}
+    assert "list_suppression_rules" in viewer
+    assert "create_suppression_rule" not in viewer
+    assert "create_suppression_rule" in analyst
+
+
+async def test_create_suppression_rule_is_confirmation_gated():
+    """create_suppression_rule is high-impact, so it flows through the confirm gate."""
+    tool = tools.get_tool("create_suppression_rule")
+    assert tool.tier >= tools.TIER_HIGH_IMPACT
+    assert tool.summarize is not None
+    assert guard.needs_confirmation(tool)
+
+
+async def test_create_suppression_rule_persists_and_validates(db_factory, analyst_user):
+    site = await _seed_site(db_factory)
+    async with db_factory() as db:
+        ctx = ToolContext(db=db, user=analyst_user, surface="agent-web")
+        result = await tools.get_tool("create_suppression_rule").executor(
+            ctx, {"site": site.name, "type": "css_selector", "value": "#visitor-counter"}
+        )
+    assert result["created"] is True
+    # Round-trips through the read tool.
+    async with db_factory() as db:
+        ctx = ToolContext(db=db, user=analyst_user, surface="agent-web")
+        listed = await tools.get_tool("list_suppression_rules").executor(ctx, {"site": site.name})
+    assert listed["count"] == 1
+    # Bad regex is rejected with a user-safe ToolError, not a crash.
+    async with db_factory() as db:
+        ctx = ToolContext(db=db, user=analyst_user, surface="agent-web")
+        with pytest.raises(ToolError):
+            await tools.get_tool("create_suppression_rule").executor(
+                ctx, {"site": site.name, "type": "regex", "value": "([unclosed"}
+            )
+
+
+# --- Tool result JSON truncation (A5 - CB-1 fix) -------------------------
+
+
+def test_bound_result_truncates_long_strings():
+    from app.agent.engine import _bound_result
+
+    long = "x" * 2000
+    bounded = _bound_result({"key": long})
+    assert len(bounded["key"]) <= 1001  # 1000 + ellipsis
+    assert bounded["key"].endswith("…")
+
+
+def test_bound_result_clips_long_lists():
+    from app.agent.engine import _bound_result
+
+    long_list = list(range(100))
+    bounded = _bound_result({"items": long_list})
+    assert len(bounded["items"]) <= 51  # 50 + overflow marker
+    assert "+50 more" in str(bounded["items"][-1])
+
+
+def test_dump_bounded_always_valid_json():
+    import json
+
+    from app.agent.engine import _dump_bounded
+
+    oversized = {"huge": "x" * 10000, "nested": {"also": "y" * 10000}}
+    dumped = _dump_bounded(oversized)
+    # Must be parseable — no mid-string slice.
+    parsed = json.loads(dumped)
+    assert isinstance(parsed, dict)
+
+
 # --- Provider rotation / failover (unified litellm.Router layer) ----------
 
 

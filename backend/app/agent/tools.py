@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
@@ -35,6 +35,7 @@ from app.models import (
     ScanStatus,
     ScanVerdict,
     Site,
+    SuppressionRule,
     User,
     UserRole,
     ensure_utc,
@@ -45,6 +46,8 @@ from app.services import (
     ServiceError,
     acknowledge_alert,
     create_site,
+    create_suppression_rule,
+    list_suppression_rules,
     mute_site,
     rebaseline_site,
     site_snapshot,
@@ -64,7 +67,9 @@ TIER_DESTRUCTIVE = 3
 _MAX_SITES = 30
 _MAX_SCANS = 20
 _MAX_ALERTS = 10
+_MAX_SUPPRESSION = 30
 _NAME_CAP = 120
+_VALUE_CAP = 200
 
 
 class ToolError(Exception):
@@ -182,10 +187,14 @@ async def _resolve_site(ctx: ToolContext, ref: str) -> Site:
     if len(like) > 1:
         names = ", ".join(_cap(s.name, 40) for s in like)
         raise ToolError(f"Several sites match {ref!r}: {names}. Be more specific or use the id.")
-    # short-id prefix scan (rare; small table).
+    # CB-3 / PERF-2: short-id prefix via SQL (no full-table scan).
     if len(ref) >= 4:
-        everything = (await ctx.db.scalars(select(Site))).all()
-        pref = [s for s in everything if str(s.id).startswith(ref.lower())]
+        prefix = ref.lower() + "%"
+        pref = (
+            await ctx.db.scalars(
+                select(Site).where(cast(Site.id, String).ilike(prefix)).limit(2)
+            )
+        ).all()
         if len(pref) == 1:
             return pref[0]
     raise ToolError(f"No site found matching {ref!r}.")
@@ -197,9 +206,11 @@ async def _current_baseline(db: AsyncSession, site_id: uuid.UUID) -> Baseline | 
     )
 
 
-def _site_brief(site: Site, baseline: Baseline | None) -> dict:
+def _site_brief(
+    site: Site, baseline: Baseline | None, suppression_count: int | None = None
+) -> dict:
     muted_until = ensure_utc(site.muted_until)
-    return {
+    brief = {
         "id": _sid(site.id),
         "name": _cap(site.name),
         "url": site.url,
@@ -209,6 +220,9 @@ def _site_brief(site: Site, baseline: Baseline | None) -> dict:
         "flag_threshold": site.flag_threshold,
         "muted": muted_until is not None and muted_until > utcnow(),
     }
+    if suppression_count is not None:
+        brief["suppression_rules"] = suppression_count
+    return brief
 
 
 def _scan_brief(scan: Scan) -> dict:
@@ -239,7 +253,10 @@ async def _get_site(ctx: ToolContext, args: dict) -> dict:
     latest = await ctx.db.scalar(
         select(Scan).where(Scan.site_id == site.id).order_by(Scan.created_at.desc()).limit(1)
     )
-    brief = _site_brief(site, baseline)
+    supp_count = await ctx.db.scalar(
+        select(func.count()).select_from(SuppressionRule).where(SuppressionRule.site_id == site.id)
+    )
+    brief = _site_brief(site, baseline, suppression_count=int(supp_count or 0))
     brief["latest_scan"] = _scan_brief(latest) if latest else None
     return brief
 
@@ -252,28 +269,42 @@ async def _status_overview(ctx: ToolContext, args: dict) -> dict:
         )
         or 0
     )
-    # Flagged sites = those whose latest scan verdict is flagged.
-    flagged = 0
-    sites = (await ctx.db.scalars(select(Site))).all()
-    for site in sites:
-        latest = await ctx.db.scalar(
-            select(Scan)
-            .where(Scan.site_id == site.id, Scan.status == ScanStatus.completed)
-            .order_by(Scan.created_at.desc())
-            .limit(1)
+    suppression_count = (
+        await ctx.db.scalar(select(func.count()).select_from(SuppressionRule)) or 0
+    )
+    # PERF-1: single-query flagged-site count via correlated subquery instead
+    # of the N+1 per-site loop.
+    from sqlalchemy import and_
+    from sqlalchemy.orm import aliased
+
+    S2 = aliased(Scan)
+    latest_sub = (
+        select(S2.verdict)
+        .where(
+            and_(S2.site_id == Site.id, S2.status == ScanStatus.completed)
         )
-        if latest and latest.verdict == ScanVerdict.flagged:
-            flagged += 1
+        .order_by(S2.created_at.desc())
+        .limit(1)
+        .correlate(Site)
+        .scalar_subquery()
+    )
+    flagged = (
+        await ctx.db.scalar(
+            select(func.count()).select_from(Site).where(latest_sub == ScanVerdict.flagged)
+        )
+        or 0
+    )
     return {
         "sites_total": int(total),
-        "sites_flagged": flagged,
+        "sites_flagged": int(flagged),
         "alerts_unacknowledged": int(unacked),
+        "suppression_rule_count": int(suppression_count),
     }
 
 
 async def _list_scans(ctx: ToolContext, args: dict) -> dict:
     site = await _resolve_site(ctx, args.get("site", ""))
-    limit = min(int(args.get("limit", 5) or 5), _MAX_SCANS)
+    limit = max(1, min(int(args.get("limit", 5) or 5), _MAX_SCANS))  # CB-6: clamp lower-bound
     scans = (
         await ctx.db.scalars(
             select(Scan)
@@ -386,6 +417,25 @@ async def _list_alerts(ctx: ToolContext, args: dict) -> dict:
     return {"alerts": out}
 
 
+async def _list_suppression_rules(ctx: ToolContext, args: dict) -> dict:
+    site = await _resolve_site(ctx, args.get("site", ""))
+    rules = await list_suppression_rules(ctx.db, site)
+    truncated = len(rules) > _MAX_SUPPRESSION
+    out = []
+    for rule in rules[:_MAX_SUPPRESSION]:
+        out.append({
+            "type": rule.type.value,
+            "value": _cap(rule.value, _VALUE_CAP),
+            "note": _cap(rule.note, 100) if rule.note else None,
+        })
+    return {
+        "site": _cap(site.name),
+        "count": len(rules),
+        "rules": out,
+        "truncated": truncated,
+    }
+
+
 # --- Tier 1: safe actions (analyst+, auto-execute, audited) ---------------
 
 
@@ -464,6 +514,33 @@ async def _rebaseline_site(ctx: ToolContext, args: dict) -> dict:
     return {"rebaselining": True, "site": _cap(site.name)}
 
 
+async def _create_suppression_rule(ctx: ToolContext, args: dict) -> dict:
+    site = await _resolve_site(ctx, args.get("site", ""))
+    rule_type = (args.get("type") or "").strip()
+    value = (args.get("value") or "").strip()
+    note = (args.get("note") or "").strip() or None
+    if not rule_type or not value:
+        raise ToolError("A suppression rule needs a type and a value.")
+    try:
+        rule = await create_suppression_rule(
+            ctx.db,
+            site,
+            type=rule_type,
+            value=value,
+            note=note,
+            actor=ctx.user,
+            via=ctx.surface,
+        )
+    except ServiceError as exc:
+        raise ToolError(exc.message) from None
+    return {
+        "created": True,
+        "site": _cap(site.name),
+        "type": rule.type.value,
+        "value": _cap(rule.value, _VALUE_CAP),
+    }
+
+
 async def _set_flag_threshold(ctx: ToolContext, args: dict) -> dict:
     site = await _resolve_site(ctx, args.get("site", ""))
     try:
@@ -528,6 +605,36 @@ async def _delete_site(ctx: ToolContext, args: dict) -> dict:
     await ctx.db.delete(site)
     await ctx.db.commit()
     return {"deleted": True, "site": _cap(name)}
+
+
+async def _list_remediation_hooks(ctx: ToolContext, args: dict) -> dict:
+    """FEAT-4: Read-only view of remediation hooks for a site. Never
+    exposes the decrypted webhook URL — only a hint."""
+    from app.models import RemediationHook
+
+    site = await _resolve_site(ctx, args.get("site", ""))
+    hooks = (
+        await ctx.db.scalars(
+            select(RemediationHook)
+            .where(RemediationHook.site_id == site.id)
+            .order_by(RemediationHook.created_at)
+        )
+    ).all()
+    return {
+        "site": _cap(site.name),
+        "total": len(hooks),
+        "hooks": [
+            {
+                "id": str(h.id)[:8],
+                "name": _cap(h.name, 60),
+                "action_type": h.action_type.value,
+                "trigger_threshold": round(h.trigger_threshold, 2),
+                "is_active": h.is_active,
+                "requires_manual_confirm": h.requires_manual_confirm,
+            }
+            for h in hooks
+        ],
+    }
 
 
 # --- registry -------------------------------------------------------------
@@ -638,6 +745,34 @@ _register(
 )
 _register(
     Tool(
+        name="list_suppression_rules",
+        description=(
+            "List the false-positive suppression rules configured for a site "
+            "(css_selector / regex / bbox exclusions). Returns the true total "
+            "count and the rules (list capped)."
+        ),
+        parameters=_SITE_PARAM,
+        executor=_list_suppression_rules,
+        tier=TIER_READ,
+        min_role=UserRole.viewer,
+    )
+)
+_register(
+    Tool(
+        name="list_remediation_hooks",
+        description=(
+            "List remediation hooks (webhook automations) configured for a site. "
+            "Shows name, action type, trigger threshold, active/confirm status. "
+            "Never reveals the webhook URL."
+        ),
+        parameters=_SITE_PARAM,
+        executor=_list_remediation_hooks,
+        tier=TIER_READ,
+        min_role=UserRole.analyst,
+    )
+)
+_register(
+    Tool(
         name="run_scan_now",
         description="Queue an immediate scan for a site (requires a ready baseline).",
         parameters=_SITE_PARAM,
@@ -707,6 +842,41 @@ _register(
         tier=TIER_HIGH_IMPACT,
         min_role=UserRole.analyst,
         summarize=lambda a: f"Add site {(a.get('name') or '').strip()[:60]!r} ({a.get('url', '')})",
+    )
+)
+_register(
+    Tool(
+        name="create_suppression_rule",
+        description=(
+            "Add a false-positive suppression rule to a site so the detection "
+            "pipeline ignores an expected dynamic region. type is one of "
+            "css_selector, regex, or bbox ('x,y,w,h' fractions). Applies from "
+            "the next scan onward."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "site": {"type": "string", "description": "Site name or id"},
+                "type": {
+                    "type": "string",
+                    "enum": ["css_selector", "regex", "bbox"],
+                    "description": "Rule kind",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Selector, regex pattern, or 'x,y,w,h' bbox fractions",
+                },
+                "note": {"type": "string", "description": "Optional human label"},
+            },
+            "required": ["site", "type", "value"],
+        },
+        executor=_create_suppression_rule,
+        tier=TIER_HIGH_IMPACT,
+        min_role=UserRole.analyst,
+        summarize=lambda a: (
+            f"Add {a.get('type', '')} suppression to {a.get('site', '')!r}: "
+            f"{(a.get('value') or '')[:60]!r}"
+        ),
     )
 )
 _register(

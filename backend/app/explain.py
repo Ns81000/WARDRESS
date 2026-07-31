@@ -22,6 +22,9 @@ class ExplainError(Exception):
     finished'). The message is safe to show verbatim."""
 
 
+_MAX_EVIDENCE_NOTES = 20  # DA-5: raised from 12; named constant for evidence cap
+
+
 def _findings_notes(findings: list[ScanFinding]) -> list[str]:
     """Compact human-readable evidence bullets for the prompt (never raw
     dumps — the prompt stays small and the model stays focused)."""
@@ -127,7 +130,7 @@ def _findings_notes(findings: list[ScanFinding]) -> list[str]:
                 )
                 notes.append(f"aggression lexicon hits: {hits}")
 
-    return notes[:12]
+    return notes[:_MAX_EVIDENCE_NOTES]
 
 
 async def explain_scan(db: AsyncSession, scan_id: uuid.UUID, *, force: bool = False) -> dict:

@@ -100,6 +100,7 @@ async def migrate_legacy_ai_settings(db: AsyncSession) -> dict:
             provider_type="ollama",
             api_keys=[],
             base_url=o.get("base_url") or DEFAULT_OLLAMA_BASE_URL,
+            validate_url=False,  # trusted stored config; Docker hostname may not resolve
         )
         # The old design preferred Gemini for explanation when both existed and
         # never used Ollama for the agent (no function-calling contract). Keep
@@ -142,6 +143,7 @@ async def seed_default_ollama_provider(db: AsyncSession) -> dict:
         provider_type="ollama",
         api_keys=[],
         base_url=DEFAULT_OLLAMA_BASE_URL,
+        validate_url=False,  # default localhost; Docker hostname may not resolve
     )
     await db.commit()
     await save_setting(db, AI_SEED_KEY, {"done": True})

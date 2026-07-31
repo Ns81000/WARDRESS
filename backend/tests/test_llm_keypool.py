@@ -200,3 +200,30 @@ async def test_cross_provider_fallback(db_factory, monkeypatch) -> None:
         task = await resolve_task(db, "explanation")
         text = await task.generate("hi")
         assert text == "from-fallback"
+
+
+# --- Router cache concurrency safety (A2 - CON-1/CON-2 fix) --------------
+
+
+async def test_concurrent_resolve_task_safe(db_factory, monkeypatch) -> None:
+    """Multiple concurrent resolve_task calls for the same sig use a shared
+    Router without race-corrupting the cache (CON-1 fix)."""
+    import asyncio
+
+    async with db_factory() as db:
+        await _make_task(db, provider_type="google", keys=["k1"], model="gemini-flash-latest")
+
+        async def ok_response(**kwargs):
+            await asyncio.sleep(0.01)  # simulate network delay
+            return _ok_response("concurrent-ok")
+
+        monkeypatch.setattr(litellm, "acompletion", ok_response)
+
+        # Fire 10 concurrent resolves — all should succeed and share the cache entry.
+        tasks_resolved = await asyncio.gather(
+            *[resolve_task(db, "explanation") for _ in range(10)]
+        )
+        assert all(t is not None and t.task == "explanation" for t in tasks_resolved)
+        # All resolved objects share the same signature (hence the same Router).
+        sigs = {t._sig for t in tasks_resolved if t}
+        assert len(sigs) == 1

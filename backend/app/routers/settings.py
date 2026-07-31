@@ -10,7 +10,7 @@ client keep a stored secret by omitting the field.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,7 @@ from app.models import (
     NotificationChannelType,
     User,
 )
+from app.ratelimit import enforce_user_rate_limit
 from app.schemas import (
     AiProviderCreate,
     AiProviderOut,
@@ -293,10 +294,8 @@ async def test_telegram(user: AdminUser, db: DB) -> SettingsTestResult:
 # one minor release after the frontend ships the new AI settings UI (which uses
 # the /api/settings/ai/* endpoints exclusively).
 
-from app.ai_config import (  # noqa: E402
-    assignment_out as _assignment_out,
-)
 from app.ai_config import (  # noqa: E402 — grouped with the AI section it serves
+    ProviderConfigError,
     create_provider,
     delete_provider,
     get_provider,
@@ -306,6 +305,9 @@ from app.ai_config import (  # noqa: E402 — grouped with the AI section it ser
     resolve_tool_capability,
     set_assignment,
     update_provider,
+)
+from app.ai_config import (  # noqa: E402
+    assignment_out as _assignment_out,
 )
 from app.ai_config import (  # noqa: E402
     get_assignment as _get_assignment,
@@ -547,7 +549,8 @@ async def put_ollama(body: OllamaSettingsIn, user: AdminUser, db: DB) -> OllamaS
     model = (body.model or "").strip() or None
     if provider is None:
         provider = await create_provider(
-            db, label="Ollama", provider_type="ollama", api_keys=[], base_url=base
+            db, label="Ollama", provider_type="ollama", api_keys=[], base_url=base,
+            validate_url=False,  # Docker hostname may not resolve outside Docker
         )
     else:
         await update_provider(db, provider, base_url=base, enabled=body.enabled)
@@ -662,13 +665,16 @@ async def create_ai_provider(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A custom OpenAI-compatible provider requires a base URL",
         )
-    provider = await create_provider(
-        db,
-        label=body.label,
-        provider_type=body.provider_type,
-        api_keys=body.api_keys,
-        base_url=body.base_url,
-    )
+    try:
+        provider = await create_provider(
+            db,
+            label=body.label,
+            provider_type=body.provider_type,
+            api_keys=body.api_keys,
+            base_url=body.base_url,
+        )
+    except ProviderConfigError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     record_audit(
         db,
         actor=user,
@@ -687,14 +693,17 @@ async def update_ai_provider(
     provider_id: str, body: AiProviderUpdate, user: AdminUser, db: DB
 ) -> AiProviderOut:
     provider = await _require_provider(db, provider_id)
-    await update_provider(
-        db,
-        provider,
-        label=body.label,
-        api_keys=body.api_keys,
-        base_url=body.base_url,
-        enabled=body.enabled,
-    )
+    try:
+        await update_provider(
+            db,
+            provider,
+            label=body.label,
+            api_keys=body.api_keys,
+            base_url=body.base_url,
+            enabled=body.enabled,
+        )
+    except ProviderConfigError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     record_audit(
         db,
         actor=user,
@@ -727,14 +736,22 @@ async def delete_ai_provider(provider_id: str, user: AdminUser, db: DB) -> None:
 
 @ai_router.post("/providers/{provider_id}/validate", response_model=SettingsTestResult)
 async def validate_ai_provider(
-    provider_id: str, body: AiProviderValidateRequest, user: AdminUser, db: DB
+    provider_id: str,
+    body: AiProviderValidateRequest,
+    user: AdminUser,
+    db: DB,
+    request: Request,
 ) -> SettingsTestResult:
     """A real, cheap completion to confirm the provider+model works; the result
-    is persisted on the provider so the UI can show ok/failed state."""
+    is persisted on the provider so the UI can show ok/failed state.
+
+    Rate-limited per user: this makes a live outbound call, so an admin can't
+    spam it to burn provider quota or probe internal endpoints."""
     from datetime import UTC, datetime
 
     from app.llm import validate_provider_call
 
+    enforce_user_rate_limit(request, str(user.id))
     provider = await _require_provider(db, provider_id)
     ok, detail = await validate_provider_call(provider, body.model_id)
     provider.validation_status = "ok" if ok else "failed"

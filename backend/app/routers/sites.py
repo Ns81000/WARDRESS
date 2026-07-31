@@ -365,14 +365,8 @@ async def list_suppression_rules(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[SuppressionRuleOut]:
-    await _get_site_or_404(db, site_id)
-    rules = (
-        await db.scalars(
-            select(SuppressionRule)
-            .where(SuppressionRule.site_id == site_id)
-            .order_by(SuppressionRule.created_at)
-        )
-    ).all()
+    site = await _get_site_or_404(db, site_id)
+    rules = await services.list_suppression_rules(db, site)
     return [SuppressionRuleOut.model_validate(r) for r in rules]
 
 
@@ -391,30 +385,17 @@ async def create_suppression_rule(
     findings are historical evidence and are never rewritten."""
     site = await _get_site_or_404(db, site_id)
     try:
-        # Per-type validation (regex compiles, bbox in range, selector
-        # parseable by the same translator the worker uses).
-        body.validate_for_type()
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
-    rule = SuppressionRule(
-        site_id=site.id,
-        type=body.type,
-        value=body.value,
-        note=body.note,
-        created_by=user.id,
-    )
-    db.add(rule)
-    await db.flush()
-    record_audit(
-        db,
-        actor=user,
-        action="suppression_rule.create",
-        target_type="suppression_rule",
-        target_id=rule.id,
-        target_label=f"{site.name}: {rule.type.value}",
-        after={"type": rule.type.value, "value": rule.value, "note": rule.note},
-    )
-    await db.commit()
+        rule = await services.create_suppression_rule(
+            db,
+            site,
+            type=body.type.value,
+            value=body.value,
+            note=body.note,
+            actor=user,
+            via="rest",
+        )
+    except ServiceError as exc:
+        raise _http_from_service(exc) from None
     return SuppressionRuleOut.model_validate(rule)
 
 
