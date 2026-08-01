@@ -409,13 +409,20 @@ function ChatPanel({
       // stop streaming; the turn resumes via the confirm endpoint.
       const data = event.data
       if (data?.action_id) {
-        setPending({
+        const action: AgentPendingAction = {
           id: data.action_id,
           tool: data.tool ?? "",
           summary: data.summary ?? event.text ?? null,
           status: "pending",
           expires_at: "",
-        })
+        }
+        setPending(action)
+        // STR-4: optimistically update the query cache so the useEffect doesn't clobber
+        // this with stale data when draft.streaming becomes false.
+        queryClient.setQueryData(
+          ["agent", "conversation", conversationId],
+          (old: any) => old ? { ...old, pending_action: action } : old
+        )
       }
       setDraft((d) => ({ ...d, streaming: false }))
     } else if (event.type === "done") {
@@ -593,7 +600,7 @@ function ChatPanel({
                   placeholder={
                     pending ? "Confirm or cancel the pending action above…" : "Message Wardress…"
                   }
-                  disabled={draft.streaming || !!pending}
+                  disabled={!!pending}
                   className="max-h-44 min-h-[36px] flex-1 resize-none self-center bg-transparent px-2.5 py-1.5 text-body-sm text-ink outline-none placeholder:text-mute disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <Button
