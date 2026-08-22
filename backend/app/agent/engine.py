@@ -10,10 +10,15 @@ assigned to the ``agent_chat`` task (any tool-capable provider — see
      tools the user's *role* permits — nothing above their permissions is ever
      declared.
   3. For each tool call the model emits: look up the tool, enforce RBAC in code
-     (never trust the model), and either
-       - execute it now (tier 0/1: reads and safe writes), or
-       - freeze it for confirmation (tier >= 2) and stop the loop, surfacing a
-         confirmation card the user must approve with a button press.
+      (never trust the model), and either
+        - execute it now (tier 0/1: reads and safe writes), or
+        - freeze it for confirmation (tier >= 2) and stop the loop, surfacing a
+          confirmation card the user must approve with a button press.
+   3b. Prompt-injection containment: after any tool whose output carries
+       web-derived free text (tool.untrusted_output) succeeds, tier >= 1 calls
+       freeze behind confirmation for the rest of the turn — enforced in code,
+       independent of model compliance; fenced untrusted payloads are taught by
+       the system instruction (see :mod:`app.agent.context`).
   4. Feed tool results back and repeat, capped at ``MAX_ITERATIONS`` calls so a
      misbehaving model can't spin.
 
@@ -36,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent import context as agent_context
 from app.agent.guard import create_pending, needs_confirmation
 from app.agent.tools import (
+    TIER_SAFE,
     ToolContext,
     ToolError,
     can_call,
@@ -265,6 +271,13 @@ async def run_turn(
     messages += await agent_context.build_contents(db, conversation, user_message)
 
     final_text = ""
+    # Prompt-injection containment: once a tool result carrying web-derived
+    # free text (tool.untrusted_output, e.g. the incident explanation) has
+    # entered this turn's context, every state-changing call (tier >= 1) is
+    # frozen behind a confirmation card for the rest of the turn — enforced
+    # here in code, so containment holds even if the model obeys injected
+    # instructions. Reads (tier 0) stay auto-executing.
+    untrusted_in_turn = False
     for _ in range(MAX_ITERATIONS):
         try:
             response = await task.acompletion(
@@ -317,7 +330,7 @@ async def run_turn(
                 messages.append(_tool_result_message(tc.id, name, result))
                 continue
 
-            if needs_confirmation(tool):
+            if needs_confirmation(tool) or (untrusted_in_turn and tool.tier >= TIER_SAFE):
                 action = await create_pending(
                     db,
                     conversation_id=conversation.id,
@@ -358,6 +371,10 @@ async def run_turn(
                 result = {"error": "That action failed unexpectedly."}
                 ok = False
             bounded_result = _bound_result(result)
+            if ok and tool.untrusted_output:
+                # Only a successful result carries the web-derived free text;
+                # an error result contains nothing attacker-controlled.
+                untrusted_in_turn = True
             await _persist_message(
                 db,
                 conversation.id,
