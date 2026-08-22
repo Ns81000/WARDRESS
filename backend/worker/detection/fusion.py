@@ -15,6 +15,21 @@ The fitted model is cached per worker process; fitting is deterministic
 (fixed seed data, lbfgs). Skipped layers contribute their gate value
 (layer 1 identical -> downstream layers "identical too") or 0.0, with a
 `ran` mask in evidence so the UI can show which layers actually voted.
+
+Rule-based minimum-risk floors: the fitted model arbitrates between
+attack profiles and benign-churn profiles that share coarse feature
+values, which historically let attacker-controlled benign churn cancel
+strong hostile evidence through sign-inverted coefficients (padding a
+conclusive "HACKED BY" match with a handful of hidden divs fused to
+~0.10). Floors bound the FINAL score from below wherever individual
+layer evidence is unambiguous — independent of any future refit of the
+model, because they read only the fixed FEATURE_KEYS vector and compose
+monotonically (final = max(model probability, floors)). Trigger tiers
+follow signal specificity: near-zero-benign-base-rate evidence floors at
+flag-threshold territory; evidence legitimate sites also produce
+occasionally (new external vendor scripts) floors into the LLM
+escalation band, so ambiguity routes to the semantic second opinion
+instead of auto-alerting.
 """
 
 import logging
@@ -85,6 +100,48 @@ _SEED_ROWS: list[tuple[list[float], int]] = [
 _model: LogisticRegression | None = None
 _model_lock = threading.Lock()
 
+# --- Rule-based minimum-risk floors ---
+# (feature key, fires at score >=, floor applied, rule name).
+#
+# Triggers sit where benign base rates are negligible or the response is
+# deliberately non-alarming:
+# - Strong-tier defacement signatures are "essentially conclusive on
+#   their own" (layer 5's own contract); medium patterns weigh 0.55 and
+#   profanity bursts cap at 0.6, so only a strong hit (or multiple
+#   mediums) reaches the trigger. Floor: flag-threshold territory — this
+#   evidence must never be cancellable by churn padding.
+# - Crawler-vs-browser divergence >= 0.85 means crawlers are served a
+#   different site; benign dynamic variation stays at 0.0 via layer 7's
+#   soft knee, so the same conclusive tier applies.
+# - A brand-new external script/iframe/form-action domain (or ~3 lighter
+#   new-domain refs) appeared and the content hash flipped (layer 3 can
+#   not run otherwise). Trigger 0.55 == weighted new-domain count >=
+#   ~0.89 on layer 3's saturation curve (1 - e^(-0.9 * w)). Legitimate
+#   sites do add vendor scripts, so the floor lands INSIDE the LLM
+#   escalation band ([ESCALATION_LOW, ESCALATION_HIGH)) rather than at
+#   the flag threshold: cadence tightens and the semantic second opinion
+#   engages, but a lone ambiguous vector never auto-alerts.
+_RULE_FLOORS: tuple[tuple[str, float, float, str], ...] = (
+    ("layer5_signatures", 0.85, 0.90, "conclusive_signature_text"),
+    ("layer7_cloaking", 0.85, 0.90, "severe_cloaking"),
+    ("layer3_link_audit", 0.55, 0.40, "new_sensitive_infrastructure"),
+)
+
+
+def _rule_floor(features_by_key: dict[str, float]) -> tuple[float, list[dict]]:
+    """Strongest floor whose trigger fired, plus per-rule evidence.
+
+    Reads coerced feature values only, so skipped/malformed layers (0.0)
+    can never fire a floor. Never raises."""
+    applied = 0.0
+    fired: list[dict] = []
+    for key, trigger, floor, name in _RULE_FLOORS:
+        value = features_by_key.get(key)
+        if value is not None and value >= trigger:
+            applied = max(applied, floor)
+            fired.append({"rule": name, "layer": key, "value": round(value, 4), "floor": floor})
+    return applied, fired
+
 
 def get_fusion_model() -> LogisticRegression:
     """Deterministic seed-fitted logistic regression, cached per process."""
@@ -131,15 +188,19 @@ def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], d
 
 
 def layer9_fusion(layer_results: dict[str, dict]) -> dict:
-    """Fuse layers 1-8 into one calibrated risk score. Never raises: any
-    failure (malformed input, broken model fit) degrades to the max
-    sub-score with a note."""
+    """Fuse layers 1-8 into one risk score: the fitted model's
+    probability, lifted to at least any fired rule floor (see
+    _RULE_FLOORS). Never raises: any failure (malformed input, broken
+    model fit) degrades to max(fallback sub-score, floors) with a note —
+    the floors are model-independent and survive even a broken fit."""
     features: list[float] = []
     ran: dict[str, bool] = {}
     try:
         features, ran = build_feature_vector(layer_results)
+        floor_value, floor_rules = _rule_floor(dict(zip(FEATURE_KEYS, features, strict=True)))
         model = get_fusion_model()
         proba = float(model.predict_proba(np.array([features]))[0][1])
+        score = max(proba, floor_value)
         contributions = {
             key: round(float(coef) * val, 4)
             for key, coef, val in zip(FEATURE_KEYS, model.coef_[0], features, strict=True)
@@ -154,18 +215,28 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
                 "retrain on labeled scan history; gradient boosting once volume allows (§5)"
             ),
         }
-        return layer_result(proba, evidence)
+        if floor_rules:
+            evidence["rule_floor"] = {
+                "applied": floor_rules,
+                "model_probability": round(proba, 4),
+            }
+        return layer_result(score, evidence)
     except Exception as exc:
         logger.exception("Fusion model failed; degrading to max sub-score")
         fallback = max(features) if features else 0.0
+        # Floors are independent of the fitted model, so they still bind
+        # when the fit itself is unavailable. zip non-strict: features may
+        # be empty/partial if the vector build itself failed.
+        floor_value, floor_rules = _rule_floor(dict(zip(FEATURE_KEYS, features, strict=False)))
+        evidence = {
+            "model": "fallback_max (fusion model unavailable)",
+            "error": str(exc)[:200],
+            "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=False)},
+            "layers_ran": ran,
+        }
+        if floor_rules:
+            evidence["rule_floor"] = {"applied": floor_rules}
         return layer_result(
-            fallback,
-            {
-                "model": "fallback_max (fusion model unavailable)",
-                "error": str(exc)[:200],
-                # zip without strict: features may be empty if the vector
-                # build itself failed — the fallback must still return.
-                "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=False)},
-                "layers_ran": ran,
-            },
+            max(fallback, floor_value),
+            evidence,
         )
