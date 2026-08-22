@@ -2,13 +2,16 @@
 
 Gating rules (cheaper layers gate more expensive ones; every skip is
 logged with its reason as a §5 requirement):
-- Layer 1 (hash) runs always. If the hash is IDENTICAL, layers 2-5 and 8
-  are skipped (byte-identical content cannot differ structurally,
-  in links, visually*, in signatures, or semantically) — recorded as
+- Layer 1 (hash) runs always. If the hash is IDENTICAL, layers 2, 3, 5,
+  and 8 are skipped (byte-identical serialized DOM cannot differ
+  structurally, in links, in signatures, or semantically) — recorded as
   skip results, score None.
-  *Layer 4 is also skipped on identical hash: the screenshot could only
-  differ through non-deterministic rendering noise, which is exactly the
-  false-positive class the gate exists to suppress.
+- Layer 4 (visual) runs regardless of the hash: the hashed content is
+  page.content() — a serialization of the DOM — which does not include
+  externally-referenced asset bytes or pixels. A server-side asset swap
+  keeps the hash identical while changing what visitors see, so the
+  screenshot comparison is never gated off; rendering noise on truly
+  unchanged pages scores ~0 inside layer 4 itself.
 - Layers 6 (metadata) and 7 (cloaking) run regardless of layer 1: TLS/
   header downgrades and per-UA divergence are invisible to the primary
   content hash.
@@ -51,7 +54,6 @@ LAYERS = [
 GATED_BY_IDENTICAL_HASH = {
     "layer2_dom_structure",
     "layer3_link_audit",
-    "layer4_visual_diff",
     "layer5_signatures",
     "layer8_semantics",
 }
@@ -133,7 +135,7 @@ def run_detection(
                 "gated by layer 1: content hash identical, layer cannot produce new signal"
             )
             continue
-        if baseline_html_missing and key in GATED_BY_IDENTICAL_HASH and key != "layer4_visual_diff":
+        if baseline_html_missing and key in GATED_BY_IDENTICAL_HASH:
             results[key] = skip_result(
                 "baseline HTML artifact unavailable — content comparison impossible"
             )

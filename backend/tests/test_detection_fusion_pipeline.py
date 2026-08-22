@@ -432,12 +432,17 @@ def test_pipeline_identical_hash_gates_content_layers() -> None:
     for gated in (
         "layer2_dom_structure",
         "layer3_link_audit",
-        "layer4_visual_diff",
         "layer5_signatures",
         "layer8_semantics",
     ):
         assert results[gated]["skipped"] is True
         assert "gated by layer 1" in results[gated]["evidence"]["reason"]
+    # The visual layer runs even on an identical hash: the serialized DOM
+    # says nothing about externally-referenced assets or pixels (see
+    # test_pipeline_visual_gate.py). No screenshots here -> ran-with-note.
+    visual = results["layer4_visual_diff"]
+    assert not visual.get("skipped")
+    assert visual["score"] == 0.0
     # Metadata + cloaking still ran.
     assert "skipped" not in results["layer6_security_metadata"]
     assert "skipped" not in results["layer7_cloaking"]
