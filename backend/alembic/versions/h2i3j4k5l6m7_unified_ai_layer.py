@@ -101,9 +101,7 @@ def upgrade() -> None:
         sa.Column("fallback_model_id", sa.String(length=160), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["provider_id"], ["ai_providers.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["fallback_provider_id"], ["ai_providers.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["fallback_provider_id"], ["ai_providers.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("task"),
     )
 

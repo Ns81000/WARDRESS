@@ -469,6 +469,7 @@ class SettingsTestResult(BaseModel):
 
 # --- Unified AI provider layer (catalog-driven, any-provider) ---
 
+
 class CatalogModelOut(BaseModel):
     id: str  # "provider/model"
     provider_id: str

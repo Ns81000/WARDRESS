@@ -220,9 +220,7 @@ async def test_concurrent_resolve_task_safe(db_factory, monkeypatch) -> None:
         monkeypatch.setattr(litellm, "acompletion", ok_response)
 
         # Fire 10 concurrent resolves — all should succeed and share the cache entry.
-        tasks_resolved = await asyncio.gather(
-            *[resolve_task(db, "explanation") for _ in range(10)]
-        )
+        tasks_resolved = await asyncio.gather(*[resolve_task(db, "explanation") for _ in range(10)])
         assert all(t is not None and t.task == "explanation" for t in tasks_resolved)
         # All resolved objects share the same signature (hence the same Router).
         sigs = {t._sig for t in tasks_resolved if t}

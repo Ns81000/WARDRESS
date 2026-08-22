@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import cast, func, select, String
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
@@ -191,9 +191,7 @@ async def _resolve_site(ctx: ToolContext, ref: str) -> Site:
     if len(ref) >= 4:
         prefix = ref.lower() + "%"
         pref = (
-            await ctx.db.scalars(
-                select(Site).where(cast(Site.id, String).ilike(prefix)).limit(2)
-            )
+            await ctx.db.scalars(select(Site).where(cast(Site.id, String).ilike(prefix)).limit(2))
         ).all()
         if len(pref) == 1:
             return pref[0]
@@ -269,9 +267,7 @@ async def _status_overview(ctx: ToolContext, args: dict) -> dict:
         )
         or 0
     )
-    suppression_count = (
-        await ctx.db.scalar(select(func.count()).select_from(SuppressionRule)) or 0
-    )
+    suppression_count = await ctx.db.scalar(select(func.count()).select_from(SuppressionRule)) or 0
     # PERF-1: single-query flagged-site count via correlated subquery instead
     # of the N+1 per-site loop.
     from sqlalchemy import and_
@@ -280,9 +276,7 @@ async def _status_overview(ctx: ToolContext, args: dict) -> dict:
     S2 = aliased(Scan)
     latest_sub = (
         select(S2.verdict)
-        .where(
-            and_(S2.site_id == Site.id, S2.status == ScanStatus.completed)
-        )
+        .where(and_(S2.site_id == Site.id, S2.status == ScanStatus.completed))
         .order_by(S2.created_at.desc())
         .limit(1)
         .correlate(Site)
@@ -423,11 +417,13 @@ async def _list_suppression_rules(ctx: ToolContext, args: dict) -> dict:
     truncated = len(rules) > _MAX_SUPPRESSION
     out = []
     for rule in rules[:_MAX_SUPPRESSION]:
-        out.append({
-            "type": rule.type.value,
-            "value": _cap(rule.value, _VALUE_CAP),
-            "note": _cap(rule.note, 100) if rule.note else None,
-        })
+        out.append(
+            {
+                "type": rule.type.value,
+                "value": _cap(rule.value, _VALUE_CAP),
+                "note": _cap(rule.note, 100) if rule.note else None,
+            }
+        )
     return {
         "site": _cap(site.name),
         "count": len(rules),

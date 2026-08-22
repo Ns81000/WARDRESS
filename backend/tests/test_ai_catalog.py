@@ -3,7 +3,6 @@ the bundled offline snapshot, provider validation, task assignment + the
 tool-capability gate, the legacy->new migration, and Ollama config.
 """
 
-
 from app.ai_catalog import (
     load_snapshot,
     normalize_catalog,

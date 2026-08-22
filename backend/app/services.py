@@ -135,9 +135,7 @@ async def _enqueue_or_fail(
             raise
         on_fail()
         await db.commit()
-        raise QueueUnavailableError(
-            "Task queue is unavailable — try again shortly"
-        ) from exc
+        raise QueueUnavailableError("Task queue is unavailable — try again shortly") from exc
 
 
 # --- add-site --------------------------------------------------------------
@@ -230,9 +228,7 @@ async def trigger_scan_now(
     stale in-flight scan; 409s on a live one."""
     baseline = await current_baseline(db, site.id)
     if baseline is None or baseline.status != BaselineStatus.ready:
-        raise ConflictError(
-            f"{site.name} has no ready baseline yet — capture a baseline first"
-        )
+        raise ConflictError(f"{site.name} has no ready baseline yet — capture a baseline first")
     in_flight = await db.scalar(
         select(Scan).where(
             Scan.site_id == site.id,
@@ -296,9 +292,7 @@ async def rebaseline_site(
             in_flight.status = BaselineStatus.failed
             in_flight.error = "Capture never completed — superseded by a new capture"
         else:
-            raise ConflictError(
-                f"A baseline capture is already in progress for {site.name}"
-            )
+            raise ConflictError(f"A baseline capture is already in progress for {site.name}")
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
     db.add(baseline)
     record_audit(
@@ -387,9 +381,7 @@ async def mute_site(
 # --- suppression rules -----------------------------------------------------
 
 
-async def list_suppression_rules(
-    db: AsyncSession, site: Site
-) -> list[SuppressionRule]:
+async def list_suppression_rules(db: AsyncSession, site: Site) -> list[SuppressionRule]:
     """List all suppression rules for a site. Used by REST, agent, and bot."""
     rules = (
         await db.scalars(

@@ -50,11 +50,10 @@ async def validate_base_url(base_url: str | None, provider_type: str) -> None:
         return
     allow_private = provider_type in (OLLAMA_TYPE, OPENAI_COMPATIBLE_TYPE)
     try:
-        await asyncio.to_thread(
-            assert_url_allowed, url, allow_private_networks=allow_private
-        )
+        await asyncio.to_thread(assert_url_allowed, url, allow_private_networks=allow_private)
     except SSRFBlockedError as exc:
         raise ProviderConfigError(str(exc)) from None
+
 
 # Kept in sync with the frontend AI settings card.
 MAX_KEYS_PER_PROVIDER = 10
@@ -217,9 +216,7 @@ async def assignment_out(db: AsyncSession, task: str | AiTaskType) -> dict:
         "task": value,
         "provider_id": str(row.provider_id) if row.provider_id else None,
         "model_id": row.model_id,
-        "fallback_provider_id": str(row.fallback_provider_id)
-        if row.fallback_provider_id
-        else None,
+        "fallback_provider_id": str(row.fallback_provider_id) if row.fallback_provider_id else None,
         "fallback_model_id": row.fallback_model_id,
     }
 

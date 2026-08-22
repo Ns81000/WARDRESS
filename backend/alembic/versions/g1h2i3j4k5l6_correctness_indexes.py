@@ -36,18 +36,14 @@ def upgrade() -> None:
         )
     # Missing perf indexes from the audit (portable across dialects).
     op.create_index("ix_alerts_created_at", "alerts", ["created_at"])
-    op.create_index(
-        "ix_remediation_executions_scan_id", "remediation_executions", ["scan_id"]
-    )
+    op.create_index("ix_remediation_executions_scan_id", "remediation_executions", ["scan_id"])
     op.create_index("ix_scans_finished_at", "scans", ["finished_at"])
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     op.drop_index("ix_scans_finished_at", table_name="scans")
-    op.drop_index(
-        "ix_remediation_executions_scan_id", table_name="remediation_executions"
-    )
+    op.drop_index("ix_remediation_executions_scan_id", table_name="remediation_executions")
     op.drop_index("ix_alerts_created_at", table_name="alerts")
     if bind.dialect.name == "postgresql":
         op.drop_index("ix_scans_one_inflight_per_site", table_name="scans")

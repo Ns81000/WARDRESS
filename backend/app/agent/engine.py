@@ -187,9 +187,9 @@ def _dump_bounded(obj: Any) -> str:
     if len(text) <= _MAX_RESULT_CHARS:
         return text
     # Backstop: re-serialize a trimmed marker object so output stays valid JSON.
-    return json.dumps({
-        "result": {"truncated": True, "note": "result too large to include in full"}
-    })
+    return json.dumps(
+        {"result": {"truncated": True, "note": "result too large to include in full"}}
+    )
 
 
 def _tool_result_message(tool_call_id: str, name: str, result: dict) -> dict:

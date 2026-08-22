@@ -138,9 +138,7 @@ async def test_acknowledge_alert_idempotent(db_factory, analyst_user):
 
     async with db_factory() as db:
         acks = (
-            await db.scalars(
-                select(AuditLog).where(AuditLog.action == "alert.acknowledge")
-            )
+            await db.scalars(select(AuditLog).where(AuditLog.action == "alert.acknowledge"))
         ).all()
     assert len(acks) == 1  # only the first ack recorded an audit row
 
@@ -154,9 +152,7 @@ async def test_mute_site_clamps_to_ceiling(db_factory, analyst_user):
 
     async with db_factory() as db:
         row = await db.get(Site, site_id)
-        await services.mute_site(
-            db, row, minutes=10**9, actor=analyst_user, via="dashboard"
-        )
+        await services.mute_site(db, row, minutes=10**9, actor=analyst_user, via="dashboard")
         assert row.muted_until is not None
         # Clamped to the 7-day ceiling, not a billion minutes out.
         horizon = datetime.now(UTC).replace(tzinfo=UTC)

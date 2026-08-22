@@ -117,9 +117,7 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                 # SSRF-validate every request the page makes (subresources,
                 # XHR/fetch, JS-initiated navigations) — not just the top
                 # frame. "**/*" matches all URLs; the handler fails safe.
-                await page.route(
-                    "**/*", _make_ssrf_route_guard(allow_private_networks)
-                )
+                await page.route("**/*", _make_ssrf_route_guard(allow_private_networks))
                 # wait_until="load" (not "networkidle": Playwright's docs
                 # discourage it, and any page with long-polling/beacons
                 # never goes idle -> guaranteed timeout). A short settle

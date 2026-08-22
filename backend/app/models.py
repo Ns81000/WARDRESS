@@ -803,9 +803,7 @@ class AiTaskAssignment(Base):
 
     __tablename__ = "ai_task_assignments"
 
-    task: Mapped[AiTaskType] = mapped_column(
-        _enum(AiTaskType, "ai_task_type"), primary_key=True
-    )
+    task: Mapped[AiTaskType] = mapped_column(_enum(AiTaskType, "ai_task_type"), primary_key=True)
     provider_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("ai_providers.id", ondelete="CASCADE"), default=None
     )

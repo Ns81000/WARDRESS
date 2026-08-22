@@ -310,9 +310,7 @@ async def cmd_scan(update, context, send) -> None:
         # enqueue all handled once (the bot slash command records the audit
         # as the "telegram-bot" actor).
         try:
-            await trigger_scan_now(
-                db, site, actor=None, actor_label="telegram-bot", via="telegram"
-            )
+            await trigger_scan_now(db, site, actor=None, actor_label="telegram-bot", via="telegram")
         except ServiceError as exc:
             await send(exc.message)
             return
@@ -340,9 +338,7 @@ async def cmd_ack(update, context, send) -> None:
             await send(f"'{raw}' matches {len(matches)} alerts — use more characters.")
             return
         alert = matches[0]
-        await acknowledge_alert(
-            db, alert, actor=None, actor_label="telegram-bot", via="telegram"
-        )
+        await acknowledge_alert(db, alert, actor=None, actor_label="telegram-bot", via="telegram")
         site = await db.scalar(select(Site).where(Site.id == alert.site_id))
         site_name = site.name if site else "unknown site"
     await send(f"Acknowledged alert {str(alert.id)[:8]} for {site_name}.")

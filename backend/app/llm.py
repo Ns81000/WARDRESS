@@ -63,9 +63,9 @@ litellm.suppress_debug_info = True
 # support tickets, so scrub before writing. Covers common vendor prefixes
 # (OpenAI sk-, Google AIza) and any long base64/hex-ish run.
 _SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),        # OpenAI / Anthropic style
-    re.compile(r"AIza[A-Za-z0-9_\-]{10,}"),      # Google API keys
-    re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"),       # any long opaque token/hash
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),  # OpenAI / Anthropic style
+    re.compile(r"AIza[A-Za-z0-9_\-]{10,}"),  # Google API keys
+    re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"),  # any long opaque token/hash
 ]
 
 
@@ -77,6 +77,7 @@ def _scrub_secrets(text: str) -> str:
     for pat in _SECRET_PATTERNS:
         scrubbed = pat.sub("[REDACTED]", scrubbed)
     return scrubbed
+
 
 _REQUEST_TIMEOUT = 30
 _MAX_OUTPUT_CHARS = 4_000
@@ -371,9 +372,7 @@ def clear_router_cache() -> None:
 # --- One-off provider validation (cheap live call) -----------------------
 
 
-async def validate_provider_call(
-    provider: AiProvider, model_id: str
-) -> tuple[bool, str]:
+async def validate_provider_call(provider: AiProvider, model_id: str) -> tuple[bool, str]:
     """A cheap real completion to confirm a provider+model actually works.
     Returns (ok, human message). Never raises."""
     try:

@@ -7,6 +7,7 @@ prefixes) plus `configured` flags, and PATCH-like semantics let the
 client keep a stored secret by omitting the field.
 """
 
+import logging
 import uuid
 from typing import Annotated
 
@@ -70,6 +71,8 @@ from app.settings_store import (
     load_setting,
     save_setting,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -549,7 +552,11 @@ async def put_ollama(body: OllamaSettingsIn, user: AdminUser, db: DB) -> OllamaS
     model = (body.model or "").strip() or None
     if provider is None:
         provider = await create_provider(
-            db, label="Ollama", provider_type="ollama", api_keys=[], base_url=base,
+            db,
+            label="Ollama",
+            provider_type="ollama",
+            api_keys=[],
+            base_url=base,
             validate_url=False,  # Docker hostname may not resolve outside Docker
         )
     else:
@@ -599,9 +606,7 @@ ai_router = APIRouter(prefix="/api/settings/ai", tags=["settings", "ai"])
 async def list_catalog_providers(user: AdminUser, db: DB) -> list[CatalogProviderOut]:
     """The models.dev provider catalog (searchable add-provider dropdown), with
     the two non-catalog entries (Ollama, custom OpenAI-compatible) prepended."""
-    rows = await db.scalars(
-        select(ModelCatalogProvider).order_by(ModelCatalogProvider.name)
-    )
+    rows = await db.scalars(select(ModelCatalogProvider).order_by(ModelCatalogProvider.name))
     out = [
         CatalogProviderOut(id="ollama", name="Ollama"),
         CatalogProviderOut(id="openai_compatible", name="Custom (OpenAI-compatible)"),
@@ -649,12 +654,8 @@ async def list_ai_providers(user: AdminUser, db: DB) -> list[AiProviderOut]:
     return [AiProviderOut(**provider_out(p)) for p in await list_providers(db)]
 
 
-@ai_router.post(
-    "/providers", response_model=AiProviderOut, status_code=status.HTTP_201_CREATED
-)
-async def create_ai_provider(
-    body: AiProviderCreate, user: AdminUser, db: DB
-) -> AiProviderOut:
+@ai_router.post("/providers", response_model=AiProviderOut, status_code=status.HTTP_201_CREATED)
+async def create_ai_provider(body: AiProviderCreate, user: AdminUser, db: DB) -> AiProviderOut:
     if not await _provider_type_is_valid(db, body.provider_type):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -867,7 +868,11 @@ async def pull_ollama_model(body: OllamaPullRequest, user: AdminUser, db: DB) ->
                 target_id = str(provider.id)
                 target_label = provider.label
         except Exception:
-            pass
+            logger.warning(
+                "ollama pull: provider %s could not be resolved; falling back to raw base_url",
+                body.provider_id,
+                exc_info=True,
+            )
 
     model = body.model
     record_audit(

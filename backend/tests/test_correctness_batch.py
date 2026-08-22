@@ -124,7 +124,6 @@ def test_is_stale_started_at_old_is_stale() -> None:
 # ---------------------------------------------------------------------------
 
 
-
 async def test_viewer_cannot_create_api_key(client, viewer_headers) -> None:
     resp = await client.post(
         "/api/api-keys",
@@ -132,7 +131,6 @@ async def test_viewer_cannot_create_api_key(client, viewer_headers) -> None:
         headers=viewer_headers,
     )
     assert resp.status_code == 403
-
 
 
 async def test_analyst_can_create_api_key(client, analyst_headers) -> None:
@@ -147,7 +145,6 @@ async def test_analyst_can_create_api_key(client, analyst_headers) -> None:
 # ---------------------------------------------------------------------------
 # API: login emits an audit row
 # ---------------------------------------------------------------------------
-
 
 
 async def test_login_creates_audit_row(client, db_factory, admin_user) -> None:
@@ -171,7 +168,6 @@ async def test_login_creates_audit_row(client, db_factory, admin_user) -> None:
 # ---------------------------------------------------------------------------
 # API: scan-now emits an audit row
 # ---------------------------------------------------------------------------
-
 
 
 async def test_scan_now_creates_audit_row(
@@ -206,7 +202,6 @@ async def test_scan_now_creates_audit_row(
 # ---------------------------------------------------------------------------
 # API: enqueue-503 marks scan failed (no stranded pending row)
 # ---------------------------------------------------------------------------
-
 
 
 async def test_scan_now_503_marks_scan_failed(client, db_factory, auth_headers) -> None:

@@ -44,6 +44,7 @@ def _safe_hostname(url: str | None) -> str:
     except ValueError:
         return ""
 
+
 _HIDDEN_STYLE_MARKERS = ("display:none", "display: none", "visibility:hidden", "visibility: hidden")
 
 
@@ -267,9 +268,7 @@ def layer3_link_audit(baseline: PageData, current: PageData) -> dict:
     for kind in b_refs:
         added = sorted(c_refs[kind] - b_refs[kind])
         removed = sorted(b_refs[kind] - c_refs[kind])
-        added_new_domain = sorted(
-            {u for u in added if _safe_hostname(u) not in known_domains}
-        )
+        added_new_domain = sorted({u for u in added if _safe_hostname(u) not in known_domains})
         total_new_refs += len(added)
         new_domains_weighted += weights[kind] * len(_domains(set(added_new_domain)))
         evidence[kind] = {
