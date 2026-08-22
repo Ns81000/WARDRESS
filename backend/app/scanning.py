@@ -37,11 +37,16 @@ TIGHTEN_DIVISOR = 4  # change detected -> base/4 (floored at MIN)
 RELAX_FACTOR = 1.5  # each clean scan -> current*1.5 (capped at base)
 
 # Fused risk at/above this counts as a *material* change for scheduling.
-# Deliberately lower than any sane flag threshold (watch real changes
-# closely before they're alarming) but above dynamic-content noise —
-# a page whose hash flips every scan (~0.03 risk) must still relax back
-# to its base cadence, or "adaptive" would mean "permanently tightened".
-MATERIAL_CHANGE_RISK = 0.15
+# Deliberately aligned with the LLM escalation floor (worker/
+# llm_escalation.ESCALATION_LOW): "the local layers want a second opinion"
+# is the same bar as "worth watching more closely". It must sit ABOVE the
+# fused risk that pure dynamic-content noise produces under the deployed
+# fusion model — measured on held-out benign scenarios: rotating ads,
+# timestamps/counters, cache-busting refs and A/B variants all fuse to
+# ~0.22-0.23 (hash flip + near-zero content scores), editorial churn to
+# ~0.27 — so those pages still relax back to base cadence instead of
+# being "adaptive" into permanently tightened scanning.
+MATERIAL_CHANGE_RISK = 0.35
 
 
 def clamp_interval(minutes: int) -> int:

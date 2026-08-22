@@ -1,43 +1,45 @@
-"""Layer 9 — fusion classifier (§5): one calibrated risk score from the
-eight sub-scores via scikit-learn logistic regression.
+"""Layer 9 — fusion classifier (§5): one risk score from the eight
+sub-scores via logistic regression.
 
-No labeled scan history exists at install time, so the model is fitted
-at first use on a *seed dataset*: layer-score vectors for documented
-scenarios (clean rescans, dynamic-content noise, benign deploys, partial
-and full defacements). The scenarios encode the same domain knowledge a
-hand-tuned weighted sum would — but going through LogisticRegression
-gives calibrated probabilities now and a drop-in upgrade path later:
-once enough per-site scan history with user verdicts accumulates,
-retraining on real rows (and stepping up to gradient boosting, per §5)
-replaces the seed set without touching the pipeline.
+No labeled scan history exists at install time, so the deployed model is
+a committed ARTIFACT (training/fusion_model.json): a MAP-fit logistic
+regression whose coefficients were constrained >= 0 during fitting, so
+fused risk is monotone in every evidence channel by construction — more
+evidence can never lower the score. The artifact was fitted exclusively
+on measured layer outputs (see training/fusion_dataset.json and
+tools/refit_fusion_model.py, which record the fit's provenance,
+cross-validation, and held-out calibration); loading validates the
+schema, the FEATURE_KEYS order, and the non-negativity constraint, and
+refuses anything else rather than silently scoring with a foreign model.
+The loaded model is cached per process.
 
-The fitted model is cached per worker process; fitting is deterministic
-(fixed seed data, lbfgs). Skipped layers contribute their gate value
-(layer 1 identical -> downstream layers "identical too") or 0.0, with a
-`ran` mask in evidence so the UI can show which layers actually voted.
+The score is a ranking signal in [0, 1], not a calibrated probability:
+the coarse eight-dimensional feature space cannot separate some profiles
+(notably "operator added third-party scripts" from "attacker injected
+scripts" — the measured vectors collide), and per-site suppression rules
+plus the human confirm queue are the designed mitigations where the
+features genuinely cannot decide.
 
-Rule-based minimum-risk floors: the fitted model arbitrates between
-attack profiles and benign-churn profiles that share coarse feature
-values, which historically let attacker-controlled benign churn cancel
-strong hostile evidence through sign-inverted coefficients (padding a
-conclusive "HACKED BY" match with a handful of hidden divs fused to
-~0.10). Floors bound the FINAL score from below wherever individual
-layer evidence is unambiguous — independent of any future refit of the
-model, because they read only the fixed FEATURE_KEYS vector and compose
-monotonically (final = max(model probability, floors)). Trigger tiers
-follow signal specificity: near-zero-benign-base-rate evidence floors at
-flag-threshold territory; evidence legitimate sites also produce
-occasionally (new external vendor scripts) floors into the LLM
-escalation band, so ambiguity routes to the semantic second opinion
-instead of auto-alerting.
+Rule-based minimum-risk floors: floors bound the FINAL score from below
+wherever individual layer evidence is unambiguous — independent of any
+future refit of the model, because they read only the fixed FEATURE_KEYS
+vector and compose monotonically (final = max(model probability,
+floors)). They guarantee that low-churn single-vector shapes stay
+visible inside the LLM escalation band even when the model's estimate
+alone would fall below it. Skipped layers contribute 0.0 with a `ran`
+mask in evidence so the UI can show which layers actually voted.
+
+Any failure (missing/corrupt artifact, malformed input) degrades to
+max(fallback sub-score, floors) with a note — detection never crashes
+because its classifier is unavailable.
 """
 
+import json
 import logging
 import math
 import threading
-
-import numpy as np
-from sklearn.linear_model import LogisticRegression
+from dataclasses import dataclass
+from pathlib import Path
 
 from worker.detection.types import layer_result
 
@@ -56,49 +58,90 @@ FEATURE_KEYS = [
     "layer8_semantics",
 ]
 
-# Seed scenarios: (layer scores 1-8, label). Label 1 = defacement.
-# Grounded in how the layers actually score (see each layer's docstring):
-_SEED_ROWS: list[tuple[list[float], int]] = [
-    # -- clean: identical page (layer 1 gates everything downstream)
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0),
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.05, 0.0, 0.0], 0),
-    # -- dynamic content noise: hash flips, tiny DOM/visual wiggle
-    ([1.0, 0.05, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0], 0),
-    ([1.0, 0.1, 0.05, 0.05, 0.0, 0.0, 0.0, 0.05], 0),
-    ([1.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0], 0),
-    ([1.0, 0.15, 0.1, 0.08, 0.0, 0.1, 0.0, 0.1], 0),
-    # -- benign deploy: real changes, no hostile signals
-    ([1.0, 0.35, 0.25, 0.3, 0.0, 0.0, 0.0, 0.2], 0),
-    ([1.0, 0.45, 0.3, 0.4, 0.0, 0.15, 0.0, 0.3], 0),
-    ([1.0, 0.3, 0.4, 0.25, 0.0, 0.0, 0.0, 0.15], 0),
-    # -- site redesign: heavy but benign churn (no signature/cloaking)
-    ([1.0, 0.6, 0.35, 0.55, 0.0, 0.1, 0.0, 0.4], 0),
-    # -- cert rotation / header tweaks only
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0], 0),
-    ([1.0, 0.05, 0.0, 0.03, 0.0, 0.55, 0.0, 0.0], 0),
-    # -- classic full defacement: everything screams
-    ([1.0, 0.9, 0.8, 0.85, 1.0, 0.5, 0.0, 0.9], 1),
-    ([1.0, 0.8, 0.6, 0.9, 1.0, 0.0, 0.0, 0.8], 1),
-    ([1.0, 0.95, 0.9, 0.95, 0.9, 0.6, 0.2, 0.95], 1),
-    # -- stealthy injection: small DOM change, new script domain
-    ([1.0, 0.4, 0.85, 0.1, 0.0, 0.0, 0.0, 0.1], 1),
-    ([1.0, 0.3, 0.9, 0.05, 0.0, 0.2, 0.0, 0.0], 1),
-    # -- signature-only (text replaced, layout kept)
-    ([1.0, 0.2, 0.1, 0.3, 1.0, 0.0, 0.0, 0.6], 1),
-    ([1.0, 0.15, 0.0, 0.2, 0.85, 0.0, 0.0, 0.5], 1),
-    # -- cloaking: browser view clean-ish, crawler sees different page
-    ([1.0, 0.1, 0.1, 0.05, 0.0, 0.0, 0.9, 0.2], 1),
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.95, 0.0], 1),
-    # -- semantic rewrite (content meaning flipped, structure kept)
-    ([1.0, 0.2, 0.05, 0.25, 0.3, 0.0, 0.0, 0.9], 1),
-    ([1.0, 0.25, 0.15, 0.35, 0.55, 0.1, 0.0, 0.85], 1),
-    # -- visual takeover (image-based defacement, DOM barely moves)
-    ([1.0, 0.15, 0.05, 0.9, 0.0, 0.0, 0.0, 0.3], 1),
-    ([1.0, 0.1, 0.0, 0.95, 0.2, 0.0, 0.0, 0.2], 1),
-]
+# Deployed model artifact: produced by tools/refit_fusion_model.py from
+# the measured dataset in training/fusion_dataset.json (provenance, CV
+# table, and held-out calibration are recorded inside the artifact).
+MODEL_ARTIFACT_PATH = Path(__file__).resolve().parent / "training" / "fusion_model.json"
 
-_model: LogisticRegression | None = None
+_ARTIFACT_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class FusionModel:
+    coefficients: tuple[float, ...]
+    intercept: float
+    lambda_selected: float | None
+    dataset_sha256: str | None
+
+
+_model: FusionModel | None = None
 _model_lock = threading.Lock()
+
+
+def _load_fusion_model(path: Path) -> FusionModel:
+    """Read + validate the committed artifact; raise on anything that is
+    not exactly the schema the runtime expects. A silently-wrong model is
+    worse than no model (the caller degrades to a documented fallback)."""
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    meta = artifact.get("meta")
+    model = artifact.get("model")
+    if not isinstance(meta, dict) or not isinstance(model, dict):
+        raise RuntimeError(f"{path.name}: missing meta/model sections")
+    if meta.get("schema_version") != _ARTIFACT_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"{path.name}: schema_version {meta.get('schema_version')!r} "
+            f"!= {_ARTIFACT_SCHEMA_VERSION}"
+        )
+    if meta.get("feature_keys") != list(FEATURE_KEYS):
+        raise RuntimeError(f"{path.name}: feature_keys diverge from runtime FEATURE_KEYS order")
+    raw_coefs = model.get("coefficients")
+    intercept = model.get("intercept")
+    if not isinstance(raw_coefs, list) or len(raw_coefs) != len(FEATURE_KEYS):
+        raise RuntimeError(f"{path.name}: expected {len(FEATURE_KEYS)} coefficients")
+    coefficients = []
+    for key, value in zip(FEATURE_KEYS, raw_coefs, strict=True):
+        num = float(value)
+        if not math.isfinite(num):
+            raise RuntimeError(f"{path.name}: non-finite coefficient for {key}")
+        if num < 0.0:
+            # Structural finding-5.1 guarantee: evidence can only add risk.
+            raise RuntimeError(f"{path.name}: negative coefficient for {key} ({num})")
+        coefficients.append(num)
+    b = float(intercept)
+    if not math.isfinite(b):
+        raise RuntimeError(f"{path.name}: non-finite intercept")
+    fit = meta.get("fit") if isinstance(meta.get("fit"), dict) else {}
+    dataset = meta.get("dataset") if isinstance(meta.get("dataset"), dict) else {}
+    return FusionModel(
+        coefficients=tuple(coefficients),
+        intercept=b,
+        lambda_selected=fit.get("lambda_selected"),
+        dataset_sha256=dataset.get("sha256"),
+    )
+
+
+def get_fusion_model() -> FusionModel:
+    """The deployed refit model, loaded once per process and cached.
+
+    Raises when the artifact is missing or fails validation — layer9_fusion
+    catches and degrades to its fallback path. A failed load is deliberately
+    NOT cached so recovery needs only fixing the file, not a restart."""
+    global _model
+    with _model_lock:
+        if _model is None:
+            try:
+                _model = _load_fusion_model(MODEL_ARTIFACT_PATH)
+            except Exception as exc:
+                raise RuntimeError(f"fusion model artifact unusable: {exc}") from exc
+        return _model
+
+
+def _sigmoid(z: float) -> float:
+    if z >= 0.0:
+        return 1.0 / (1.0 + math.exp(-z))
+    exp_z = math.exp(z)
+    return exp_z / (1.0 + exp_z)
+
 
 # --- Rule-based minimum-risk floors ---
 # (feature key, fires at score >=, floor applied, rule name).
@@ -116,11 +159,14 @@ _model_lock = threading.Lock()
 # - A brand-new external script/iframe/form-action domain (or ~3 lighter
 #   new-domain refs) appeared and the content hash flipped (layer 3 can
 #   not run otherwise). Trigger 0.55 == weighted new-domain count >=
-#   ~0.89 on layer 3's saturation curve (1 - e^(-0.9 * w)). Legitimate
-#   sites do add vendor scripts, so the floor lands INSIDE the LLM
-#   escalation band ([ESCALATION_LOW, ESCALATION_HIGH)) rather than at
-#   the flag threshold: cadence tightens and the semantic second opinion
-#   engages, but a lone ambiguous vector never auto-alerts.
+#   ~0.89 on layer 3's saturation curve (1 - e^(-0.9 * w)). The floor
+#   lands INSIDE the LLM escalation band ([ESCALATION_LOW, ESCALATION_HIGH))
+#   so sub-threshold shapes of this evidence stay visible to cadence
+#   tightening and the semantic second opinion. (The refitted model ranks
+#   heavy new-domain infrastructure above the flag threshold on its own —
+#   the measured feature space cannot separate vendor additions from
+#   injections, so per-site suppression rules and the confirm queue are
+#   the designed mitigations there; see the module docstring.)
 _RULE_FLOORS: tuple[tuple[str, float, float, str], ...] = (
     ("layer5_signatures", 0.85, 0.90, "conclusive_signature_text"),
     ("layer7_cloaking", 0.85, 0.90, "severe_cloaking"),
@@ -141,19 +187,6 @@ def _rule_floor(features_by_key: dict[str, float]) -> tuple[float, list[dict]]:
             applied = max(applied, floor)
             fired.append({"rule": name, "layer": key, "value": round(value, 4), "floor": floor})
     return applied, fired
-
-
-def get_fusion_model() -> LogisticRegression:
-    """Deterministic seed-fitted logistic regression, cached per process."""
-    global _model
-    with _model_lock:
-        if _model is None:
-            X = np.array([row for row, _ in _SEED_ROWS], dtype=np.float64)
-            y = np.array([label for _, label in _SEED_ROWS], dtype=np.int64)
-            model = LogisticRegression(C=50.0, solver="lbfgs", max_iter=5000)
-            model.fit(X, y)
-            _model = model
-        return _model
 
 
 def _coerce_score(value) -> float:
@@ -188,29 +221,41 @@ def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], d
 
 
 def layer9_fusion(layer_results: dict[str, dict]) -> dict:
-    """Fuse layers 1-8 into one risk score: the fitted model's
+    """Fuse layers 1-8 into one risk score: the deployed model's
     probability, lifted to at least any fired rule floor (see
-    _RULE_FLOORS). Never raises: any failure (malformed input, broken
-    model fit) degrades to max(fallback sub-score, floors) with a note —
-    the floors are model-independent and survive even a broken fit."""
+    _RULE_FLOORS). Never raises: any failure (malformed input, missing or
+    invalid model artifact) degrades to max(fallback sub-score, floors)
+    with a note — the floors are model-independent and survive even a
+    broken fit."""
     features: list[float] = []
     ran: dict[str, bool] = {}
     try:
         features, ran = build_feature_vector(layer_results)
         floor_value, floor_rules = _rule_floor(dict(zip(FEATURE_KEYS, features, strict=True)))
         model = get_fusion_model()
-        proba = float(model.predict_proba(np.array([features]))[0][1])
+        z = math.fsum(c * v for c, v in zip(model.coefficients, features, strict=True)) + (
+            model.intercept
+        )
+        proba = _sigmoid(z)
         score = max(proba, floor_value)
         contributions = {
-            key: round(float(coef) * val, 4)
-            for key, coef, val in zip(FEATURE_KEYS, model.coef_[0], features, strict=True)
+            key: round(coef * val, 4)
+            for key, coef, val in zip(FEATURE_KEYS, model.coefficients, features, strict=True)
         }
         evidence = {
-            "model": "logistic_regression (seed-fitted, scikit-learn)",
+            "model": (
+                "logistic_regression (refit artifact; MAP fit on measured "
+                "data, coefficients constrained >= 0)"
+            ),
+            "model_artifact": {
+                "file": MODEL_ARTIFACT_PATH.name,
+                "lambda_selected": model.lambda_selected,
+                "dataset_sha256": model.dataset_sha256,
+            },
             "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=True)},
             "layers_ran": ran,
             "contributions": contributions,
-            "intercept": round(float(model.intercept_[0]), 4),
+            "intercept": round(model.intercept, 4),
             "upgrade_path": (
                 "retrain on labeled scan history; gradient boosting once volume allows (§5)"
             ),
