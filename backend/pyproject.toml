@@ -93,6 +93,9 @@ ignore = ["S101"]  # allow asserts in tests
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106", "S311"]  # fake credentials; seeded RNG for synthetic data
+# Uninstall sandbox tests shell out to pwsh driving a fake docker shim —
+# argv lists built entirely from trusted, test-constructed values.
+"tests/test_uninstall_backup_safety.py" = ["S603"]
 # Dataset builder seeds random.Random for synthetic-content variety only —
 # no security surface consumes these values.
 "tools/*" = ["S311"]

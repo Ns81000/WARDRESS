@@ -6,8 +6,10 @@
 #   1. Verifies Docker Desktop is running.
 #   2. Backs up everything recoverable to a timestamped folder (unless
 #      -SkipBackup): your .env, a logical Postgres dump (pg_dump), and the
-#      scan-artifacts volume (tar.gz). Nothing is deleted until the backup
-#      has completed.
+#      scan-artifacts volume (tar.gz). If any attempted part of the backup
+#      fails, the script STOPS before anything is deleted - re-run with
+#      -AllowIncompleteBackup to proceed anyway (the summary and exit code
+#      will report the incomplete backup).
 #   3. Removes the whole Wardress footprint from Docker: containers,
 #      networks, named volumes (db-data, redis-data, scan-artifacts,
 #      ollama-data), and the locally-built images.
@@ -24,6 +26,11 @@ param(
     [switch]$Force,
     # Skip the data backup entirely (containers/volumes/images still removed).
     [switch]$SkipBackup,
+    # Proceed with removal even when a backup was attempted but came out
+    # incomplete (e.g. the database dump failed). Without this switch an
+    # incomplete backup STOPS the script before anything is deleted. The
+    # data-loss risk is yours when you pass it.
+    [switch]$AllowIncompleteBackup,
     # Where to write the backup. Defaults to a timestamped folder next to
     # the repo. The timestamp is filesystem-safe (no colons).
     [string]$BackupPath,
@@ -81,6 +88,7 @@ if (-not $Force) {
     if (-not $SkipBackup) {
         Write-Host ""
         Write-Host "A backup (.env + database dump + scan artifacts) is taken FIRST." -ForegroundColor Green
+        Write-Host "If any part of the backup fails, the removal stops before deleting." -ForegroundColor Green
     }
     else {
         Write-Host ""
@@ -97,6 +105,10 @@ if (-not $Force) {
 # --- 3. Backup -----------------------------------------------------------
 
 $backupDir = $null
+# Completeness tracking: a backup is complete only when every component that
+# was ATTEMPTED actually landed on disk. Components that do not exist at all
+# (no .env yet, no scan-artifacts volume) are gaps, not failed captures.
+$missing = [System.Collections.Generic.List[string]]::new()
 if (-not $SkipBackup) {
     # Filesystem-safe timestamp (no colons); avoids Get-Date format pitfalls.
     $stamp = (Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")
@@ -108,6 +120,13 @@ if (-not $SkipBackup) {
     }
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     Write-Host "    Backup location: $backupDir" -ForegroundColor Cyan
+
+    # A reused -BackupPath may hold files from an earlier run. Remove the
+    # managed filenames so this folder always describes THIS attempt.
+    foreach ($stale in @(".env", "database.sql", "scan-artifacts.tar.gz")) {
+        $stalePath = Join-Path $backupDir $stale
+        if (Test-Path $stalePath) { Remove-Item $stalePath -Force -ErrorAction SilentlyContinue }
+    }
 
     # 3a. .env (holds every secret + admin credentials).
     Step "Backing up .env configuration"
@@ -160,15 +179,18 @@ if (-not $SkipBackup) {
             }
             else {
                 Write-Host "    Database dump failed - database may already be gone" -ForegroundColor Yellow
+                $missing.Add("database.sql (pg_dump failed)")
                 if (Test-Path $dumpFile) { Remove-Item $dumpFile -ErrorAction SilentlyContinue }
             }
         }
         else {
             Write-Host "    Database did not become ready - skipping dump" -ForegroundColor Yellow
+            $missing.Add("database.sql (database never became ready)")
         }
     }
     else {
         Write-Host "    Could not start database container - skipping dump" -ForegroundColor Yellow
+        $missing.Add("database.sql (database container could not be started)")
     }
 
     # 3c. Scan-artifacts volume (screenshots/HTML). Tar it out via a
@@ -182,6 +204,7 @@ if (-not $SkipBackup) {
     if (Invoke-Quiet { docker volume inspect $artVol }) {
         if (-not $helperImage) {
             Write-Host "    Could not resolve helper image - skipping artifact archive" -ForegroundColor Yellow
+            $missing.Add("scan-artifacts.tar.gz (helper image could not be resolved)")
         }
         else {
             $prev = $ErrorActionPreference
@@ -200,8 +223,9 @@ if (-not $SkipBackup) {
                 $sizeMB = [math]::Round((Get-Item $tarFile).Length / 1MB, 2)
                 Write-Progress-Done "Saved scan-artifacts.tar.gz ($sizeMB MB)" 
             }
-            else { 
-                Write-Host "    Could not archive scan artifacts" -ForegroundColor Yellow 
+            else {
+                Write-Host "    Could not archive scan artifacts" -ForegroundColor Yellow
+                $missing.Add("scan-artifacts.tar.gz (archive command failed)")
             }
         }
     }
@@ -209,35 +233,70 @@ if (-not $SkipBackup) {
         Write-Host "    No scan-artifacts volume found - skipping" -ForegroundColor Yellow
     }
 
-    # 3d. A short restore note so the backup is self-describing.
+    # 3d. A short restore note so the backup is self-describing. Generated
+    # from what THIS run actually captured - never a hardcoded manifest.
     Step "Writing restore instructions"
-    $readme = @"
-Wardress backup - $stamp
-=========================
+    $hasEnv  = Test-Path (Join-Path $backupDir ".env")
+    $hasDump = Test-Path (Join-Path $backupDir "database.sql")
+    $tarPath = Join-Path $backupDir "scan-artifacts.tar.gz"
+    $hasTar  = Test-Path $tarPath
 
-Contents:
-  .env                    Your configuration and secrets (admin password, JWT/
-                          encryption keys, DB password). Keep this file safe.
-  database.sql            Logical Postgres dump (pg_dump --clean --if-exists).
-  scan-artifacts.tar.gz   Stored screenshots and captured HTML.
+    $readme = "Wardress backup - $stamp`r`n=========================`r`n`r`n"
+    if ($missing.Count -gt 0) {
+        $readme += "WARNING: THIS BACKUP IS INCOMPLETE. The following could not be captured:`r`n"
+        foreach ($m in $missing) { $readme += "  - $m`r`n" }
+        $readme += "Once the Docker volumes are removed, these are unrecoverable.`r`n`r`n"
+    }
+    $readme += "Contents:`r`n"
+    if ($hasEnv) {
+        $readme += "  .env                    Your configuration and secrets (admin password, JWT/`r`n                          encryption keys, DB password). Keep this file safe.`r`n"
+    }
+    if ($hasDump) {
+        $readme += "  database.sql            Logical Postgres dump (pg_dump --clean --if-exists).`r`n"
+    }
+    if ($hasTar) {
+        $readme += "  scan-artifacts.tar.gz   Stored screenshots and captured HTML.`r`n"
+    }
 
-To restore into a fresh install:
-  1. Reinstall Wardress but BEFORE first run, copy this .env back into the
-     repo root (so the same DB password / keys are used):
-        copy "$backupDir\.env" "<repo>\.env"
-  2. Start the stack once so the database exists:
-        powershell -ExecutionPolicy Bypass -File scripts\install.ps1
-  3. Restore the database:
-        Get-Content "$backupDir\database.sql" | docker compose exec -T db psql -U $pgUser -d $pgDb
-  4. Restore artifacts into the volume (the db image is already present
-     after step 2, so this pulls nothing new):
-        docker run --rm -v ${Project}_scan-artifacts:/data -v "${backupDir}:/backup" --entrypoint tar $helperImage xzf /backup/scan-artifacts.tar.gz -C /data
-  5. Restart:
-        docker compose up -d
-"@
+    $stepNo = 0
+    $readme += "`r`nTo restore into a fresh install:`r`n"
+    if ($hasEnv) {
+        $stepNo++
+        $readme += "  $stepNo. Reinstall Wardress but BEFORE first run, copy this .env back into the`r`n     repo root (so the same DB password / keys are used):`r`n         copy `"$backupDir\.env`" `"<repo>\.env`"`r`n"
+    }
+    $stepNo++
+    $readme += "  $stepNo. Start the stack once so the database exists:`r`n         powershell -ExecutionPolicy Bypass -File scripts\install.ps1`r`n"
+    if ($hasDump) {
+        $stepNo++
+        $readme += "  $stepNo. Restore the database:`r`n         Get-Content `"$backupDir\database.sql`" | docker compose exec -T db psql -U $pgUser -d $pgDb`r`n"
+    }
+    if ($hasTar -and $helperImage) {
+        $stepNo++
+        $readme += "  $stepNo. Restore artifacts into the volume (the db image is already present`r`n     after step 2, so this pulls nothing new):`r`n         docker run --rm -v ${Project}_scan-artifacts:/data -v `"${backupDir}:/backup`" --entrypoint tar $helperImage xzf /backup/scan-artifacts.tar.gz -C /data`r`n"
+    }
+    $stepNo++
+    $readme += "  $stepNo. Restart:`r`n         docker compose up -d`r`n"
+
     Set-Content -Path (Join-Path $backupDir "RESTORE.txt") -Value $readme -Encoding UTF8
-    Write-Progress-Done "Backup completed successfully"
+
+    if ($missing.Count -gt 0) {
+        Write-Host ("    Backup INCOMPLETE - missing: " + ($missing -join "; ")) -ForegroundColor Yellow
+    }
+    else {
+        Write-Progress-Done "Backup completed successfully"
+    }
 }
+
+# The backup is the operator's only copy of the data that is about to be
+# destroyed, so an incomplete backup stops the removal right here - before
+# anything has been deleted - unless it was explicitly accepted.
+if ($missing.Count -gt 0 -and -not $AllowIncompleteBackup) {
+    Fail ("The backup is INCOMPLETE (" + ($missing -join "; ") + "). " +
+        "Nothing was deleted - your data is still in Docker. " +
+        "Partial backup saved to: $backupDir. Fix the cause and re-run for a full backup, " +
+        "or pass -AllowIncompleteBackup to accept the loss and remove Wardress anyway.")
+}
+$backupIncomplete = ($missing.Count -gt 0)
 
 # --- 4. Tear down Docker resources --------------------------------------
 
@@ -313,13 +372,20 @@ catch {
 Write-Host ""
 Write-Host "----------------------------------------------------------------" -ForegroundColor Green
 Write-Host " Wardress has been removed from Docker." -ForegroundColor Green
-if ($backupDir) {
+if ($SkipBackup) {
+    Write-Host " No backup was taken (-SkipBackup)." -ForegroundColor Yellow
+}
+elseif ($backupIncomplete) {
+    Write-Host " WARNING: the backup is INCOMPLETE:" -ForegroundColor Red
+    foreach ($m in $missing) { Write-Host "   - $m" -ForegroundColor Yellow }
+    Write-Host " Partial backup saved to:" -ForegroundColor Yellow
+    Write-Host "   $backupDir"
+    Write-Host " See RESTORE.txt in that folder for what did survive."
+}
+else {
     Write-Host " Backup saved to:" -ForegroundColor Green
     Write-Host "   $backupDir"
     Write-Host " See RESTORE.txt in that folder to bring it back."
-}
-elseif ($SkipBackup) {
-    Write-Host " No backup was taken (-SkipBackup)." -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host " The repository files are still on disk. Delete the folder"
@@ -330,4 +396,7 @@ if (-not $PruneBaseImages) {
     Write-Host " kept for reuse. Re-run with -PruneBaseImages to remove those too." -ForegroundColor DarkGray
 }
 Write-Host "----------------------------------------------------------------" -ForegroundColor Green
+# Exit 2 tells wrapper scripts the removal ran but the backup was incomplete
+# (exit 0 = full success or deliberate -SkipBackup; Fail above exits 1).
+if ($backupIncomplete) { exit 2 }
 exit 0
