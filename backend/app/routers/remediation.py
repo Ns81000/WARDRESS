@@ -9,11 +9,12 @@ carry a redacted hint only.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
@@ -28,7 +29,7 @@ from app.models import (
     utcnow,
 )
 from app.remediation import decrypt_hook_url
-from app.scanning import is_stale
+from app.scanning import STALE_INFLIGHT
 from app.schemas import (
     RemediationExecutionOut,
     RemediationExecutionPage,
@@ -259,22 +260,51 @@ async def confirm_execution(
     )
     if execution is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Remediation execution not found")
-    # A row can be re-confirmed if a previous confirm's enqueue was lost
-    # and the worker never picked it up (same stale-row philosophy as
-    # scans — nothing may stick in an in-flight state forever).
-    stale_queued = (
-        execution.status is RemediationExecutionStatus.queued
-        and execution.confirmed_at is not None
-        and is_stale(execution.confirmed_at)
+    # Claim the transition atomically instead of check-then-set: a plain
+    # read-modify-write lets every concurrent confirm pass the same status
+    # check and each enqueue a webhook fire. The conditional UPDATE's rowcount
+    # is the arbiter — when a losing writer's lock wait ends, Postgres
+    # re-evaluates the predicate against the winner's committed state, so
+    # exactly one request wins. (Same primitive as refresh-token rotation.)
+    now = utcnow()
+    claim = await db.execute(
+        update(RemediationExecution)
+        .where(
+            RemediationExecution.id == execution_id,
+            RemediationExecution.status == RemediationExecutionStatus.pending_confirm,
+        )
+        .values(
+            status=RemediationExecutionStatus.queued,
+            confirmed_by=user.id,
+            confirmed_at=now,
+        )
     )
-    if execution.status is not RemediationExecutionStatus.pending_confirm and not stale_queued:
+    if claim.rowcount == 0:
+        # A row can be re-confirmed if a previous confirm's enqueue was lost
+        # and the worker never picked it up (same stale-row philosophy as
+        # scans — nothing may stick in an in-flight state forever). Atomic
+        # here too: two racing re-confirms yield one winner.
+        stale_bound = datetime.now(UTC) - STALE_INFLIGHT
+        claim = await db.execute(
+            update(RemediationExecution)
+            .where(
+                RemediationExecution.id == execution_id,
+                RemediationExecution.status == RemediationExecutionStatus.queued,
+                RemediationExecution.confirmed_at.is_not(None),
+                RemediationExecution.confirmed_at < stale_bound,
+            )
+            .values(
+                status=RemediationExecutionStatus.queued,
+                confirmed_by=user.id,
+                confirmed_at=now,
+            )
+        )
+    if claim.rowcount == 0:
+        await db.refresh(execution)
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"This remediation is already {execution.status.value.replace('_', ' ')}",
         )
-    execution.status = RemediationExecutionStatus.queued
-    execution.confirmed_by = user.id
-    execution.confirmed_at = utcnow()
     record_audit(
         db,
         actor=user,
@@ -294,6 +324,7 @@ async def confirm_execution(
         execution.detail = "task queue unavailable — confirm again shortly"
         await db.commit()
         raise
+    await db.refresh(execution)
     site = await db.scalar(select(Site).where(Site.id == execution.site_id))
     out = RemediationExecutionOut.model_validate(execution)
     return RemediationExecutionOut(
@@ -313,15 +344,29 @@ async def dismiss_execution(
     )
     if execution is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Remediation execution not found")
-    if execution.status is not RemediationExecutionStatus.pending_confirm:
+    # Same atomic-claim primitive as confirm: confirm and dismiss race the
+    # same pending_confirm precondition, so whichever conditional UPDATE
+    # commits first wins and the loser must observe the winner's state —
+    # an explicit rejection can never be overwritten into a firing.
+    claim = await db.execute(
+        update(RemediationExecution)
+        .where(
+            RemediationExecution.id == execution_id,
+            RemediationExecution.status == RemediationExecutionStatus.pending_confirm,
+        )
+        .values(
+            status=RemediationExecutionStatus.dismissed,
+            confirmed_by=user.id,
+            confirmed_at=utcnow(),
+            detail="Dismissed by operator",
+        )
+    )
+    if claim.rowcount == 0:
+        await db.refresh(execution)
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"This remediation is already {execution.status.value.replace('_', ' ')}",
         )
-    execution.status = RemediationExecutionStatus.dismissed
-    execution.confirmed_by = user.id
-    execution.confirmed_at = utcnow()
-    execution.detail = "Dismissed by operator"
     record_audit(
         db,
         actor=user,
@@ -332,6 +377,7 @@ async def dismiss_execution(
         after={"status": "dismissed"},
     )
     await db.commit()
+    await db.refresh(execution)
     site = await db.scalar(select(Site).where(Site.id == execution.site_id))
     out = RemediationExecutionOut.model_validate(execution)
     return RemediationExecutionOut(

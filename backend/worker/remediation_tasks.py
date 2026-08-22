@@ -3,16 +3,18 @@
 Firing runs in its own task, never in the scan body — a broken or slow
 webhook must never block or crash a scan (rule 6). The task decrypts the
 hook URL, POSTs the incident payload, and records the outcome on the
-execution row (succeeded/failed + a user-safe detail). Idempotent: it
-only acts on rows still in `queued`, so acks_late redelivery cannot
-double-fire.
+execution row (succeeded/failed + a user-safe detail). Delivery is
+claimed atomically before the POST — `executed_at` is stamped by exactly
+one concurrent message while the row stays `queued`, reclaimable once
+the stamp goes stale — so neither acks_late redelivery nor duplicate
+queue messages can double-fire.
 """
 
 import asyncio
 import logging
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
 from app.models import (
     RemediationExecution,
@@ -23,6 +25,7 @@ from app.models import (
     utcnow,
 )
 from app.remediation import build_remediation_payload, decrypt_hook_url, post_webhook
+from app.scanning import STALE_INFLIGHT
 from worker.celery_app import celery_app
 from worker.db import task_session
 
@@ -39,6 +42,29 @@ async def _fire(execution_id: uuid.UUID) -> str:
         if execution.status is not RemediationExecutionStatus.queued:
             # Only queued rows fire — guards redelivery and dismissed rows.
             return f"not-queued-{execution.status.value}"
+
+        # Claim the delivery atomically: the conditional UPDATE's rowcount is
+        # the arbiter between concurrent messages (Postgres re-evaluates the
+        # predicate when the lock wait ends), so exactly one POSTs. The claim
+        # stamps executed_at while the row stays queued: a crash mid-fire is
+        # still recoverable — fresh duplicates skip, and once the stamp ages
+        # past STALE_INFLIGHT the resweep's next message can reclaim.
+        now = utcnow()
+        claim = await db.execute(
+            update(RemediationExecution)
+            .where(
+                RemediationExecution.id == execution_id,
+                RemediationExecution.status == RemediationExecutionStatus.queued,
+                or_(
+                    RemediationExecution.executed_at.is_(None),
+                    RemediationExecution.executed_at < now - STALE_INFLIGHT,
+                ),
+            )
+            .values(executed_at=now)
+        )
+        if claim.rowcount == 0:
+            return "not-claimed"
+        await db.commit()
 
         hook = await db.scalar(
             select(RemediationHook).where(RemediationHook.id == execution.hook_id)
