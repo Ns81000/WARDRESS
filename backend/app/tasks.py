@@ -6,6 +6,7 @@ are dispatched by name via a broker-only Celery client. Enqueue failures
 never a silent drop.
 """
 
+import logging
 import uuid
 
 from celery import Celery
@@ -14,6 +15,8 @@ from kombu.exceptions import OperationalError
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 _client: Celery | None = None
 
 
@@ -21,7 +24,13 @@ def _celery_client() -> Celery:
     global _client
     if _client is None:
         settings = get_settings()
-        _client = Celery("wardress-api", broker=settings.redis_url, backend=settings.redis_url)
+        # backend=None: the API never consumes task results, and a configured
+        # backend makes every send_task drive the result-consumer pubsub
+        # machinery before publishing — during a Redis outage that hangs ~60 s
+        # in internal reconnect retries, then raises RuntimeError (not
+        # OperationalError), bypassing the 503 handling below so committed
+        # rows stay stuck pending.
+        _client = Celery("wardress-api", broker=settings.redis_url, backend=None)
         _client.conf.update(
             task_serializer="json",
             accept_content=["json"],
@@ -35,6 +44,16 @@ def _send(name: str, args: list) -> None:
     try:
         _celery_client().send_task(name, args=args)
     except OperationalError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Task queue is unavailable — try again shortly",
+        ) from exc
+    except RuntimeError as exc:
+        # Defensive: the result-store machinery used to raise RuntimeError
+        # (not OperationalError) mid-outage. Any enqueue failure of that class
+        # is queue unavailability and must take the same 503 degradation path,
+        # never surface as a bare exception after the row was committed.
+        logger.warning("enqueue %s failed: %s", name, exc, exc_info=True)
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Task queue is unavailable — try again shortly",
