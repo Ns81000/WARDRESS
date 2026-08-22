@@ -8,7 +8,7 @@ icon: "shield-halved"
 
 **Wardress** is a production-grade, self-hosted security tool built to protect website integrity. It captures and freezes a trusted **baseline** of your target website (DOM structure, network references, visual layout, and textual semantics) and continuously monitors the site for malicious defacements, script injections, metadata tampering, and domain hijacking.
 
-Unlike simple page monitors, Wardress uses a **fused risk model** that aggregates results from 9 independent detection layers to calculate a single, highly accurate risk score. This filters out false positives caused by minor dynamic elements while raising immediate alarms when a site has been compromised.
+Unlike simple page monitors, Wardress aggregates results from 9 independent detection layers into a single fused risk score. Rule-based minimum-risk floors keep high-specificity attack evidence (new external script domains, defacement signatures, crawler cloaking) from being drowned out, while ordinary churn — rotating ads, timestamps, cache-busting references — measures far below the alerting bar. Changes that clear a site's flag threshold raise alerts immediately; subtler changes are still scored and recorded, significant ones shorten the scan interval and can request a second opinion from a configured AI model, so ambiguous incidents reach operator review instead of disappearing. Detection sensitivity varies by attack technique, and per-site flag thresholds are tunable.
 
 <CardGroup cols={2}>
   <Card
@@ -35,11 +35,15 @@ Unlike simple page monitors, Wardress uses a **fused risk model** that aggregate
     Ollama model.
   </Card>
   <Card
-    title="Self-Hosted & Private"
+    title="Self-Hosted"
     icon="server"
     href="/installation"
   >
-    Run everything on your own infrastructure via Docker Compose.
+    Run the entire stack on your own infrastructure via Docker Compose. The
+    dashboard loads site favicons and provider logos from public CDNs, and
+    incident data leaves your host only through channels you configure
+    (notifications, webhooks, AI providers — pick the local Ollama profile to
+    keep AI analysis fully offline).
   </Card>
 </CardGroup>
 

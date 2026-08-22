@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Self-hosted website defacement detection and automated response orchestration.</strong><br>
-  Nine distinct detection layers, dynamic risk fusion, multi-channel alerting, and guarded remediation — fully localized on your own infrastructure.
+  Nine distinct detection layers, dynamic risk fusion, multi-channel alerting, and guarded remediation — deployed via Docker Compose on infrastructure you control.
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 **Wardress** is a production-grade, self-hosted security tool built to protect website integrity. It captures and freezes a trusted **baseline** of your target website (DOM structure, network references, visual layout, and textual semantics) and continuously monitors the site for malicious defacements, script injections, metadata tampering, and domain hijacking. 
 
-Unlike simple page monitors, Wardress uses a **fused risk model** that aggregates results from 9 independent detection layers to calculate a single, highly accurate risk score. This filters out false positives caused by minor dynamic elements while raising immediate alarms when a site has been compromised.
+Unlike simple page monitors, Wardress aggregates results from 9 independent detection layers into a single fused risk score. Rule-based minimum-risk floors keep high-specificity attack evidence (new external script domains, defacement signatures, crawler cloaking) from being drowned out, while ordinary churn — rotating ads, timestamps, cache-busting references — measures far below the alerting bar. Changes that clear a site's flag threshold raise alerts immediately; subtler changes are still scored and recorded, significant ones shorten the scan interval and can request a second opinion from a configured AI model, so ambiguous incidents reach operator review instead of disappearing. Detection sensitivity varies by attack technique, and per-site flag thresholds are tunable.
 
 ---
 
