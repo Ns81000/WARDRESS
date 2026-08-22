@@ -189,13 +189,29 @@ async def test_flagged_redelivery_does_not_duplicate_alert(
 
 # --- escalation wiring ---
 
+# A deterministic mid-band scenario: one injected script on a brand-new
+# external domain. Under the deployed refit + rule floors this fuses to
+# ~0.63 — inside [ESCALATION_LOW, ESCALATION_HIGH) but below a raised
+# threshold — so the REAL should_escalate band gate engages (the old
+# screamer fixture fuses ~1.0, above the band, which is exactly why these
+# tests used to patch the gate out of existence; audit finding "Zero
+# end-to-end flagging coverage for realistic attacks").
+MIDBAND_HTML_SUFFIX = "<script src='https://midband.example.net/x.js'></script>"
+
+
+def _fetch_midband():
+    return _fetch(BASELINE_HTML.replace("</body>", MIDBAND_HTML_SUFFIX + "</body>"))
+
 
 async def test_ambiguous_scan_runs_escalation_and_can_upgrade(
     db_factory, monkeypatch, tmp_path, enqueued
 ):
-    """A changed scan in the ambiguous band consults the LLM; a confident
+    """A changed scan whose fused risk lands in the ambiguous band consults
+    the LLM through the unmocked should_escalate gate; a confident
     defacement classification upgrades the verdict to flagged and the
     outcome lands in layer 8's stored evidence."""
+    from worker.llm_escalation import ESCALATION_HIGH, ESCALATION_LOW
+
     site, baseline, scan = await _flaggable_scan(db_factory)
     async with db_factory() as db:
         s = await db.scalar(select(Site).where(Site.id == site.id))
@@ -203,14 +219,14 @@ async def test_ambiguous_scan_runs_escalation_and_can_upgrade(
         await db.commit()
     await _write_baseline_artifacts(tmp_path, baseline.id, BASELINE_HTML)
     await _set_baseline_paths(db_factory, baseline.id)
-    # A benign-looking change that still lands mid-band is hard to build
-    # deterministically from HTML, so pin the band check instead.
-    monkeypatch.setattr(scan_tasks, "fetch_page", _fetch(DEFACED_HTML))
-    monkeypatch.setattr(scan_tasks, "should_escalate", lambda risk, changed: changed)
+    monkeypatch.setattr(scan_tasks, "fetch_page", _fetch_midband())
+
+    seen: dict = {}
 
     async def fake_escalate(db, *, site_url, risk, layer_scores, new_text):
+        seen["risk"] = risk
         assert site_url == "https://example.com"
-        assert "HACKED BY" in new_text
+        assert layer_scores is not None and "layer9_fusion" in layer_scores
         return {
             "status": "ok",
             "provider": "gemini",
@@ -222,6 +238,8 @@ async def test_ambiguous_scan_runs_escalation_and_can_upgrade(
     monkeypatch.setattr(scan_tasks, "escalate_scan", fake_escalate)
 
     assert await scan_tasks._run_scan(scan.id) == "flagged"
+    # The real band gate decided to escalate: only in-band risks arrive.
+    assert ESCALATION_LOW <= seen["risk"] < ESCALATION_HIGH
     async with db_factory() as db:
         finding = await db.scalar(
             select(ScanFinding).where(
@@ -234,6 +252,8 @@ async def test_ambiguous_scan_runs_escalation_and_can_upgrade(
 
 
 async def test_escalation_benign_does_not_upgrade(db_factory, monkeypatch, tmp_path, enqueued):
+    """Same mid-band scenario through the real gate; a confident BENIGN
+    classification must leave the local changed verdict standing."""
     site, baseline, scan = await _flaggable_scan(db_factory)
     async with db_factory() as db:
         s = await db.scalar(select(Site).where(Site.id == site.id))
@@ -241,8 +261,7 @@ async def test_escalation_benign_does_not_upgrade(db_factory, monkeypatch, tmp_p
         await db.commit()
     await _write_baseline_artifacts(tmp_path, baseline.id, BASELINE_HTML)
     await _set_baseline_paths(db_factory, baseline.id)
-    monkeypatch.setattr(scan_tasks, "fetch_page", _fetch(DEFACED_HTML))
-    monkeypatch.setattr(scan_tasks, "should_escalate", lambda risk, changed: changed)
+    monkeypatch.setattr(scan_tasks, "fetch_page", _fetch_midband())
 
     async def benign_escalate(db, **kwargs):
         return {"status": "ok", "provider": "gemini", "classification": "benign", "confidence": 1.0}

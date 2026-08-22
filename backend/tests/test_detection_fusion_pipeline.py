@@ -1,6 +1,7 @@
 """Detection layers 6-9 + pipeline unit tests: security metadata,
-cloaking, semantics (lexicon parts — MiniLM embedding is exercised in the
-live-stack verification, mocked here), fusion, and gating."""
+cloaking, semantics (lexicon parts — embeddings mocked to None here for
+hermeticity; test_end_to_end_flagging.py exercises the drift path with
+real vector-valued stubs), fusion, and gating."""
 
 import pytest
 
