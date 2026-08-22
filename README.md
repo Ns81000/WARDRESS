@@ -393,12 +393,16 @@ Interactive OpenAPI documentation is available locally at **`http://localhost:83
 The backend is built with **FastAPI** and managed via **uv**. The frontend is built with **React 19** and managed via **pnpm**.
 
 ### Backend Development
-Run migrations and execute the unit-test suite (uses an in-memory SQLite database via `aiosqlite` so no Postgres instance is required):
+Run the unit-test suite against a disposable PostgreSQL instance — the suite applies the real Alembic migrations (`alembic upgrade head`), so migration-only constraints (partial unique indexes, VARCHAR widths) are enforced exactly as in production:
 ```bash
 cd backend
 uv sync
+# One-time: start a throwaway test database (any reachable PostgreSQL 16 works)
+docker run -d --name wardress-test-pg -e POSTGRES_USER=wardress -e POSTGRES_PASSWORD=wardress -p 127.0.0.1:5433:5432 postgres:16-alpine
 uv run pytest
 ```
+
+The suite targets `postgresql+asyncpg://wardress:wardress@127.0.0.1:5433/wardress_test` by default, creates the database if it does not exist, and wipes table contents between tests (run only one pytest session per database). Point it at a different instance with `WARDRESS_TEST_DATABASE_URL`. As a safety guard, the target database's name must contain `test` — override deliberately with `WARDRESS_TEST_DB_UNSAFE_ALLOW=1`.
 
 ### Frontend Development
 Install dependencies, run component-level tests, check types, and run the linter:

@@ -23,6 +23,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # The unit suite runs on real Postgres with the Alembic schema applied,
+      # so migration-only constraints (partial unique indexes, VARCHAR
+      # widths) are enforced in tests exactly as in production. The database
+      # name contains "test" - the harness refuses non-test databases.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wardress
+          POSTGRES_PASSWORD: wardress-test
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U wardress"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      WARDRESS_TEST_DATABASE_URL: postgresql+asyncpg://wardress:wardress-test@localhost:5433/postgres_test
     steps:
       - uses: actions/checkout@v5
       - name: Install uv
@@ -44,10 +64,10 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
-  # Migrations run against real Postgres (production's DB), not the SQLite the
-  # unit suite uses — this is the only place dialect-specific DDL (enum types,
-  # ON DELETE CASCADE, server defaults) is actually exercised. Catches a broken
-  # migration or model/migration drift before it reaches a deploy.
+  # Migrations run against real Postgres (production's DB). The backend unit
+  # suite shares this dialect (see the backend job's postgres service); this
+  # job additionally exercises the migration chain itself: fresh upgrade,
+  # downgrade round-trip of the newest revision, and model/migration drift.
   migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 10

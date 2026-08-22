@@ -217,15 +217,18 @@ async def test_capture_already_done_is_idempotent(db_factory, fetch_calls) -> No
 
 
 async def test_capture_site_deleted_before_start(db_factory, fetch_calls) -> None:
+    # Postgres cascades the site delete to its baselines (FK ON DELETE
+    # CASCADE), so by capture time the baseline row is gone and the task
+    # reports that - not the pre-Postgres-harness "site-missing" orphan
+    # state, which enforced FKs make impossible to persist.
     site = await _make_site(db_factory)
     baseline = await _make_baseline(db_factory, site.id)
     async with db_factory() as db:
         await db.execute(Site.__table__.delete().where(Site.__table__.c.id == site.id))
         await db.commit()
 
-    assert await scan_tasks._capture_baseline(baseline.id) == "site-missing"
-    row = await _get(db_factory, Baseline, baseline.id)
-    assert row.status is BaselineStatus.failed
+    assert await scan_tasks._capture_baseline(baseline.id) == "baseline-row-missing"
+    assert await _get(db_factory, Baseline, baseline.id) is None
     assert fetch_calls == []
 
 

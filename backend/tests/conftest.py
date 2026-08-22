@@ -1,46 +1,67 @@
-"""Shared test fixtures: in-memory SQLite (aiosqlite) app instance.
+"""Shared test fixtures: real PostgreSQL schema built by Alembic migrations.
 
-DATABASE_URL/JWT_SECRET are injected before app modules import so
-Settings never demands a real .env in unit tests.
+Every fixture shares one database on the production dialect whose schema
+comes from `alembic upgrade head` (never Base.metadata.create_all), so
+migration-only objects — the partial unique index on in-flight scans,
+VARCHAR widths, native enums — are actually enforced in tests. Table
+contents are wiped before each test; tests/db_harness.py holds the
+mechanics and README "Backend Development" documents the operator
+contract (one pytest session per database).
 """
 
 import os
+from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
+from db_harness import (
+    apply_migrations,
+    ensure_database_exists,
+    resolve_test_database_url,
+)
+
+TEST_DATABASE_URL = resolve_test_database_url()
+
+os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production-0123456789abcdef")
 os.environ.setdefault(
     "CREDENTIALS_ENCRYPTION_KEY", "test-encryption-key-not-for-production-0123456789"
 )
 # Rate limits off by default across the suite (all ASGI-transport requests
 # share the client IP "unknown", so a live limit would cross-contaminate
-# unrelated tests). test_ratelimit.py sets its own limits explicitly.
+# unrelated tests). test_phase5_ratelimit_ssrf.py sets its own limits explicitly.
 os.environ.setdefault("RATE_LIMIT_PER_IP", "0")
 os.environ.setdefault("RATE_LIMIT_PER_USER", "0")
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
+from db_harness import truncate_all_tables  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.db import get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Base, User, UserRole  # noqa: E402
+from app.models import User, UserRole  # noqa: E402
 from app.security import hash_password  # noqa: E402
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 TEST_PASSWORD = "correct horse battery staple"
 
 
+@pytest.fixture(scope="session")
+def _migrated_postgres() -> str:
+    """One real database per pytest session, schema at alembic head."""
+    ensure_database_exists(TEST_DATABASE_URL)
+    apply_migrations(TEST_DATABASE_URL, BACKEND_DIR)
+    return TEST_DATABASE_URL
+
+
 @pytest.fixture
-async def engine():
-    engine = create_async_engine(
-        "sqlite+aiosqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
+async def engine(_migrated_postgres):
+    engine = create_async_engine(_migrated_postgres)
+    try:
+        await truncate_all_tables(engine)
+        yield engine
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture
