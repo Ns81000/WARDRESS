@@ -65,6 +65,10 @@ dev = [
     "aiosqlite==0.22.1",
     "greenlet==3.5.3",
     "faker>=40.37.0",
+    # scipy arrives transitively via scikit-learn but tools/refit_fusion_model
+    # imports it directly - declared so a transitive drop can never break the
+    # refit silently (same rule as pillow/numpy above).
+    "scipy==1.18.0",
 ]
 
 # --- CPU-only torch (master prompt rule 3: no GPU dependencies, ever) ---

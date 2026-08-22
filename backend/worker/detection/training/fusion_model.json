@@ -1,0 +1,364 @@
+{
+ "meta": {
+  "schema_version": 1,
+  "tool": "backend/tools/refit_fusion_model.py",
+  "dataset": {
+   "path": "worker\\detection\\training\\fusion_dataset.json",
+   "sha256": "59120b5659a3721f709b4fb3469a4fe42b9c7e5ab8897a05a02d979dac7f2f37",
+   "schema_version": 1,
+   "samples": {
+    "total": 646,
+    "train": 454,
+    "val": 96,
+    "test_untouched": 96
+   }
+  },
+  "feature_keys": [
+   "layer1_hash",
+   "layer2_dom_structure",
+   "layer3_link_audit",
+   "layer4_visual_diff",
+   "layer5_signatures",
+   "layer6_security_metadata",
+   "layer7_cloaking",
+   "layer8_semantics"
+  ],
+  "fit": {
+   "method": "MAP logistic regression, L2-penalized, coefficients constrained >= 0",
+   "solver": "scipy.optimize.minimize L-BFGS-B (analytic gradient)",
+   "lambda_grid": [
+    0.001,
+    0.003,
+    0.01,
+    0.03,
+    0.1,
+    0.3,
+    1.0,
+    3.0
+   ],
+   "cv_folds": 5,
+   "selection_rule": "one-standard-error: strongest lambda whose mean fold log-loss <= best mean fold log-loss + 1 SE (train-only)",
+   "cv_table": [
+    {
+     "lambda": 3.0,
+     "fold_logloss": [
+      0.4689938553341243,
+      0.5058722958139431,
+      0.5112811461392911,
+      0.5171241031818943,
+      0.5232004872279071
+     ],
+     "mean_logloss": 0.5052943775394321
+    },
+    {
+     "lambda": 1.0,
+     "fold_logloss": [
+      0.4085171197116109,
+      0.45189867822193924,
+      0.4642872450467086,
+      0.4738519149161761,
+      0.48808178599613855
+     ],
+     "mean_logloss": 0.45732734877851466
+    },
+    {
+     "lambda": 0.3,
+     "fold_logloss": [
+      0.35912668527886893,
+      0.4080548668454331,
+      0.42770238204001076,
+      0.43966307455051956,
+      0.46529727880336014
+     ],
+     "mean_logloss": 0.4199688575036385
+    },
+    {
+     "lambda": 0.1,
+     "fold_logloss": [
+      0.3298774575033098,
+      0.3839973055725962,
+      0.40894994255448364,
+      0.42131341457804644,
+      0.45645669047690346
+     ],
+     "mean_logloss": 0.40011896213706794
+    },
+    {
+     "lambda": 0.03,
+     "fold_logloss": [
+      0.30954657234982075,
+      0.3689737927275266,
+      0.39693659635008177,
+      0.4090373673645703,
+      0.4528169522443298
+     ],
+     "mean_logloss": 0.3874622562072659
+    },
+    {
+     "lambda": 0.01,
+     "fold_logloss": [
+      0.2975360230436343,
+      0.3645077499252661,
+      0.3889445465945175,
+      0.40076885962632375,
+      0.45088244199656036
+     ],
+     "mean_logloss": 0.38052792423726034
+    },
+    {
+     "lambda": 0.003,
+     "fold_logloss": [
+      0.2892064097532399,
+      0.3696630736829102,
+      0.38310990366334186,
+      0.3928008784865696,
+      0.4467226811929706
+     ],
+     "mean_logloss": 0.3763005893558064
+    },
+    {
+     "lambda": 0.001,
+     "fold_logloss": [
+      0.2858889485390651,
+      0.3780019752305187,
+      0.3795748647678863,
+      0.38638841350052394,
+      0.44362694247785955
+     ],
+     "mean_logloss": 0.3746962289031707
+    }
+   ],
+   "lambda_selected": 0.03,
+   "library_versions": {
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "scikit_learn": "1.9.0"
+   }
+  },
+  "metrics": {
+   "train": {
+    "n": 454,
+    "accuracy": 0.8325991189427313,
+    "logloss": 0.38141078064510764,
+    "brier": 0.12294700760475594,
+    "auc": 0.9155330008344815,
+    "ece": 0.07518561869593417,
+    "confusion_at_0_5": {
+     "true_positive": 171,
+     "false_positive": 20,
+     "false_negative": 56,
+     "true_negative": 207
+    },
+    "frac_extreme_predictions": 0.21145374449339208,
+    "min_abs_prediction_error": 0.0
+   },
+   "val": {
+    "n": 96,
+    "accuracy": 0.8020833333333334,
+    "logloss": 0.42794873799819966,
+    "brier": 0.13988089574979926,
+    "auc": 0.890407986111111,
+    "ece": 0.11739465176886177,
+    "confusion_at_0_5": {
+     "true_positive": 33,
+     "false_positive": 4,
+     "false_negative": 15,
+     "true_negative": 44
+    },
+    "frac_extreme_predictions": 0.1875
+   },
+   "reliability_bins_val": [
+    {
+     "lower": 0.0,
+     "upper": 0.1,
+     "n": 11,
+     "mean_p": 0.0929,
+     "frac_pos": 0.0909
+    },
+    {
+     "lower": 0.1,
+     "upper": 0.2,
+     "n": 4,
+     "mean_p": 0.1172,
+     "frac_pos": 0.5
+    },
+    {
+     "lower": 0.2,
+     "upper": 0.30000000000000004,
+     "n": 34,
+     "mean_p": 0.2437,
+     "frac_pos": 0.1471
+    },
+    {
+     "lower": 0.30000000000000004,
+     "upper": 0.4,
+     "n": 3,
+     "mean_p": 0.3558,
+     "frac_pos": 0.3333
+    },
+    {
+     "lower": 0.4,
+     "upper": 0.5,
+     "n": 7,
+     "mean_p": 0.4497,
+     "frac_pos": 0.8571
+    },
+    {
+     "lower": 0.5,
+     "upper": 0.6000000000000001,
+     "n": 1,
+     "mean_p": 0.5108,
+     "frac_pos": 1.0
+    },
+    {
+     "lower": 0.6000000000000001,
+     "upper": 0.7000000000000001,
+     "n": 2,
+     "mean_p": 0.6335,
+     "frac_pos": 1.0
+    },
+    {
+     "lower": 0.7000000000000001,
+     "upper": 0.8,
+     "n": 4,
+     "mean_p": 0.7615,
+     "frac_pos": 0.75
+    },
+    {
+     "lower": 0.8,
+     "upper": 0.9,
+     "n": 7,
+     "mean_p": 0.8415,
+     "frac_pos": 0.5714
+    },
+    {
+     "lower": 0.9,
+     "upper": 1.0,
+     "n": 23,
+     "mean_p": 0.9847,
+     "frac_pos": 1.0
+    }
+   ],
+   "label_conflicts_within_train_unique_vectors": 6,
+   "max_monotonicity_violation": 0.0,
+   "test_split_policy": "untouched; consumed by Fusion Arc Part C integration validation"
+  },
+  "sanity_checks": [
+   {
+    "expect": "high",
+    "vector": [
+     1.0,
+     0.9991,
+     0.8794,
+     0.6363,
+     1.0,
+     0.0,
+     0.7884,
+     0.35
+    ],
+    "probability": 1.0
+   },
+   {
+    "expect": "high",
+    "vector": [
+     1.0,
+     1.0,
+     0.8794,
+     0.5975,
+     1.0,
+     0.0,
+     0.6714,
+     0.4512
+    ],
+    "probability": 1.0
+   },
+   {
+    "expect": "high",
+    "vector": [
+     1.0,
+     0.9999,
+     0.8794,
+     0.6381,
+     1.0,
+     0.0,
+     0.6687,
+     0.35
+    ],
+    "probability": 1.0
+   },
+   {
+    "expect": "low",
+    "vector": [
+     0.0,
+     0.0,
+     0.0,
+     0.0002,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "probability": 0.092869
+   },
+   {
+    "expect": "low",
+    "vector": [
+     0.0,
+     0.0,
+     0.0,
+     0.0026,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "probability": 0.09483
+   },
+   {
+    "expect": "low",
+    "vector": [
+     1.0,
+     0.0,
+     0.0,
+     0.095,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "probability": 0.417792
+   }
+  ],
+  "coefficient_notes": {
+   "layer1_hash": "Pure byte-flip flag: it fires for every benign deploy as well as every attack, so it earns a modest prior-update weight \u2014 evidence that something changed, never evidence of hostility on its own.",
+   "layer2_dom_structure": "DOM churn saturates under benign redesigns and deploys exactly as under attacks (the class/churn confounding behind finding 5.1's -6.54 seed-fit weight). Measured weight is positive but modest: churn corroborates other channels, it never convicts alone.",
+   "layer3_link_audit": "New external script/iframe/form-action infrastructure is genuine hostile signal, but legitimate sites add vendor scripts routinely; mid-weight corroboration, with Phase 7's rule floor binding the heavy single-vector case.",
+   "layer4_visual_diff": "Pixel divergence is computed after layer 4 handles rendering noise and suppression internally, so residual visual change is rarely benign: near-maximum weight.",
+   "layer5_signatures": "Matched defacement signature text is essentially conclusive on its own (layer 5's own contract): near-maximum weight.",
+   "layer6_security_metadata": "Certificate/header rotation occurs in BOTH classes (routine reissues and CSP tightening on the benign side, attacker-owned-box changes on the hostile side), and layer 6 scores any value change as weakening regardless of direction. Its measured information content is ~0, so the constraint settles it at exactly 0 instead of letting collinear noise pick a sign (the seed fit scored it -1.39, actively reducing risk as metadata changed).",
+   "layer7_cloaking": "Crawler-vs-browser divergence beyond layer 7's soft knee is attack-only evidence in the measured data: maximum weight.",
+   "layer8_semantics": "Meaning-level drift fires on manifesto-style rewrites and SEO spam within the embed window; strong weight, bounded by the channel's documented blind spots past the cap."
+  },
+  "notes": [
+   "Coefficients are constrained >= 0 during fitting, so d(risk)/d(feature) = sigmoid'(z) * w >= 0 everywhere: more evidence can never lower risk (the property finding 5.1 showed the seed fit violated).",
+   "lambda selected by deterministic stratified 5-fold CV on the train split under the one-standard-error rule: the STRONGEST grid value whose mean fold log-loss is within one standard error of the optimum. Plain argmin slides to the weakest regularization on near-separable data and yields near-step-function scores around thin margins.",
+   "VAL metrics are the honest held-out numbers for this phase; the TEST split is deliberately untouched here and reserved for Fusion Arc Part C's end-to-end integration validation.",
+   "The dataset's coarse 8-dim feature space collapses distinct inputs onto shared vectors (see the dataset's leakage_evidence); unique train vectors carrying BOTH labels set a Bayes-error ceiling, so training accuracy below 1.0 is expected and is evidence against saturation, not against quality.",
+   "sanity_checks rows with expect=low are RECORDED, not enforced: benign rows landing above the default flag threshold are an operating-point (threshold/band) decision owned by Fusion Arc Part C together with the Phase 7 floor constants, not something to hand-tune away here. Rows with expect=high ARE enforced (>= 0.85): a fit that cannot recognize a total takeover is broken at any operating point.",
+   "Regeneration workflow: rebuild the dataset (tools.build_fusion_dataset), then rerun this module; the artifact binds its dataset via sha256."
+  ]
+ },
+ "model": {
+  "intercept": -2.281022129149075,
+  "coefficients": [
+   1.036461098388249,
+   1.7488568912549938,
+   1.5359477403169797,
+   9.607533296657707,
+   10.223861530378512,
+   0.0,
+   10.941967794911452,
+   8.407387163716933
+  ]
+ }
+}
