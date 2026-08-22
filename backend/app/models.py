@@ -249,7 +249,10 @@ class Site(Base):
         back_populates="site", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_sites_url", "url"),)
+    # DB-enforced uniqueness of the monitored URL (the bulk-import dedup
+    # comparison is exact-string, so the constraint matches it): two sites
+    # watching the same URL would double scans/alerts/remediation firings.
+    __table_args__ = (Index("uq_sites_url", "url", unique=True),)
 
 
 class SuppressionRule(Base):

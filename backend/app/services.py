@@ -33,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 from fastapi import status as http_status
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
@@ -89,6 +90,33 @@ class QueueUnavailableError(ServiceError):
     row has already been marked failed so the site is not left 409-blocked."""
 
     status_code = http_status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+def _pg_sqlstate(exc: Exception) -> str | None:
+    """SQLSTATE of the driving DBAPI error, when the backend reports one."""
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return None
+    return getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+
+
+def sites_url_unique_violation(exc: Exception) -> bool:
+    """True when the database rejected a sites INSERT for violating
+    ``uq_sites_url`` — the backstop that makes URL uniqueness hold under
+    concurrent creates/imports. Unnamed 23505s count too: only this
+    constraint can be violated by that INSERT shape."""
+    if _pg_sqlstate(exc) != "23505":  # unique_violation
+        return False
+    orig = getattr(exc, "orig", None)
+    constraint = getattr(orig, "constraint_name", None)
+    return constraint in (None, "", "uq_sites_url")
+
+
+def concurrent_write_aborted(exc: Exception) -> bool:
+    """True for deadlock/serialization aborts (40P01/40001): Postgres has
+    rolled the entire transaction back, so nothing from it persists and
+    the operation is safe to retry."""
+    return _pg_sqlstate(exc) in ("40P01", "40001")
 
 
 # --- shared read helpers ---------------------------------------------------
@@ -156,7 +184,11 @@ async def create_site(
 ) -> tuple[Site, Baseline]:
     """Create a site and kick off its initial baseline capture. The SSRF
     policy is checked at creation time (immediate feedback); the worker
-    re-validates before every fetch. Returns (site, baseline)."""
+    re-validates before every fetch. A site for the same exact URL string
+    (the dedup contract bulk import uses) already existing is a 409-class
+    ``ConflictError`` — checked up front and backstopped by the database's
+    unique index so concurrent creators still get exactly one winner.
+    Returns (site, baseline)."""
     name = (name or "").strip()
     url = (url or "").strip()
     if not name or not url:
@@ -169,6 +201,10 @@ async def create_site(
         )
     except SSRFBlockedError as exc:
         raise ValidationError(str(exc)) from None
+
+    duplicate = await db.scalar(select(Site.id).where(Site.url == url))
+    if duplicate is not None:
+        raise ConflictError("A site with this URL already exists")
 
     site = Site(
         name=name,
@@ -185,7 +221,17 @@ async def create_site(
     if scan_interval_minutes is not None:
         site.scan_interval_minutes = clamp_interval(scan_interval_minutes)
     db.add(site)
-    await db.flush()
+    try:
+        await db.flush()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        if sites_url_unique_violation(exc):
+            raise ConflictError("A site with this URL already exists") from None
+        if concurrent_write_aborted(exc):
+            raise ValidationError(
+                "Site creation collided with a concurrent change — try again"
+            ) from None
+        raise
     # First auto-scan due one interval after creation; manual scan-now works
     # immediately once the baseline is ready.
     if site.auto_scan_enabled:

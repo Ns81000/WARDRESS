@@ -89,7 +89,9 @@ def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> list:
 async def _make_site(db_factory, *, due: bool = True, **overrides) -> Site:
     defaults = {
         "name": "Example",
-        "url": "https://example.com/",
+        # Unique per call: sites.url carries a DB unique constraint now, so
+        # a helper that seeds several sites must not hand them one URL.
+        "url": f"https://{uuid.uuid4().hex[:12]}.example.com/",
         "auto_scan_enabled": True,
         "scan_interval_minutes": 60,
         "next_scan_at": datetime.now(UTC) - timedelta(minutes=1) if due else None,

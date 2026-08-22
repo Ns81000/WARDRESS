@@ -96,6 +96,9 @@ ignore = ["S101"]  # allow asserts in tests
 # Uninstall sandbox tests shell out to pwsh driving a fake docker shim —
 # argv lists built entirely from trusted, test-constructed values.
 "tests/test_uninstall_backup_safety.py" = ["S603"]
+# Migration-repair test drives the real alembic CLI against the harness
+# database — argv lists built entirely from trusted, literal values.
+"tests/test_sites_router_integrity.py" = ["S603"]
 # Dataset builder seeds random.Random for synthetic-content variety only —
 # no security surface consumes these values.
 "tools/*" = ["S311"]

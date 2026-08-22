@@ -37,6 +37,7 @@ from app.schemas import (
     BulkImportResult,
     BulkImportRowResult,
 )
+from app.services import concurrent_write_aborted, sites_url_unique_violation
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from app.ssrf_transport import SSRFPinningTransport
 from app.tasks import enqueue_baseline_capture
@@ -69,12 +70,17 @@ def _derive_name(url: str) -> str:
 
 def _parse_csv_rows(text: str) -> list[tuple[int, str, str | None]]:
     """[(line_number, url, name|None)] — blank lines skipped, an optional
-    header line recognized by 'url' in the first cell."""
+    header line recognized by 'url' in the first cell.
+
+    Standard RFC-4180 quoting applies: cells may be double-quoted (as
+    spreadsheet exports always produce) and quoted cells may contain
+    commas. Unquoted embedded commas still split cells, so legacy
+    `url,name with comma` lines keep degrading gracefully."""
     rows: list[tuple[int, str, str | None]] = []
     old_limit = csv.field_size_limit()
     csv.field_size_limit(CSV_FIELD_MAX_CHARS)
     try:
-        reader = csv.reader(io.StringIO(text), quoting=csv.QUOTE_NONE)
+        reader = csv.reader(io.StringIO(text))
         for line_no, row in enumerate(reader, start=1):
             cells = [c.strip() for c in row]
             if not any(cells):
@@ -250,12 +256,22 @@ async def bulk_import(
     if len(rows) > BULK_IMPORT_MAX_ROWS:
         rows = rows[:BULK_IMPORT_MAX_ROWS]
 
+    # Fast-path dedup against already-committed URLs. The uq_sites_url
+    # unique index is the real arbiter under concurrency: a racing import
+    # that passes this snapshot check loses at flush and its row reports
+    # skipped, exactly like a sequential re-import would.
     existing_urls = {u for (u,) in (await db.execute(select(Site.url))).all()}
     seen_in_batch: set[str] = set()
     results: list[BulkImportRowResult] = []
     created_baselines: list[uuid.UUID] = []
     interval = clamp_interval(body.scan_interval_minutes)
 
+    # A deadlock aborts Postgres' whole transaction — not just the current
+    # row's SAVEPOINT — so once one happens, every "created" row of this
+    # request is gone too. Stop, roll back, and report every affected row
+    # honestly instead of committing phantom successes.
+    aborted_detail = "row lost to a concurrent write conflict — retry the import"
+    deadlocked = False
     for row_no, raw_url, name in rows:
         url = raw_url.strip()
         result = BulkImportRowResult(row=row_no, url=url[:2048], name=name, status="error")
@@ -263,6 +279,13 @@ async def bulk_import(
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             result.detail = "not an http(s) URL"
+            results.append(result)
+            continue
+        if any(ord(ch) < 0x20 or ch == "\x7f" for ch in url):
+            # Quoting mistakes (e.g. an unterminated quote swallowing the
+            # following line) can leave control characters inside a cell;
+            # such a string can never be fetched and must not be stored.
+            result.detail = "URL contains invalid characters"
             results.append(result)
             continue
         if url in existing_urls:
@@ -311,11 +334,29 @@ async def bulk_import(
                 )
                 db.add(baseline)
                 await db.flush()
-        except SQLAlchemyError:
-            # The SAVEPOINT is rolled back; this row is an error, prior rows
-            # are untouched. Keep the message generic (no DB internals).
-            result.detail = "could not be saved (database rejected the row)"
+        except SQLAlchemyError as exc:
+            if concurrent_write_aborted(exc):
+                await db.rollback()
+                deadlocked = True
+                for done in results:
+                    if done.status == "created":
+                        done.status = "error"
+                        done.site_id = None
+                        done.name = None
+                        done.detail = aborted_detail
+                created_baselines.clear()
+            elif sites_url_unique_violation(exc):
+                # Lost the race to a concurrent creator/importer. The unique
+                # index decided; report it like the sequential case.
+                result.status = "skipped"
+                result.detail = "a site with this URL already exists"
+            else:
+                # The SAVEPOINT is rolled back; this row is an error, prior
+                # rows are untouched. Keep the message generic (no DB internals).
+                result.detail = "could not be saved (database rejected the row)"
             results.append(result)
+            if deadlocked:
+                break
             continue
 
         created_baselines.append(baseline.id)
@@ -324,6 +365,20 @@ async def bulk_import(
         result.site_id = site.id
         result.name = site.name
         results.append(result)
+
+    if deadlocked:
+        # Every processed row appends exactly one result, so the results
+        # count is the number of rows consumed before the abort.
+        for later_row_no, later_url, later_name in rows[len(results) :]:
+            results.append(
+                BulkImportRowResult(
+                    row=later_row_no,
+                    url=later_url.strip()[:2048],
+                    name=later_name,
+                    status="error",
+                    detail=aborted_detail,
+                )
+            )
 
     created = sum(1 for r in results if r.status == "created")
     skipped = sum(1 for r in results if r.status == "skipped")

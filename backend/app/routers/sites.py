@@ -90,19 +90,51 @@ async def list_sites(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[SiteDetailOut]:
+    """All sites newest-first with their baseline summary, in a constant
+    number of queries (sites + current-baselines + newest-fallbacks) —
+    never per-site round trips."""
     sites = (await db.scalars(select(Site).order_by(Site.created_at.desc()))).all()
+    if not sites:
+        return []
+    site_ids = [site.id for site in sites]
+
+    # Preferred: each site's current baseline.
+    current_by_site = {
+        baseline.site_id: baseline
+        for baseline in (
+            await db.scalars(
+                select(Baseline).where(
+                    Baseline.site_id.in_(site_ids), Baseline.is_current.is_(True)
+                )
+            )
+        ).all()
+    }
+
+    # Fallback for sites without one: their newest capture attempt (so
+    # pending/failed captures stay visible in the list), fetched in bulk
+    # via a max(created_at)-per-site join. Ties resolve deterministically.
+    latest = (
+        select(Baseline.site_id.label("site_id"), func.max(Baseline.created_at).label("mx"))
+        .where(Baseline.site_id.in_(site_ids))
+        .group_by(Baseline.site_id)
+        .subquery()
+    )
+    newest_by_site: dict[uuid.UUID, Baseline] = {}
+    for baseline in (
+        await db.scalars(
+            select(Baseline).join(
+                latest,
+                (Baseline.site_id == latest.c.site_id) & (Baseline.created_at == latest.c.mx),
+            )
+        )
+    ).all():
+        seen = newest_by_site.get(baseline.site_id)
+        if seen is None or (baseline.created_at, baseline.id) > (seen.created_at, seen.id):
+            newest_by_site[baseline.site_id] = baseline
+
     out = []
     for site in sites:
-        baseline = await _current_baseline(db, site.id)
-        if baseline is None:
-            # No current baseline yet — surface the newest attempt instead
-            # so pending/failed captures are visible in the list.
-            baseline = await db.scalar(
-                select(Baseline)
-                .where(Baseline.site_id == site.id)
-                .order_by(Baseline.created_at.desc())
-                .limit(1)
-            )
+        baseline = current_by_site.get(site.id) or newest_by_site.get(site.id)
         out.append(
             SiteDetailOut(
                 **SiteOut.model_validate(site).model_dump(),
