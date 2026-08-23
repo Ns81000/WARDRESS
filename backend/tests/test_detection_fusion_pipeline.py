@@ -155,16 +155,34 @@ def test_layer7_consistent_across_uas() -> None:
     assert all(v.get("similarity") == 1.0 for v in comparable)
 
 
+RICH_HTML = (
+    "<html><body><h1>Acme Industrial Supply</h1>"
+    "<p>Reliable widgets delivered since 1970 with warranty.</p>"
+    "<p>Our catalog covers fasteners bearings seals pumps valves hoses fittings couplings "
+    "and every industrial spare part your maintenance team orders weekly.</p>"
+    "<p>Contact sales support shipping returns careers partners news events today.</p>"
+    "</body></html>"
+)
+
+
 def test_layer7_cloaked_googlebot_detected() -> None:
-    spam = "<html><body><h1>Cheap pills casino</h1><p>spam spam spam links</p></body></html>"
+    """An entirely different page served to googlebot scores high. The
+    fixture is a realistically-sized page (Phase 21 note: token-set counts
+    below the churn-grace floor cannot express 'different site' — a former
+    3-visible-token fixture correctly measures 0.0 under the graded model,
+    see test_phase21_cloaking_grade.py's grace guards)."""
+    spam = (
+        "<html><body><h1>Cheap pills casino</h1>"
+        "<p>spam spam links casino pills pharmacy winners loans</p></body></html>"
+    )
     current = scan_page(
         ua_variants=[
-            _variant("desktop_chrome", HTML),
+            _variant("desktop_chrome", RICH_HTML),
             _variant("googlebot", spam),
-            _variant("mobile_safari", HTML),
+            _variant("mobile_safari", RICH_HTML),
         ]
     )
-    result = layer7_cloaking(page(), current)
+    result = layer7_cloaking(page(RICH_HTML), current)
     assert _score(result) >= 0.7
 
 
