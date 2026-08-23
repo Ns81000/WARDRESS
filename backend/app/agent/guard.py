@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools import (
@@ -32,7 +32,6 @@ from app.models import (
     AgentActionStatus,
     AgentPendingAction,
     User,
-    ensure_utc,
     utcnow,
 )
 
@@ -88,39 +87,71 @@ async def resolve_pending(
 ) -> tuple[AgentPendingAction, dict | None]:
     """Confirm or cancel a pending action. On confirm, executes the frozen
     args and returns (action, result). Raises ToolError with a user-safe
-    message on any refusal (missing, foreign, expired, role change)."""
+    message on any refusal (missing, foreign, expired, role change).
+
+    The pending→confirmed/cancelled transition is claimed atomically with a
+    conditional UPDATE whose rowcount is the arbiter (same primitive as
+    refresh-token rotation and the remediation confirm queue): K simultaneous
+    confirms of one card — double-click, dashboard + Telegram same account —
+    would each pass a plain status read and each execute the frozen args.
+    Postgres re-evaluates the WHERE when a losing writer's lock wait ends, so
+    exactly one request wins; every loser observes the winner's state."""
     action = await db.scalar(select(AgentPendingAction).where(AgentPendingAction.id == action_id))
     if action is None:
         raise ToolError("That action no longer exists.")
     if action.user_id != user.id:
         # Ownership is strict: the confirmer must be the proposer.
         raise ToolError("This confirmation belongs to a different user.")
-    if action.status != AgentActionStatus.pending:
+
+    if confirm:
+        # Re-check availability and RBAC *before* claiming so a refused
+        # confirm leaves the card pending exactly as before — a role change
+        # between propose and confirm must not burn the action.
+        tool = get_tool(action.tool)
+        if tool is None:
+            raise ToolError("This action's tool is no longer available.")
+        if not can_call(tool, user.role):
+            raise ToolError("Your role no longer permits this action.")
+
+    now = utcnow()
+    target = AgentActionStatus.confirmed if confirm else AgentActionStatus.cancelled
+    claim = await db.execute(
+        update(AgentPendingAction)
+        .where(
+            AgentPendingAction.id == action_id,
+            AgentPendingAction.status == AgentActionStatus.pending,
+            # Expired cards settle as expired below, never confirm/cancel.
+            AgentPendingAction.expires_at >= now,
+        )
+        .values(status=target, resolved_at=now)
+    )
+    if claim.rowcount == 0:
+        # Lost the race or the clock passed expiry. Refresh to observe the
+        # committed winner state before answering.
+        await db.refresh(action)
+        if action.status == AgentActionStatus.pending:
+            # Still pending ⇒ only the expiry predicate failed: settle it as
+            # expired (conditional again, so racing expirers stay coherent).
+            await db.execute(
+                update(AgentPendingAction)
+                .where(
+                    AgentPendingAction.id == action_id,
+                    AgentPendingAction.status == AgentActionStatus.pending,
+                )
+                .values(status=AgentActionStatus.expired, resolved_at=utcnow())
+            )
+            await db.commit()
+            raise ToolError("This action expired — ask again if you still want it.")
         raise ToolError(f"This action was already {action.status.value}.")
-    expires = ensure_utc(action.expires_at)
-    if expires is not None and expires < utcnow():
-        action.status = AgentActionStatus.expired
-        action.resolved_at = utcnow()
-        await db.commit()
-        raise ToolError("This action expired — ask again if you still want it.")
+
+    # Mark confirmed/cancelled before executing so a crash can't leave a
+    # re-runnable pending row; the executor's own commit persists the actual
+    # change.
+    await db.commit()
+    await db.refresh(action)
 
     if not confirm:
-        action.status = AgentActionStatus.cancelled
-        action.resolved_at = utcnow()
-        await db.commit()
         return action, None
-
-    tool = get_tool(action.tool)
-    if tool is None:
-        raise ToolError("This action's tool is no longer available.")
-    if not can_call(tool, user.role):
-        raise ToolError("Your role no longer permits this action.")
-
-    # Mark confirmed before executing so a crash can't leave a re-runnable
-    # pending row; the executor's own commit persists the actual change.
-    action.status = AgentActionStatus.confirmed
-    action.resolved_at = utcnow()
-    await db.commit()
 
     ctx = ToolContext(db=db, user=user, surface=surface)
     result = await tool.executor(ctx, dict(action.args or {}))
@@ -128,18 +159,18 @@ async def resolve_pending(
 
 
 async def expire_stale(db: AsyncSession) -> int:
-    """Best-effort janitor: flip expired pending rows. Returns count."""
-    stale = (
-        await db.scalars(
-            select(AgentPendingAction).where(
-                AgentPendingAction.status == AgentActionStatus.pending,
-                AgentPendingAction.expires_at < utcnow(),
-            )
+    """Best-effort janitor: flip expired pending rows. Returns count.
+
+    One conditional UPDATE rather than select-then-mutate: the status
+    predicate is re-evaluated at write time, so an action confirmed or
+    cancelled in between can never be overwritten to expired."""
+    result = await db.execute(
+        update(AgentPendingAction)
+        .where(
+            AgentPendingAction.status == AgentActionStatus.pending,
+            AgentPendingAction.expires_at < utcnow(),
         )
-    ).all()
-    for row in stale:
-        row.status = AgentActionStatus.expired
-        row.resolved_at = utcnow()
-    if stale:
-        await db.commit()
-    return len(stale)
+        .values(status=AgentActionStatus.expired, resolved_at=utcnow())
+    )
+    await db.commit()
+    return result.rowcount

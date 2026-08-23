@@ -800,7 +800,10 @@ _register(
         parameters=_SITE_PARAM,
         executor=_list_remediation_hooks,
         tier=TIER_READ,
-        min_role=UserRole.analyst,
+        # Admin-only: hook configuration is admin-only on every other surface
+        # (REST CRUD + dashboard panel) because hooks point at infrastructure
+        # that can roll deployments back — the agent must not widen it.
+        min_role=UserRole.admin,
     )
 )
 _register(
