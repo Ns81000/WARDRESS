@@ -32,11 +32,12 @@ async def test_schema_is_at_migration_head(engine):
     assert version == expected
 
 
-async def test_migration_only_inflight_index_exists_and_is_partial(engine):
-    # The index must come from migrations, not ORM metadata - that split is
-    # exactly what the old create_all harness could never represent.
+async def test_inflight_index_declared_in_models_and_partial_in_db(engine):
+    # Phase 18 declared the index in ORM metadata so models and the
+    # migrated schema agree on the backstop; it must exist in BOTH places,
+    # with its partial predicate intact in the actual database.
     model_indexes = {ix.name for t in Base.metadata.tables.values() for ix in t.indexes}
-    assert "ix_scans_one_inflight_per_site" not in model_indexes
+    assert "ix_scans_one_inflight_per_site" in model_indexes
     async with engine.connect() as conn:
         definition = (
             await conn.execute(
@@ -47,6 +48,7 @@ async def test_migration_only_inflight_index_exists_and_is_partial(engine):
             )
         ).scalar()
     assert definition is not None
+    assert "UNIQUE" in definition
     assert "WHERE" in definition and "status" in definition
 
 

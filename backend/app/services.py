@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,16 +100,36 @@ def _pg_sqlstate(exc: Exception) -> str | None:
     return getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
 
 
-def sites_url_unique_violation(exc: Exception) -> bool:
-    """True when the database rejected a sites INSERT for violating
-    ``uq_sites_url`` — the backstop that makes URL uniqueness hold under
-    concurrent creates/imports. Unnamed 23505s count too: only this
-    constraint can be violated by that INSERT shape."""
+def _unique_violation_on(exc: Exception, constraint: str) -> bool:
+    """True when the database rejected a statement for violating the named
+    unique index. Unnamed 23505s count too: callers use this only around an
+    INSERT/UPDATE shape where that one constraint is the only uniqueness
+    backstop that can fire."""
     if _pg_sqlstate(exc) != "23505":  # unique_violation
         return False
     orig = getattr(exc, "orig", None)
-    constraint = getattr(orig, "constraint_name", None)
-    return constraint in (None, "", "uq_sites_url")
+    constraint_name = getattr(orig, "constraint_name", None)
+    return constraint_name in (None, "", constraint)
+
+
+def sites_url_unique_violation(exc: Exception) -> bool:
+    """True when the database rejected a sites INSERT for violating
+    ``uq_sites_url`` — the backstop that makes URL uniqueness hold under
+    concurrent creates/imports."""
+    return _unique_violation_on(exc, "uq_sites_url")
+
+
+def scans_inflight_unique_violation(exc: Exception) -> bool:
+    """True when a scans INSERT lost the race for the site's single
+    in-flight slot (``ix_scans_one_inflight_per_site``) — the DB-level
+    arbiter both the API and the Beat dispatcher rely on."""
+    return _unique_violation_on(exc, "ix_scans_one_inflight_per_site")
+
+
+def baselines_inflight_unique_violation(exc: Exception) -> bool:
+    """True when a baselines INSERT lost the race for the site's single
+    in-flight capture slot (``uq_baselines_one_inflight_per_site``)."""
+    return _unique_violation_on(exc, "uq_baselines_one_inflight_per_site")
 
 
 def concurrent_write_aborted(exc: Exception) -> bool:
@@ -271,10 +291,20 @@ async def trigger_scan_now(
     actor_label: str | None = None,
 ) -> Scan:
     """Queue an immediate scan. Requires a ready baseline; supersedes a
-    stale in-flight scan; 409s on a live one."""
+    stale in-flight scan; 409s on a live one.
+
+    Both transitions are arbitrated by the database, not by this check:
+    the supersession is a conditional UPDATE whose rowcount picks exactly
+    one winner among concurrent requests, and a lost race for the
+    in-flight slot surfaces as a unique-index violation at flush that is
+    translated to the same 409 (the index also backstops races with the
+    Beat dispatcher's own scan creation)."""
     baseline = await current_baseline(db, site.id)
     if baseline is None or baseline.status != BaselineStatus.ready:
         raise ConflictError(f"{site.name} has no ready baseline yet — capture a baseline first")
+    # Captured up front: a rollback below expires ORM instances, and the
+    # conflict messages must not touch them afterwards.
+    site_name = site.name
     in_flight = await db.scalar(
         select(Scan).where(
             Scan.site_id == site.id,
@@ -284,15 +314,41 @@ async def trigger_scan_now(
     if in_flight is not None:
         if is_stale(in_flight.created_at, in_flight.started_at):
             # Orphaned row (worker killed, enqueue lost) — fail it and let
-            # this request proceed instead of 409-blocking forever.
-            in_flight.status = ScanStatus.failed
-            in_flight.verdict = ScanVerdict.error
-            in_flight.error = "Scan never completed — superseded by a new scan"
-            in_flight.finished_at = datetime.now(UTC)
+            # this request proceed instead of 409-blocking forever. The
+            # status predicate makes concurrent supersessions single-winner:
+            # a loser's rowcount-0 means another request already recovered
+            # the row and created its own scan.
+            claimed = await db.execute(
+                update(Scan)
+                .where(
+                    Scan.id == in_flight.id,
+                    Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
+                )
+                .values(
+                    status=ScanStatus.failed,
+                    verdict=ScanVerdict.error,
+                    error="Scan never completed — superseded by a new scan",
+                    finished_at=datetime.now(UTC),
+                )
+            )
+            if claimed.rowcount == 0:
+                await db.rollback()
+                raise ConflictError(f"A scan of {site_name} is already in progress")
         else:
-            raise ConflictError(f"A scan of {site.name} is already in progress")
+            raise ConflictError(f"A scan of {site_name} is already in progress")
     scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
     db.add(scan)
+    try:
+        # The in-flight unique index fires here when a concurrent request
+        # (or the dispatcher) won the slot between our check and now.
+        await db.flush()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        if scans_inflight_unique_violation(exc):
+            raise ConflictError(f"A scan of {site_name} is already in progress") from None
+        if concurrent_write_aborted(exc):
+            raise ConflictError(f"A scan of {site_name} is already in progress") from None
+        raise
     record_audit(
         db,
         actor=actor,
@@ -326,7 +382,16 @@ async def rebaseline_site(
     actor_label: str | None = None,
 ) -> Baseline:
     """Capture a fresh baseline, replacing the current trust anchor.
-    Supersedes a stale in-flight capture; 409s on a live one."""
+    Supersedes a stale in-flight capture; 409s on a live one.
+
+    Like scan-now, both transitions are database-arbitrated: the
+    supersession is a single-winner conditional UPDATE, and the in-flight
+    partial unique index (``uq_baselines_one_inflight_per_site``) turns a
+    lost check-then-insert race into a translated 409 instead of N
+    simultaneous captures of one site."""
+    # Captured up front: a rollback below expires ORM instances, and the
+    # conflict messages must not touch them afterwards.
+    site_name = site.name
     in_flight = await db.scalar(
         select(Baseline).where(
             Baseline.site_id == site.id,
@@ -335,12 +400,37 @@ async def rebaseline_site(
     )
     if in_flight is not None:
         if is_stale(in_flight.created_at):
-            in_flight.status = BaselineStatus.failed
-            in_flight.error = "Capture never completed — superseded by a new capture"
+            claimed = await db.execute(
+                update(Baseline)
+                .where(
+                    Baseline.id == in_flight.id,
+                    Baseline.status.in_([BaselineStatus.pending, BaselineStatus.capturing]),
+                )
+                .values(
+                    status=BaselineStatus.failed,
+                    error="Capture never completed — superseded by a new capture",
+                )
+            )
+            if claimed.rowcount == 0:
+                await db.rollback()
+                raise ConflictError(f"A baseline capture is already in progress for {site_name}")
         else:
-            raise ConflictError(f"A baseline capture is already in progress for {site.name}")
+            raise ConflictError(f"A baseline capture is already in progress for {site_name}")
     baseline = Baseline(site_id=site.id, status=BaselineStatus.pending, is_current=False)
     db.add(baseline)
+    try:
+        await db.flush()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        if baselines_inflight_unique_violation(exc):
+            raise ConflictError(
+                f"A baseline capture is already in progress for {site_name}"
+            ) from None
+        if concurrent_write_aborted(exc):
+            raise ConflictError(
+                f"A baseline capture is already in progress for {site_name}"
+            ) from None
+        raise
     record_audit(
         db,
         actor=actor,

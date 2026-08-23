@@ -419,9 +419,11 @@ class Baseline(Base):
 
     site: Mapped[Site] = relationship(back_populates="baselines")
 
-    # DB-enforced invariant: at most one current baseline per site, even
-    # under concurrent capture tasks. Partial index works on both Postgres
-    # and SQLite (each dialect needs its own `where` kwarg).
+    # DB-enforced invariants: at most one current baseline per site, and
+    # at most one pending/capturing capture per site (the rebaseline
+    # check-then-insert race backstop), even under concurrent workers.
+    # Partial indexes work on both Postgres and SQLite (each dialect needs
+    # its own `where` kwarg).
     __table_args__ = (
         Index(
             "uq_baselines_one_current_per_site",
@@ -429,6 +431,13 @@ class Baseline(Base):
             unique=True,
             postgresql_where=text("is_current"),
             sqlite_where=text("is_current"),
+        ),
+        Index(
+            "uq_baselines_one_inflight_per_site",
+            "site_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'capturing')"),
+            sqlite_where=text("status IN ('pending', 'capturing')"),
         ),
     )
 
@@ -476,7 +485,20 @@ class Scan(Base):
         back_populates="scan", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_scans_site_created", "site_id", "created_at"),)
+    # Declared here (not only in the migration) so the ORM metadata and
+    # the migrated schema agree on the in-flight backstop that arbitrates
+    # concurrent scan creation; partial index works on both Postgres and
+    # SQLite (each dialect needs its own `where` kwarg).
+    __table_args__ = (
+        Index("ix_scans_site_created", "site_id", "created_at"),
+        Index(
+            "ix_scans_one_inflight_per_site",
+            "site_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+            sqlite_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
 
 class ScanFinding(Base):
