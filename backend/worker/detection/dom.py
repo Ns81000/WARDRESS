@@ -2,7 +2,12 @@
 
 Layer 2 compares tag-tree structure: tag counts, tree depth, and the
 counts that matter most for defacement detection — <script>, <iframe>,
-and hidden elements (display:none / visibility:hidden / hidden attr).
+and hidden elements. Hidden-element detection is technique-independent:
+it counts the `hidden` attribute, the element's own inline style, and
+rules from the page's own <style> blocks resolved onto each element
+(display/visibility, opacity:0, font-size:0, offscreen positioning).
+External stylesheet bytes are not part of the captured DOM string, so
+only embedded <style> text can be resolved here.
 
 Layer 3 diffs the *sets* of external references: <script src>, <a href>,
 plus stylesheet/iframe/form targets — new external domains appearing on
@@ -16,6 +21,7 @@ raised.
 """
 
 import math
+import re
 from collections import Counter
 from urllib.parse import urljoin, urlparse
 
@@ -45,7 +51,291 @@ def _safe_hostname(url: str | None) -> str:
         return ""
 
 
-_HIDDEN_STYLE_MARKERS = ("display:none", "display: none", "visibility:hidden", "visibility: hidden")
+# --- hidden-element detection -------------------------------------------------
+# An element counts as hidden when a rendering-suppressing declaration reaches
+# it through any of the channels attackers and frameworks actually use: the
+# `hidden` attribute, its own style attribute, or a rule in one of the page's
+# <style> blocks. The stylesheet resolver intentionally supports a conservative
+# subset: selector subjects are the LAST simple compound of a descendant
+# sequence (`.side .ad` matches every `.ad`); pseudo-classes and attribute
+# selectors are skipped (their applicability is conditional); @-blocks
+# (@media/@supports/@keyframes/...) are skipped whole so print/responsive
+# styles never manufacture hidden counts; within matching rules the cascade is
+# approximated by document order (last declaration per property wins), with the
+# inline style overriding all sheet declarations as in real CSS.
+
+_STYLE_TEXT_CAP = 1_000_000
+_HIDE_DISPLAY_VALUES = {"none"}
+_HIDE_VISIBILITY_VALUES = {"hidden", "collapse"}
+_OFFSCREEN_POSITIONS = {"absolute", "fixed"}
+_MIN_NEGATIVE_TEXT_INDENT = -100.0
+_MIN_NEGATIVE_TRANSLATE_PX = -500.0
+_NON_RENDERING_TAGS = frozenset(
+    {
+        "html",
+        "head",
+        "body",
+        "meta",
+        "link",
+        "title",
+        "base",
+        "script",
+        "style",
+        "template",
+        "noscript",
+    }
+)
+_CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_DECL_RE = re.compile(r"([a-zA-Z_-]+)\s*:\s*([^;]*)")
+_LENGTH_VALUE_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*(?:%|[a-z]*)\s*$", re.IGNORECASE)
+_TRANSLATE_PX_RE = re.compile(r"translate(?:[xyz])?\(\s*(-?\d+(?:\.\d+)?)px", re.IGNORECASE)
+_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+
+
+def _parse_declarations(text: str | None) -> dict[str, str]:
+    """`prop: value; …` → dict; lowercase/whitespace-normalized, `!important`
+    stripped. Tolerates garbage — unparsable chunks simply contribute nothing."""
+    if not text:
+        return {}
+    decls: dict[str, str] = {}
+    for prop, value in _DECL_RE.findall(text):
+        value = value.split("!", 1)[0]
+        value = re.sub(r"\s+", "", value).lower()
+        if value:
+            decls[prop.strip().lower()] = value
+    return decls
+
+
+def _selector_subjects(header: str) -> list[dict] | None:
+    """Parse a rule header's selector list into compound subjects (the final
+    simple selector of each descendant sequence). None when the header uses
+    machinery we deliberately don't resolve."""
+    header = " ".join(header.split())
+    if not header or ":" in header or "[" in header:
+        return None
+    subjects: list[dict] = []
+    for part in header.split(","):
+        tokens = [t for t in part.split() if t not in (">", "+", "~")]
+        if not tokens:
+            return None
+        subject: dict = {"tag": None, "classes": frozenset(), "id": None}
+        classes: set[str] = set()
+        i = 0
+        while i < len(tokens[-1]):
+            ch = tokens[-1][i]
+            if ch == "*":
+                i += 1
+            elif ch in ".#":
+                j = i + 1
+                while j < len(tokens[-1]) and tokens[-1][j] in _NAME_CHARS:
+                    j += 1
+                if j == i + 1:
+                    return None
+                name = tokens[-1][i + 1 : j]
+                if ch == ".":
+                    classes.add(name)
+                elif subject["id"] is not None:
+                    return None
+                else:
+                    subject["id"] = name
+                i = j
+            elif ch.isalpha():
+                j = i
+                while j < len(tokens[-1]) and tokens[-1][j] in _NAME_CHARS:
+                    j += 1
+                if subject["tag"] is not None:
+                    return None
+                subject["tag"] = tokens[-1][i:j].lower()
+                i = j
+            else:
+                return None
+        subject["classes"] = frozenset(classes)
+        subjects.append(subject)
+    return subjects
+
+
+def _matching_brace(text: str, open_idx: int) -> int:
+    depth = 0
+    for k in range(open_idx, len(text)):
+        if text[k] == "{":
+            depth += 1
+        elif text[k] == "}":
+            depth -= 1
+            if depth == 0:
+                return k
+    return len(text)
+
+
+def _stylesheet_rules(css_text: str) -> list[tuple[dict, dict[str, str]]]:
+    """(subject, declarations) pairs from top-level rules; comments and whole
+    @-blocks are skipped. Never raises — garbage CSS yields no rules."""
+    try:
+        css_text = _CSS_COMMENT_RE.sub(" ", css_text)
+        rules: list[tuple[dict, dict[str, str]]] = []
+        i = 0
+        while i < len(css_text):
+            brace = css_text.find("{", i)
+            if brace == -1:
+                break
+            header = css_text[i:brace].strip()
+            close = _matching_brace(css_text, brace)
+            body = css_text[brace + 1 : close]
+            i = close + 1
+            if header.startswith("@"):
+                continue
+            decls = _parse_declarations(body)
+            if not decls:
+                continue
+            subjects = _selector_subjects(header)
+            if not subjects:
+                continue
+            for subject in subjects:
+                rules.append((subject, decls))
+        return rules
+    except Exception:
+        return []
+
+
+def _css_length(value: str | None) -> float | None:
+    """Signed numeric prefix of a CSS length/number ("−9999px" → −9999.0);
+    None when absent or unparsable."""
+    if not value:
+        return None
+    m = _LENGTH_VALUE_RE.match(value)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _decisive_hidden_property(state: dict[str, str]) -> str | None:
+    """The property that hides the element, or None. Order encodes
+    precedence among independent hiding mechanisms."""
+    if state.get("display") in _HIDE_DISPLAY_VALUES:
+        return "display"
+    if state.get("visibility") in _HIDE_VISIBILITY_VALUES:
+        return "visibility"
+    opacity = _css_length(state.get("opacity"))
+    if opacity is not None and opacity <= 0:
+        return "opacity"
+    font_size = _css_length(state.get("font-size"))
+    if font_size is not None and font_size == 0:
+        return "font-size"
+    if state.get("position") in _OFFSCREEN_POSITIONS:
+        for side in ("left", "top", "right", "bottom"):
+            offset = _css_length(state.get(side))
+            if offset is not None and offset < 0:
+                return f"position:{side}"
+    indent = _css_length(state.get("text-indent"))
+    if indent is not None and indent <= _MIN_NEGATIVE_TEXT_INDENT:
+        return "text-indent"
+    transform = state.get("transform")
+    if transform:
+        for m in _TRANSLATE_PX_RE.finditer(transform):
+            if float(m.group(1)) <= _MIN_NEGATIVE_TRANSLATE_PX:
+                return "transform"
+    return None
+
+
+def _subject_label(subject: dict) -> str:
+    label = subject["tag"] or ""
+    if subject["id"]:
+        label += f"#{subject['id']}"
+    label += "".join(f".{c}" for c in sorted(subject["classes"]))
+    return label or "*"
+
+
+class _HiddenContext:
+    """Per-page resolution of 'is this element visually hidden?' against the
+    page's own <style> blocks plus each element's own attributes."""
+
+    def __init__(self, root: etree._Element | None) -> None:
+        self._rule_subjects: list[dict] = []
+        self._rule_decls: list[dict[str, str]] = []
+        self._by_class: dict[str, list[int]] = {}
+        self._by_id: dict[str, list[int]] = {}
+        self._by_tag: dict[str, list[int]] = {}
+        self._wildcard: list[int] = []
+        self.stylesheet_chars = 0
+        self._build(root)
+
+    def _build(self, root: etree._Element | None) -> None:
+        chunks: list[str] = []
+        if root is not None:
+            for el in root.iter():
+                if isinstance(el.tag, str) and el.tag.lower() == "style" and el.text:
+                    chunks.append(el.text)
+        css = "".join(chunks)[:_STYLE_TEXT_CAP]
+        self.stylesheet_chars = len(css)
+        for subject, decls in _stylesheet_rules(css):
+            idx = len(self._rule_subjects)
+            self._rule_subjects.append(subject)
+            self._rule_decls.append(decls)
+            tag = subject["tag"]
+            if tag:
+                self._by_tag.setdefault(tag, []).append(idx)
+            for cls in subject["classes"]:
+                self._by_class.setdefault(cls, []).append(idx)
+            if subject["id"]:
+                self._by_id.setdefault(subject["id"], []).append(idx)
+            if not tag and not subject["classes"] and not subject["id"]:
+                self._wildcard.append(idx)
+
+    @staticmethod
+    def _subject_matches(el: etree._Element, subject: dict) -> bool:
+        """Full compound-subject match: tag AND id AND every class present.
+        The per-field indexes are only a pre-filter; this decides."""
+        if subject["tag"] and el.tag.lower() != subject["tag"]:
+            return False
+        if subject["id"] and el.get("id") != subject["id"]:
+            return False
+        if subject["classes"]:
+            classes = set((el.get("class") or "").split())
+            if not subject["classes"].issubset(classes):
+                return False
+        return True
+
+    def _candidate_rules(self, el: etree._Element) -> list[int]:
+        idxs: set[int] = set(self._wildcard)
+        cls = el.get("class")
+        if cls:
+            for c in cls.split():
+                idxs.update(self._by_class.get(c, ()))
+        eid = el.get("id")
+        if eid:
+            idxs.update(self._by_id.get(eid, ()))
+        idxs.update(self._by_tag.get(el.tag.lower(), ()))
+        return sorted(i for i in idxs if self._subject_matches(el, self._rule_subjects[i]))
+
+    def hidden_reason(self, el: etree._Element) -> str | None:
+        """None when the element renders normally (or isn't rendered at all,
+        e.g. metadata tags); otherwise a short reason for the audit trail —
+        'hidden-attribute', 'inline-style', or the deciding rule's subject."""
+        if not isinstance(el.tag, str):
+            return None
+        tag = el.tag.lower()
+        if tag in _NON_RENDERING_TAGS:
+            return None
+        if tag == "input" and (el.get("type") or "").strip().lower() == "hidden":
+            return None
+        if el.get("hidden") is not None:
+            return "hidden-attribute"
+        sources: list[tuple[str, dict[str, str]]] = []
+        for idx in self._candidate_rules(el):
+            sources.append((_subject_label(self._rule_subjects[idx]), self._rule_decls[idx]))
+        inline = _parse_declarations(el.get("style"))
+        if inline:
+            sources.append(("inline-style", inline))
+        state: dict[str, tuple[str, str]] = {}
+        for label, decls in sources:
+            for prop, value in decls.items():
+                state[prop] = (label, value)
+        decisive = _decisive_hidden_property({p: v for p, (_, v) in state.items()})
+        if decisive is None:
+            return None
+        return state.get(decisive, ("inline-style", ""))[0]
 
 
 def parse_html(text: str) -> etree._Element | None:
@@ -61,13 +351,6 @@ def parse_html(text: str) -> etree._Element | None:
         return None
 
 
-def _is_hidden(el: etree._Element) -> bool:
-    if el.get("hidden") is not None:
-        return True
-    style = (el.get("style") or "").lower().replace(" ", "")
-    return any(m.replace(" ", "") in style for m in _HIDDEN_STYLE_MARKERS)
-
-
 def _tree_stats(root: etree._Element | None) -> dict:
     if root is None:
         return {
@@ -78,9 +361,13 @@ def _tree_stats(root: etree._Element | None) -> dict:
             "script_count": 0,
             "iframe_count": 0,
             "hidden_count": 0,
+            "stylesheet_chars": 0,
+            "hidden_by": {},
         }
+    ctx = _HiddenContext(root)
     tag_counts: Counter[str] = Counter()
     script_count = iframe_count = hidden_count = 0
+    hidden_by: Counter[str] = Counter()
     max_depth = 0
     stack: list[tuple[etree._Element, int]] = [(root, 1)]
     while stack:
@@ -94,8 +381,10 @@ def _tree_stats(root: etree._Element | None) -> dict:
             script_count += 1
         elif tag == "iframe":
             iframe_count += 1
-        if _is_hidden(el):
+        reason = ctx.hidden_reason(el)
+        if reason:
             hidden_count += 1
+            hidden_by[reason] += 1
         for child in el:
             stack.append((child, depth + 1))
     return {
@@ -106,6 +395,8 @@ def _tree_stats(root: etree._Element | None) -> dict:
         "script_count": script_count,
         "iframe_count": iframe_count,
         "hidden_count": hidden_count,
+        "stylesheet_chars": ctx.stylesheet_chars,
+        "hidden_by": dict(hidden_by),
     }
 
 
@@ -167,6 +458,13 @@ def layer2_dom_structure(baseline: PageData, current: PageData) -> dict:
         "script_count": {"baseline": b["script_count"], "current": c["script_count"]},
         "iframe_count": {"baseline": b["iframe_count"], "current": c["iframe_count"]},
         "hidden_count": {"baseline": b["hidden_count"], "current": c["hidden_count"]},
+        "hidden_detection": {
+            "stylesheet_chars": {
+                "baseline": b["stylesheet_chars"],
+                "current": c["stylesheet_chars"],
+            },
+            "hidden_by": {"baseline": b["hidden_by"], "current": c["hidden_by"]},
+        },
         "max_depth": {"baseline": b["max_depth"], "current": c["max_depth"], "delta": depth_delta},
         "structural_churn": churn,
     }
