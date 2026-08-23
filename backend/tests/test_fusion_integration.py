@@ -195,7 +195,11 @@ def _png_pair():
         final_url="https://acme.com/",
         content_hash=content_sha256(html),
     )
-    cur_html = html.replace("<h1>Acme</h1>", "<!--x-->")  # trivial byte wiggle opens the gate
+    # Trivial byte wiggle flips the hash (opening the content layers)
+    # without altering visible text — a comment REPLACING the heading
+    # would delete a word, which the calibrated drift mapping honestly
+    # measures as real semantic change on a two-word page.
+    cur_html = html.replace("</h1>", "</h1><!--x-->")
 
     def scan(png):
         return ScanPageData(
