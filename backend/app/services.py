@@ -462,22 +462,42 @@ async def acknowledge_alert(
     actor_label: str | None = None,
 ) -> Alert:
     """Idempotent ack: the first ack wins (the bot and dashboard may race),
-    a re-ack returns the row unchanged and records no second audit row."""
-    if alert.acknowledged_at is None:
-        alert.acknowledged_at = utcnow()
-        alert.acknowledged_by = actor.id if actor is not None else None
-        alert.acknowledged_via = via
-        record_audit(
-            db,
-            actor=actor,
-            actor_label=actor_label,
-            action="alert.acknowledge",
-            target_type="alert",
-            target_id=alert.id,
-            target_label=f"Alert {str(alert.id)[:8]}",
-            after={"risk_score": alert.risk_score, "via": via},
+    a re-ack returns the row unchanged and records no second audit row.
+
+    The transition is claimed atomically instead of check-then-set: a plain
+    read-modify-write lets every concurrent ack pass the same ``None``
+    check, each record an audit row, and whichever commits last overwrite
+    the attribution. The conditional UPDATE's rowcount is the arbiter —
+    when a losing writer's lock wait ends, Postgres re-evaluates the
+    ``acknowledged_at IS NULL`` predicate against the winner's committed
+    state, so exactly one ack lands. (Same primitive as refresh-token
+    rotation and the remediation confirm/dismiss claims.)
+    """
+    claim = await db.execute(
+        update(Alert)
+        .where(Alert.id == alert.id, Alert.acknowledged_at.is_(None))
+        .values(
+            acknowledged_at=utcnow(),
+            acknowledged_by=actor.id if actor is not None else None,
+            acknowledged_via=via,
         )
-        await db.commit()
+    )
+    if claim.rowcount == 0:
+        # Lost the race (or a benign re-ack): reflect the winner's state.
+        await db.refresh(alert)
+        return alert
+    record_audit(
+        db,
+        actor=actor,
+        actor_label=actor_label,
+        action="alert.acknowledge",
+        target_type="alert",
+        target_id=alert.id,
+        target_label=f"Alert {str(alert.id)[:8]}",
+        after={"risk_score": alert.risk_score, "via": via},
+    )
+    await db.commit()
+    await db.refresh(alert)
     return alert
 
 
