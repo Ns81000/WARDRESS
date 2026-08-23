@@ -1,7 +1,16 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Cloud, ExternalLink, Plus, Search, Server, Trash2 } from "lucide-react"
+import { Check, Cloud, ExternalLink, Plus, Search, Server, Sparkles, Trash2 } from "lucide-react"
 import { toast } from "sonner"
+
+import anthropicLogo from "@/assets/providers/anthropic.svg"
+import deepseekLogo from "@/assets/providers/deepseek.svg"
+import googleLogo from "@/assets/providers/google.svg"
+import groqLogo from "@/assets/providers/groq.svg"
+import mistralLogo from "@/assets/providers/mistral.svg"
+import ollamaLogo from "@/assets/providers/ollama.svg"
+import openaiLogo from "@/assets/providers/openai.svg"
+import xaiLogo from "@/assets/providers/xai.svg"
 
 import { StatusDot, type DotState } from "@/components/status-dot"
 import { Button } from "@/components/ui/button"
@@ -29,150 +38,62 @@ function errMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-const KNOWN_PROVIDER_DOMAINS: Record<string, string> = {
-  ollama: "ollama.com",
-  openai: "openai.com",
-  openai_compatible: "openai.com",
-  anthropic: "anthropic.com",
-  google: "ai.google.dev",
-  groq: "groq.com",
-  mistral: "mistral.ai",
-  deepseek: "deepseek.com",
-  cerebras: "cerebras.ai",
-  cohere: "cohere.com",
-  perplexity: "perplexity.ai",
-  xai: "x.ai",
-  replicate: "replicate.com",
-  together: "together.ai",
-  nvidia: "nvidia.com",
-  "fireworks-ai": "fireworks.ai",
-  openrouter: "openrouter.ai",
-  lmstudio: "lmstudio.ai",
-  wandb: "wandb.ai",
-  zhipuai: "bigmodel.cn",
-  poe: "poe.com",
-  baseten: "baseten.co",
-  nebius: "nebius.com",
-  "nano-gpt": "nano-gpt.com",
-  fastrouter: "fastrouter.ai",
-  nearai: "near.ai",
-  friendli: "friendli.ai",
-  xiaomi: "mi.com",
-  "xiaomi-token-plan": "mi.com",
-  "xiaomi-token-plan-china": "mi.com",
-  "xiaomi-token-plan-europe": "mi.com",
-  "xiaomi-token-plan-singapore": "mi.com",
-  tencent: "tencent.com",
-  "tencent-tokenhub": "tencent.com",
-  alibaba: "alibaba.com",
-  "alibaba-cn": "alibaba.com",
-  "alibaba-coding-plan": "alibaba.com",
-  "alibaba-coding-plan-cn": "alibaba.com",
-  "alibaba-token-plan": "alibaba.com",
-  "alibaba-token-plan-cn": "alibaba.com",
-  stepfun: "stepfun.com",
-  minimax: "minimaxi.com",
-  moonshot: "moonshot.cn",
-  baichuan: "baichuan-ai.com",
-  siliconflow: "siliconflow.cn",
-  doubao: "volcengine.com",
-  volcengine: "volcengine.com",
-  bytedance: "bytedance.com",
-  huawei: "huaweicloud.com",
-  baidu: "baidu.com",
+// Provider id -> bundled same-origin logo asset. The previous implementation
+// built a six-candidate chain of third-party CDNs (search-engine favicons plus
+// four icon CDNs, one pinned to a moving branch ref), which fanned requests
+// out to external hosts on every settings render, broke air-gapped installs,
+// and pinned mutable content. Providers without a bundled mark fall back to
+// the local letter avatar below — never a network fetch.
+const PROVIDER_LOGOS: Record<string, string> = {
+  ollama: ollamaLogo,
+  openai: openaiLogo,
+  openai_compatible: openaiLogo,
+  anthropic: anthropicLogo,
+  google: googleLogo,
+  groq: groqLogo,
+  mistral: mistralLogo,
+  deepseek: deepseekLogo,
+  xai: xaiLogo,
 }
 
-// Provider id -> multi-source logo candidate chain.
-// For Custom (OpenAI-compatible), falls back to official OpenAI logo.
-function buildLogoCandidates(providerType: string, domain?: string | null): string[] {
-  const effectiveType = providerType === "openai_compatible" ? "openai" : providerType
-  const effectiveDomain = providerType === "openai_compatible" ? "openai.com" : domain
-
-  const slug = effectiveType.toLowerCase().replace(/_/g, "-").replace(/ /g, "-")
-
-  const rawDomain = effectiveDomain || KNOWN_PROVIDER_DOMAINS[effectiveType] || KNOWN_PROVIDER_DOMAINS[slug] || null
-  const cleanDomain = rawDomain ? rawDomain.replace(/^https?:\/\//, "").split("/")[0].split(":")[0] : null
-  const rootDomain = cleanDomain && cleanDomain.includes(".") ? cleanDomain.split(".").slice(-2).join(".") : cleanDomain
-
-  const candidates: string[] = []
-
-  // 1. Google 128px High-Res Site Favicon (100% original full-color site logo)
-  if (rootDomain && !rootDomain.startsWith("127.") && rootDomain !== "localhost") {
-    candidates.push(`https://www.google.com/s2/favicons?domain=${rootDomain}&sz=128`)
-  }
-
-  // 2. full-color SVGL library
-  candidates.push(`https://svgl.app/library/${slug}.svg`)
-
-  // 3. full-color thesvg library
-  candidates.push(`https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/${slug}/default.svg`)
-
-  // 4. Simple Icons brand CDN
-  candidates.push(`https://cdn.simpleicons.org/${slug}`)
-
-  // 5. Iconify Logos Gateway
-  candidates.push(`https://api.iconify.design/logos/${slug}.svg`)
-
-  // 6. models.dev (monochrome SVG fallback)
-  candidates.push(`https://models.dev/logos/${effectiveType}.svg`)
-
-  return candidates
-}
-
-// A provider's logo as a plain <img> (never inlined SVG markup — that would be
-// an XSS vector). Displays in full original brand color. Falls back to a custom placeholder badge.
+// A provider's logo as a plain <img> over a same-origin bundled asset (never
+// inlined SVG markup — that would be an XSS vector; never a remote URL —
+// that would leak usage to a third party). Unknown providers get a local
+// letter-avatar badge.
 export function ProviderLogo({
   providerType,
-  domain,
   className,
 }: {
   providerType: string
-  domain?: string | null
   className?: string
 }) {
-  const candidates = useMemo(() => buildLogoCandidates(providerType, domain), [providerType, domain])
-  const [candidateIndex, setCandidateIndex] = useState(0)
+  const logo = PROVIDER_LOGOS[providerType.toLowerCase()]
+
+  if (logo) {
+    return (
+      <img
+        src={logo}
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        className={className || "size-6 shrink-0 rounded-md object-contain bg-surface-elevated/30 p-0.5 border border-hairline"}
+      />
+    )
+  }
 
   const initial = (providerType.trim()[0] || "?").toUpperCase()
   const defaultPlaceholderClasses =
     "flex size-6 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-accent-blue/20 via-surface-elevated to-surface-card border border-accent-blue/30 text-caption font-bold text-accent-blue shadow-sm"
-
-  if (candidates.length === 0 || candidateIndex >= candidates.length) {
-    return (
-      <span
-        aria-hidden="true"
-        className={className || defaultPlaceholderClasses}
-        title={providerType}
-      >
-        <span className="text-caption font-bold text-accent-blue">{initial !== "?" ? initial : "AI"}</span>
-      </span>
-    )
-  }
-
-  const currentSrc = candidates[candidateIndex]
-
   return (
-    <img
-      src={currentSrc}
-      alt=""
+    <span
       aria-hidden="true"
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      className={className || "size-6 shrink-0 rounded-md object-contain bg-surface-elevated/30 p-0.5 border border-hairline"}
-      onLoad={(e) => {
-        const img = e.currentTarget
-        // Filter out Google's default 16x16 blue globe fallback icon
-        if (
-          currentSrc.includes("google.com/s2/favicons") &&
-          img.naturalWidth > 0 &&
-          img.naturalWidth <= 16 &&
-          img.naturalHeight <= 16
-        ) {
-          setCandidateIndex((prev) => prev + 1)
-        }
-      }}
-      onError={() => setCandidateIndex((prev) => prev + 1)}
-    />
+      title={providerType}
+      className={className || defaultPlaceholderClasses}
+    >
+      <span className="text-caption font-bold text-accent-blue">
+        {initial !== "?" ? initial : "AI"}
+      </span>
+    </span>
   )
 }
 
@@ -364,7 +285,7 @@ function AddProviderDialog({ onAdded }: { onAdded: () => void }) {
                       : "hover:bg-surface-elevated text-mute hover:text-body border border-transparent"
                   }`}
                 >
-                  <ProviderLogo providerType={p.id} domain={p.doc || p.api_base} className="size-6 shrink-0 rounded object-contain" />
+                  <ProviderLogo providerType={p.id} className="size-6 shrink-0 rounded object-contain" />
                   <span className="truncate flex-1 font-medium">{p.name}</span>
                   {isSelected && <Check className="size-4 text-accent-blue shrink-0" />}
                 </button>
@@ -382,7 +303,7 @@ function AddProviderDialog({ onAdded }: { onAdded: () => void }) {
           <div className="flex flex-col gap-2 border-b border-hairline pb-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <ProviderLogo providerType={selectedProvider.id} domain={selectedProvider.doc || selectedProvider.api_base} className="size-9 shrink-0 rounded object-contain" />
+                <ProviderLogo providerType={selectedProvider.id} className="size-9 shrink-0 rounded object-contain" />
                 <div>
                   <h3 className="text-body-lg font-semibold text-body">{providerCleanName}</h3>
                   <p className="text-caption text-mute">
@@ -642,7 +563,7 @@ function ProviderRow({ provider, onChanged }: ProviderRowProps) {
     <li className="space-y-3 px-3 py-3">
       <div className="flex items-center gap-3">
         <StatusDot state={validationDot(provider.validation_status)} />
-        <ProviderLogo providerType={provider.provider_type} domain={provider.base_url} className="size-6 shrink-0 rounded object-contain" />
+        <ProviderLogo providerType={provider.provider_type} className="size-6 shrink-0 rounded object-contain" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-body-sm text-body">
             <span className="truncate font-medium">{provider.label}</span>
@@ -887,11 +808,7 @@ export function AiSettingsCard() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2.5">
-              <img
-                src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/microsoft-fabric-iq/default.svg"
-                className="size-5 shrink-0 object-contain"
-                alt="AI Icon"
-              />
+              <Sparkles className="size-5 shrink-0 text-accent-blue" aria-hidden="true" />
               AI providers
             </CardTitle>
             <CardDescription>

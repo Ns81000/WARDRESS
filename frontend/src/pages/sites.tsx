@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { BulkImportDialog } from "@/components/bulk-import-dialog"
+import { SiteAvatar } from "@/components/site-avatar"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Site } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -64,15 +65,6 @@ function baselineLabel(site: Site): string {
       return "Baseline failed"
     default:
       return "No baseline"
-  }
-}
-
-function getFaviconUrl(url: string): string | null {
-  try {
-    const hostname = new URL(url).hostname
-    return `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`
-  } catch {
-    return null
   }
 }
 
@@ -260,16 +252,7 @@ export function SitesPage() {
                 >
                   <TableCell className="max-w-[240px] md:max-w-[360px]">
                     <div className="flex items-center gap-2.5 min-w-0">
-                      {getFaviconUrl(site.url) && (
-                        <img
-                          src={getFaviconUrl(site.url)!}
-                          alt=""
-                          className="size-4.5 shrink-0"
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none"
-                          }}
-                        />
-                      )}
+                      <SiteAvatar url={site.url} />
                       <span className="truncate text-ink hover:underline font-medium">
                         {site.name}
                       </span>

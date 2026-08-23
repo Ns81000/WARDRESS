@@ -236,6 +236,7 @@ export interface HealthDetails {
   last_scan_at: string | null
   last_dispatch_tick_at: string | null
   components: Record<string, HealthComponent>
+  sites_with_degraded_scans: number
 }
 
 export interface BulkImportRowResult {

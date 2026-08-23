@@ -106,15 +106,6 @@ const COMPONENT_LABELS: Record<string, string> = {
   scheduler: "Celery Beat Scheduler"
 }
 
-// Sparkline SVG component to represent scan/activity visually
-function Sparkline({ colorClass = "text-accent-green" }: { colorClass?: string }) {
-  return (
-    <svg viewBox="0 0 100 20" className={`h-6 w-20 stroke-2 fill-none ${colorClass} opacity-80`}>
-      <path d="M0,15 L10,12 L20,17 L30,10 L40,14 L50,6 L60,11 L70,8 L80,13 L90,4 L100,7" />
-    </svg>
-  )
-}
-
 function getTopologyNodeIcon(id: string, size: number, x: number, y: number) {
   const offset = size / 2
   const px = x - offset
@@ -231,12 +222,13 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
               <span className="text-ink font-semibold">{fmtUptime(data.uptime_seconds)}</span>
             </div>
             <div className="flex items-center justify-between border-b border-hairline/10 pb-0.5">
-              <span>ping_lat</span>
-              <span className="text-accent-green font-semibold">1.2ms (stable)</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-hairline/10 pb-0.5">
               <span>status</span>
-              <span className="text-accent-green uppercase font-semibold">operational</span>
+              <span className={cn(
+                gatewayStatus === "ok" ? "text-accent-green" : gatewayStatus === "degraded" ? "text-accent-orange" : "text-accent-red",
+                "uppercase font-semibold"
+              )}>
+                {gatewayStatus}
+              </span>
             </div>
           </div>
         )
@@ -250,10 +242,6 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
             <div className="flex items-center justify-between border-b border-hairline/10 pb-0.5">
               <span>disk_alloc</span>
               <span className="text-ink font-semibold">{fmtBytes(data.db_size_bytes)}</span>
-            </div>
-            <div className="flex items-center justify-between border-b border-hairline/10 pb-0.5">
-              <span>conn_pool</span>
-              <span className="text-accent-green font-semibold">20 (active)</span>
             </div>
             <div className="flex items-center justify-between border-b border-hairline/10 pb-0.5">
               <span>status</span>
@@ -571,6 +559,13 @@ export function HealthPage() {
   const isLoading = health.isLoading
   const isError = health.isError
 
+  // Beat freshness: the dispatcher writes a Redis heartbeat every 60 s tick;
+  // older than 5 minutes (or absent) means scheduling is stalled.
+  const beatFresh =
+    !isError &&
+    !!h?.last_dispatch_tick_at &&
+    Date.now() - new Date(h.last_dispatch_tick_at).getTime() < 5 * 60_000
+
   // Determine global visual accent class based on health status
   const systemStatus = h?.status ?? "ok"
   const isHealthy = systemStatus === "ok"
@@ -697,7 +692,7 @@ export function HealthPage() {
               </div>
             </div>
             <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
-              <span className="text-[11px] text-mute">heartbeat signal stable</span>
+              <span className="text-[11px] text-mute">measured since process start</span>
               {!isLoading && !isError && (
                 <div className="flex gap-0.5 items-center">
                   <span className="size-1.5 rounded-full bg-accent-green animate-pulse" />
@@ -720,8 +715,10 @@ export function HealthPage() {
                     <span className="inline-block h-6 w-16 animate-pulse rounded bg-hairline-strong" />
                   ) : isError ? (
                     "n/a"
+                  ) : h?.queue_depth == null ? (
+                    "unknown"
                   ) : (
-                    h?.queue_depth ?? 0
+                    h.queue_depth
                   )}
                 </p>
               </div>
@@ -731,9 +728,6 @@ export function HealthPage() {
             </div>
             <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
               <span className="text-[11px] text-mute">tasks waiting for worker</span>
-              {!isLoading && !isError && (
-                <Sparkline colorClass={h?.queue_depth && h.queue_depth > 0 ? "text-accent-orange" : "text-accent-blue"} />
-              )}
             </div>
           </SpotlightCard>
 
@@ -795,7 +789,6 @@ export function HealthPage() {
                   ? `avg ${h.avg_scan_seconds.toFixed(1)}s / scan`
                   : "no average latency data"}
               </span>
-              {!isLoading && !isError && <Sparkline colorClass="text-accent-green" />}
             </div>
           </SpotlightCard>
         </div>
@@ -841,16 +834,6 @@ export function HealthPage() {
                     {isLoading ? "loading" : isError ? "offline" : h?.components.database.status}
                   </Badge>
                 </div>
-                <div className="mt-4 border-t border-hairline pt-3 font-mono text-[11px] text-charcoal">
-                  <div className="flex justify-between">
-                    <span>latency check</span>
-                    <span className="text-ink">{isLoading ? "---" : isError ? "timeout" : "1.2ms"}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between">
-                    <span>conn_pool limit</span>
-                    <span className="text-ink">20 (active)</span>
-                  </div>
-                </div>
               </SpotlightCard>
 
               {/* Redis Subsystem Card */}
@@ -889,12 +872,10 @@ export function HealthPage() {
                 </div>
                 <div className="mt-4 border-t border-hairline pt-3 font-mono text-[11px] text-charcoal">
                   <div className="flex justify-between">
-                    <span>active broker</span>
-                    <span className="text-ink">redis://</span>
-                  </div>
-                  <div className="mt-1 flex justify-between">
-                    <span>queue status</span>
-                    <span className="text-ink">{isLoading ? "---" : isError ? "unreachable" : "listening"}</span>
+                    <span>queue depth</span>
+                    <span className="text-ink">
+                      {isLoading ? "---" : isError ? "unreachable" : h?.queue_depth == null ? "unknown" : `${h.queue_depth} waiting`}
+                    </span>
                   </div>
                 </div>
               </SpotlightCard>
@@ -937,12 +918,8 @@ export function HealthPage() {
                   <div className="flex justify-between">
                     <span>worker node details</span>
                     <span className="text-ink text-[10px] truncate max-w-[120px]">
-                      {isLoading ? "---" : isError ? "n/a" : h?.components.worker.detail ?? "online"}
+                      {isLoading ? "---" : isError ? "n/a" : h?.components.worker.detail ?? "—"}
                     </span>
-                  </div>
-                  <div className="mt-1 flex justify-between">
-                    <span>thread dispatcher</span>
-                    <span className="text-ink">active</span>
                   </div>
                 </div>
               </SpotlightCard>
@@ -958,22 +935,12 @@ export function HealthPage() {
                         <>
                           <span
                             className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-35 ${
-                              isError
-                                ? "bg-accent-red"
-                                : h?.last_dispatch_tick_at &&
-                                  Date.now() - new Date(h.last_dispatch_tick_at).getTime() < 5 * 60_000
-                                ? "bg-accent-green"
-                                : "bg-accent-orange"
+                              isError ? "bg-accent-red" : beatFresh ? "bg-accent-green" : "bg-accent-orange"
                             }`}
                           />
                           <span
                             className={`relative inline-flex size-2.5 rounded-full ${
-                              isError
-                                ? "bg-accent-red"
-                                : h?.last_dispatch_tick_at &&
-                                  Date.now() - new Date(h.last_dispatch_tick_at).getTime() < 5 * 60_000
-                                ? "bg-accent-green"
-                                : "bg-accent-orange"
+                              isError ? "bg-accent-red" : beatFresh ? "bg-accent-green" : "bg-accent-orange"
                             }`}
                           />
                         </>
@@ -988,17 +955,10 @@ export function HealthPage() {
                     </div>
                   </div>
                   <Badge
-                    variant={
-                      isError
-                        ? "threat"
-                        : h?.last_dispatch_tick_at &&
-                          Date.now() - new Date(h.last_dispatch_tick_at).getTime() < 5 * 60_000
-                        ? "clean"
-                        : "pending"
-                    }
+                    variant={isError ? "threat" : beatFresh ? "clean" : "pending"}
                     className="h-[18px] text-[10px]"
                   >
-                    {isLoading ? "loading" : isError ? "offline" : "active"}
+                    {isLoading ? "loading" : isError ? "offline" : beatFresh ? "active" : "stale"}
                   </Badge>
                 </div>
                 <div className="mt-4 border-t border-hairline pt-3 font-mono text-[11px] text-charcoal">
@@ -1021,7 +981,7 @@ export function HealthPage() {
                 <span>Monitoring Activity</span>
               </h3>
               
-              <dl className="grid grid-cols-1 gap-4 text-body-sm sm:grid-cols-3">
+              <dl className="grid grid-cols-1 gap-4 text-body-sm sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
                   <dt className="text-caption uppercase tracking-wider text-mute">Sites Monitored</dt>
                   <dd className="mt-1.5 text-heading-sm font-display-sans font-medium text-ink">
@@ -1034,7 +994,7 @@ export function HealthPage() {
                     )}
                   </dd>
                 </div>
-                
+
                 <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
                   <dt className="text-caption uppercase tracking-wider text-mute">Last Completed Scan</dt>
                   <dd className="mt-1.5 text-body-sm font-medium text-ink">
@@ -1049,9 +1009,25 @@ export function HealthPage() {
                 </div>
 
                 <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
+                  <dt className="text-caption uppercase tracking-wider text-mute">Degraded Captures (24h)</dt>
+                  <dd className="mt-1.5 text-heading-sm font-display-sans font-medium text-ink">
+                    {isLoading ? (
+                      <span className="inline-block h-5 w-10 animate-pulse rounded bg-hairline-strong" />
+                    ) : isError ? (
+                      "n/a"
+                    ) : (
+                      h?.sites_with_degraded_scans ?? 0
+                    )}
+                  </dd>
+                  <p className="mt-1 text-[10px] leading-snug text-mute">
+                    sites whose latest scan ran with failed capture/probe layers
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
                   <dt className="text-caption uppercase tracking-wider text-mute">Liveness Endpoint</dt>
                   <dd className="mt-1.5 font-mono text-code-md text-ink flex items-center justify-between">
-                    <span className="text-accent-blue">GET /health/live</span>
+                    <span className="text-accent-blue">GET /api/health/live</span>
                   </dd>
                 </div>
               </dl>
