@@ -251,6 +251,7 @@ class TestAuditTargetLabelCap:
                 "name": "H" * 200,
                 "action_type": "custom_webhook",
                 "webhook_url": "http://127.0.0.1:9/hook",
+                "allow_private_networks": True,
             },
             headers=auth_headers,
         )
@@ -281,6 +282,7 @@ class TestAuditTargetLabelCap:
                     "name": "ok-hook",
                     "action_type": "custom_webhook",
                     "webhook_url": "http://127.0.0.1:9/hook",
+                    "allow_private_networks": True,
                 },
                 headers=auth_headers,
             )
@@ -330,6 +332,7 @@ class TestAuditTargetLabelCap:
                 "name": "h" * 54,  # 200 + 2 + 54 == 256 exactly
                 "action_type": "custom_webhook",
                 "webhook_url": "http://127.0.0.1:9/hook",
+                "allow_private_networks": True,
             },
             headers=auth_headers,
         )

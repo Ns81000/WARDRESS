@@ -612,6 +612,10 @@ class RemediationHook(Base):
     # flagged). Defaults to the site's own flag threshold semantics.
     trigger_threshold: Mapped[float] = mapped_column(Float, default=0.5)
     webhook_url_encrypted: Mapped[str] = mapped_column(Text)
+    # §9 SSRF opt-in for the webhook TARGET itself (mirrors
+    # sites.allow_private_networks): False refuses loopback/RFC1918/
+    # link-local receivers at save time and at every pinned fire.
+    allow_private_networks: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_manual_confirm: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(

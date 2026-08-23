@@ -9,9 +9,15 @@ The master-prompt safety rules are absolute here:
   `pending_confirm`; nothing is POSTed until an operator approves. Auto-
   execute is an explicit, per-hook opt-in and is labeled as such.
 - **A broken hook never affects scanning (rule 6).** Creating the
-  execution rows is best-effort inside the scan task; the POST itself
-  runs in a *separate* Celery task, never in the scan body. Any failure
-  is a `failed` row with a user-safe detail — visible, never fatal.
+execution rows is best-effort inside the scan task; the POST itself
+runs in a *separate* Celery task, never in the scan body. Any failure
+is a `failed` row with a user-safe detail — visible, never fatal.
+- **Webhook targets obey the SSRF discipline.** URLs are validated by
+`assert_url_allowed` at create/update (refusing loopback/RFC1918/
+link-local receivers unless the hook opts in via
+`allow_private_networks`) and every fire connects through the
+DNS-pinning transport, so a target can't pass validation and then
+resolve privately.
 
 Wardress always POSTs the same JSON incident payload; the action_type is
 a label the receiver uses to decide what to actually do. The webhook URL
@@ -34,6 +40,8 @@ from app.models import (
     Scan,
     Site,
 )
+from app.ssrf import SSRFBlockedError
+from app.ssrf_transport import SSRFPinningTransport
 
 logger = logging.getLogger(__name__)
 
@@ -117,18 +125,36 @@ async def create_executions_for_flagged_scan(db: AsyncSession, scan: Scan) -> li
     return ready
 
 
-async def post_webhook(url: str, payload: dict) -> tuple[bool, str]:
+async def post_webhook(
+    url: str, payload: dict, *, allow_private_networks: bool = False
+) -> tuple[bool, str]:
     """POST the incident payload. Returns (ok, user-safe detail). Never
     raises; the URL is never echoed into the detail (it may embed a
-    credential)."""
+    credential). The connection is pinned like every other outbound fetch:
+    the transport resolves the host, validates every resolved address
+    against the SSRF policy (honoring the hook's private-network opt-in),
+    and connects to a validated IP — no second resolution to race."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(WEBHOOK_TIMEOUT_S)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(WEBHOOK_TIMEOUT_S),
+            transport=SSRFPinningTransport(allow_private_networks=allow_private_networks),
+        ) as client:
             resp = await client.post(url, json=payload)
         if 200 <= resp.status_code < 300:
             return True, f"HTTP {resp.status_code}"
         return False, f"webhook returned HTTP {resp.status_code}"
+    except SSRFBlockedError as exc:
+        # Messages carry host/resolved-address material only — never the
+        # full URL — so they are safe to surface.
+        return False, f"webhook target refused: {exc}"
     except httpx.HTTPError as exc:
         return False, f"webhook unreachable: {type(exc).__name__}"
+    except Exception as exc:
+        # Contract repair: any other failure class (e.g. httpx.InvalidURL
+        # from a legacy unfetchable URL) must land here as a failed row,
+        # never escape to wedge the execution in `queued` forever.
+        logger.warning("Webhook POST failed unexpectedly: %s", type(exc).__name__)
+        return False, f"webhook error: {type(exc).__name__}"
 
 
 def decrypt_hook_url(hook: RemediationHook) -> str | None:

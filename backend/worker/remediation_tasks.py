@@ -2,12 +2,15 @@
 
 Firing runs in its own task, never in the scan body — a broken or slow
 webhook must never block or crash a scan (rule 6). The task decrypts the
-hook URL, POSTs the incident payload, and records the outcome on the
-execution row (succeeded/failed + a user-safe detail). Delivery is
-claimed atomically before the POST — `executed_at` is stamped by exactly
-one concurrent message while the row stays `queued`, reclaimable once
-the stamp goes stale — so neither acks_late redelivery nor duplicate
-queue messages can double-fire.
+hook URL, POSTs the incident payload through the SSRF-pinning transport
+(honoring the hook's private-network opt-in), and records the outcome on
+the execution row (succeeded/failed + a user-safe detail). Every attempt
+terminates in a written outcome — a delivery-path crash marks the row
+failed rather than leaving it queued for the resweep to re-enqueue
+forever. Delivery is claimed atomically before the POST — `executed_at`
+is stamped by exactly one concurrent message while the row stays
+`queued`, reclaimable once the stamp goes stale — so neither acks_late
+redelivery nor duplicate queue messages can double-fire.
 """
 
 import asyncio
@@ -86,8 +89,19 @@ async def _fire(execution_id: uuid.UUID) -> str:
             await db.commit()
             return "url-undecryptable"
 
-        payload = build_remediation_payload(site, scan, hook)
-        ok, detail = await post_webhook(url, payload)
+        try:
+            payload = build_remediation_payload(site, scan, hook)
+            ok, detail = await post_webhook(
+                url, payload, allow_private_networks=hook.allow_private_networks
+            )
+        except Exception:
+            # Terminal-state guarantee: a crash here (payload build bug,
+            # unexpected transport error) must never leave the row stuck
+            # `queued` with the resweep re-enqueueing it forever. The row
+            # records an honest failed outcome; post_webhook itself never
+            # raises, so this is defense in depth.
+            logger.exception("Remediation %s delivery crashed", execution.id)
+            ok, detail = False, "delivery failed unexpectedly"
         execution.status = (
             RemediationExecutionStatus.succeeded if ok else RemediationExecutionStatus.failed
         )

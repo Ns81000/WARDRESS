@@ -62,7 +62,7 @@ class TestHookCrud:
             json={
                 "name": "rollback",
                 "action_type": "git_rollback",
-                "webhook_url": "https://hooks.example.com/deploy?token=secret",
+                "webhook_url": "https://93.184.216.34/deploy?token=secret",
                 "trigger_threshold": 0.7,
             },
         )
@@ -70,13 +70,13 @@ class TestHookCrud:
         body = resp.json()
         # URL never round-trips whole.
         assert "secret" not in str(body)
-        assert body["url_hint"].startswith("https://hooks.example.com")
+        assert body["url_hint"].startswith("https://93.184.216.34")
         assert body["requires_manual_confirm"] is True  # default
 
         async with db_factory() as db:
             hook = await db.scalar(select(RemediationHook))
             assert decrypt_text(hook.webhook_url_encrypted) == (
-                "https://hooks.example.com/deploy?token=secret"
+                "https://93.184.216.34/deploy?token=secret"
             )
 
     async def test_reject_non_http_url(self, client, auth_headers, db_factory, admin_user):

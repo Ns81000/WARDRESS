@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 from app.models import (
@@ -772,10 +773,35 @@ class BulkImportResult(BaseModel):
 # --- Phase 5: remediation hooks (§6/§9) ---
 
 
+def _validate_hook_url(v: str) -> str:
+    v = v.strip()
+    parsed = urlparse(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("webhook_url must be an http(s) URL")
+    return v
+
+
+def _validate_fetchable(v: str) -> str:
+    """Reject URLs the HTTP client itself can never fetch (non-numeric
+    ports, control characters — httpx raises InvalidURL at request
+    construction, which previously wedged executions in `queued` forever).
+    Pure construction check; DNS/range policy lives in assert_url_allowed."""
+    try:
+        httpx.URL(v)
+    except httpx.InvalidURL as exc:
+        raise ValueError(f"webhook_url could not be fetched: {exc}") from exc
+    return v
+
+
 class RemediationHookCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     action_type: RemediationActionType
     webhook_url: str = Field(min_length=1, max_length=2048)
+    # SSRF opt-in for the webhook target itself (mirrors
+    # SiteCreate.allow_private_networks): internal receivers are refused
+    # unless this is explicitly set. Hook CRUD is admin-only, so the
+    # opt-in is admin-gated by construction.
+    allow_private_networks: bool = False
     trigger_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     # §9: manual confirm is the default; auto-execute is an explicit,
     # clearly-labeled opt-in surfaced as its own toggle in the UI.
@@ -792,16 +818,18 @@ class RemediationHookCreate(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def url_shape(cls, v: str) -> str:
-        v = v.strip()
-        parsed = urlparse(v)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError("webhook_url must be an http(s) URL")
-        return v
+        return _validate_hook_url(v)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def fetchable(cls, v: str) -> str:
+        return _validate_fetchable(v)
 
 
 class RemediationHookUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     webhook_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    allow_private_networks: bool | None = None
     trigger_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     requires_manual_confirm: bool | None = None
     is_active: bool | None = None
@@ -811,11 +839,14 @@ class RemediationHookUpdate(BaseModel):
     def url_shape(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        v = v.strip()
-        parsed = urlparse(v)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError("webhook_url must be an http(s) URL")
-        return v
+        return _validate_hook_url(v)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def fetchable(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _validate_fetchable(v)
 
 
 # --- Conversational agent (§ agent) ---
@@ -871,6 +902,7 @@ class RemediationHookOut(BaseModel):
     action_type: RemediationActionType
     trigger_threshold: float
     requires_manual_confirm: bool
+    allow_private_networks: bool
     is_active: bool
     url_hint: str
     created_at: datetime

@@ -99,6 +99,7 @@ async def _seed_execution(
     *,
     webhook_url_encrypted: str | None = None,
     confirmed_at: datetime | None = None,
+    allow_private_networks: bool = False,
 ) -> uuid_mod.UUID:
     async with db_factory() as db:
         hook = RemediationHook(
@@ -107,6 +108,7 @@ async def _seed_execution(
             action_type="custom_webhook",
             trigger_threshold=0.5,
             webhook_url_encrypted=webhook_url_encrypted or encrypt_text("http://127.0.0.1:9/fire"),
+            allow_private_networks=allow_private_networks,
             requires_manual_confirm=True,
         )
         db.add(hook)
@@ -312,8 +314,14 @@ class TestConfirmRace:
 
 class TestFireClaim:
     async def _seed_fireable(self, db_factory, site, canary_url: str) -> uuid_mod.UUID:
+        # The canary listens on loopback, so the seeded hook must carry the
+        # SSRF private-network opt-in for its firing to be allowed.
         return await _seed_execution(
-            db_factory, site, "queued", webhook_url_encrypted=encrypt_text(canary_url)
+            db_factory,
+            site,
+            "queued",
+            webhook_url_encrypted=encrypt_text(canary_url),
+            allow_private_networks=True,
         )
 
     async def test_concurrent_fire_single_post(self, db_factory, admin_user, canary: _Canary):

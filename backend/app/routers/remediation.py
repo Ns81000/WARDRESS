@@ -8,6 +8,7 @@ audit row. The stored webhook URL never round-trips — list responses
 carry a redacted hint only.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -37,11 +38,24 @@ from app.schemas import (
     RemediationHookOut,
     RemediationHookUpdate,
 )
+from app.ssrf import SSRFBlockedError, assert_url_allowed
 from app.tasks import enqueue_remediation
 
 router = APIRouter(prefix="/api", tags=["remediation"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def _assert_target_allowed(url: str, *, allow_private_networks: bool) -> None:
+    """Validate a webhook target through the same SSRF gate as every other
+    outbound fetch. DNS resolution is blocking — offload like services.py.
+    Raises HTTPException 422 with the gate's user-safe message."""
+    try:
+        await asyncio.to_thread(
+            assert_url_allowed, url, allow_private_networks=allow_private_networks
+        )
+    except SSRFBlockedError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 def _url_hint(hook: RemediationHook) -> str:
@@ -60,6 +74,7 @@ def _hook_out(hook: RemediationHook) -> RemediationHookOut:
         action_type=hook.action_type,
         trigger_threshold=hook.trigger_threshold,
         requires_manual_confirm=hook.requires_manual_confirm,
+        allow_private_networks=hook.allow_private_networks,
         is_active=hook.is_active,
         url_hint=_url_hint(hook),
         created_at=hook.created_at,
@@ -72,6 +87,7 @@ def _hook_snapshot(hook: RemediationHook) -> dict:
         "action_type": hook.action_type.value,
         "trigger_threshold": hook.trigger_threshold,
         "requires_manual_confirm": hook.requires_manual_confirm,
+        "allow_private_networks": hook.allow_private_networks,
         "is_active": hook.is_active,
     }
 
@@ -108,12 +124,16 @@ async def create_hook(
     site_id: uuid.UUID, body: RemediationHookCreate, admin: AdminUser, db: DB
 ) -> RemediationHookOut:
     site = await _get_site_or_404(db, site_id)
+    await _assert_target_allowed(
+        body.webhook_url, allow_private_networks=body.allow_private_networks
+    )
     hook = RemediationHook(
         site_id=site.id,
         name=body.name,
         action_type=body.action_type,
         trigger_threshold=body.trigger_threshold,
         webhook_url_encrypted=encrypt_text(body.webhook_url),
+        allow_private_networks=body.allow_private_networks,
         requires_manual_confirm=body.requires_manual_confirm,
         created_by=admin.id,
     )
@@ -152,7 +172,19 @@ async def update_hook(
     if body.name is not None:
         hook.name = body.name.strip()
     if body.webhook_url is not None:
+        # Validate against the EFFECTIVE post-update opt-in: the new flag
+        # if this request carries one, else the stored one.
+        await _assert_target_allowed(
+            body.webhook_url,
+            allow_private_networks=(
+                body.allow_private_networks
+                if body.allow_private_networks is not None
+                else hook.allow_private_networks
+            ),
+        )
         hook.webhook_url_encrypted = encrypt_text(body.webhook_url)
+    if body.allow_private_networks is not None:
+        hook.allow_private_networks = body.allow_private_networks
     if body.trigger_threshold is not None:
         hook.trigger_threshold = body.trigger_threshold
     if body.requires_manual_confirm is not None:
