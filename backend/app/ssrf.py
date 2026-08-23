@@ -31,6 +31,13 @@ class SSRFBlockedError(ValueError):
 
 _ALLOWED_SCHEMES = {"http", "https"}
 
+# Suggested remediation when the DEFAULT policy refuses a target. Deliberately
+# omitted when the caller already opted in (suggesting it then would be
+# nonsensical — the flag is already on and the range is refused regardless).
+_PRIVATE_HINT = (
+    " Enable 'allow private networks' on this site if you intend to monitor an internal host."
+)
+
 
 def _is_forbidden_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True for any address that is not plain global unicast.
@@ -89,30 +96,19 @@ def assert_url_allowed(url: str, *, allow_private_networks: bool = False) -> Non
     except ValueError:
         literal = None
 
-    if allow_private_networks:
-        # Opt-in relaxes the range checks for addresses someone can
-        # actually host a site on (private, loopback, link-local, CGNAT)
-        # but still refuses multicast/unspecified/other reserved space.
-        # Note ::1 reports is_reserved=True, hence the loopback carve-out.
-        def blocked(a):
-            return a.is_multicast or a.is_unspecified or (a.is_reserved and not a.is_loopback)
-    else:
-        blocked = _is_forbidden_address
-
     if literal is not None:
-        if blocked(literal):
+        if _address_blocked(literal, allow_private_networks):
             raise SSRFBlockedError(
-                f"Address {host} is in a blocked range. Enable 'allow private "
-                "networks' on this site if you intend to monitor an internal host."
+                f"Address {host} is in a blocked range."
+                + ("" if allow_private_networks else _PRIVATE_HINT)
             )
         return
 
     for addr in resolve_host(host):
-        if blocked(addr):
+        if _address_blocked(addr, allow_private_networks):
             raise SSRFBlockedError(
-                f"Host {host!r} resolves to a blocked address ({addr}). Enable "
-                "'allow private networks' on this site if you intend to monitor "
-                "an internal host."
+                f"Host {host!r} resolves to a blocked address ({addr})."
+                + ("" if allow_private_networks else _PRIVATE_HINT)
             )
 
 
@@ -120,9 +116,22 @@ def _address_blocked(
     addr: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_private_networks: bool
 ) -> bool:
     """Shared address-range policy, used by assert_url_allowed's inline
-    check and by the pinning transport (app/ssrf_transport.py)."""
+    check and by the pinning transport (app/ssrf_transport.py).
+
+    Invariant: the opt-in (allow_private_networks=True) only ever *loosens*
+    the range checks — it must never refuse an address the default policy
+    accepts. That is why `is_reserved` alone cannot refuse under the opt-in:
+    some IANA special-purpose ranges report BOTH is_global and is_reserved
+    (Python 3.12: RFC 6052 NAT64 64:ff9b::/96, SRV 5f00::/16). Those route
+    globally through their gateways — the DEFAULT policy already allows
+    them, so refusing them here would make opting in stricter than not,
+    which broke AI provider setup on DNS64/NAT64 networks. Multicast,
+    unspecified, loopback carve-outs and genuinely non-global reserved
+    space keep their existing treatment."""
     if allow_private_networks:
         return (
-            addr.is_multicast or addr.is_unspecified or (addr.is_reserved and not addr.is_loopback)
+            addr.is_multicast
+            or addr.is_unspecified
+            or (addr.is_reserved and not addr.is_global and not addr.is_loopback)
         )
     return _is_forbidden_address(addr)

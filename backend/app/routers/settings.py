@@ -7,7 +7,6 @@ prefixes) plus `configured` flags, and PATCH-like semantics let the
 client keep a stored secret by omitting the field.
 """
 
-import logging
 import uuid
 from typing import Annotated
 
@@ -71,8 +70,6 @@ from app.settings_store import (
     load_setting,
     save_setting,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -308,6 +305,7 @@ from app.ai_config import (  # noqa: E402 — grouped with the AI section it ser
     resolve_tool_capability,
     set_assignment,
     update_provider,
+    validate_base_url,
 )
 from app.ai_config import (  # noqa: E402
     assignment_out as _assignment_out,
@@ -773,12 +771,19 @@ async def validate_ai_provider(
 
 @ai_router.get("/providers/{provider_id}/ollama-models", response_model=list[OllamaModelOut])
 async def list_ollama_models(provider_id: str, user: AdminUser, db: DB) -> list[OllamaModelOut]:
-    from app.ai_ollama import OllamaError, list_models
+    from app.ai_ollama import OllamaError, list_models, normalize_base
     from app.llm import provider_api_keys
 
     provider = await _require_provider(db, provider_id)
     if provider.provider_type != "ollama":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an Ollama provider")
+    # The stored base_url is normally validated at save time, but legacy
+    # migration seeds skip that check — validate what will actually be
+    # fetched before making the live call.
+    try:
+        await validate_base_url(normalize_base(provider.base_url), "ollama")
+    except ProviderConfigError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     keys = provider_api_keys(provider)
     try:
         models = await list_models(provider.base_url, keys[0] if keys else None)
@@ -845,13 +850,21 @@ async def put_assignment(
 
 
 @ai_router.post("/ollama/pull")
-async def pull_ollama_model(body: OllamaPullRequest, user: AdminUser, db: DB) -> StreamingResponse:
+async def pull_ollama_model(
+    body: OllamaPullRequest, user: AdminUser, db: DB, request: Request
+) -> StreamingResponse:
     """Stream an Ollama model download (`/api/pull`) to the client as SSE with
-    live progress. Local-download UX only — unrelated to cloud models."""
+    live progress. Local-download UX only — unrelated to cloud models.
+
+    Like the validate endpoint, this makes a live outbound call an admin
+    could otherwise aim anywhere, so it is rate-limited per user and the
+    effective target URL is SSRF-validated before any request is made."""
     import json as _json
 
-    from app.ai_ollama import OllamaError, pull_stream
+    from app.ai_ollama import OllamaError, normalize_base, pull_stream
     from app.llm import provider_api_keys
+
+    enforce_user_rate_limit(request, str(user.id))
 
     base_url = body.base_url
     api_key = None
@@ -859,20 +872,22 @@ async def pull_ollama_model(body: OllamaPullRequest, user: AdminUser, db: DB) ->
     target_label = "Ollama model pull"
 
     if body.provider_id:
-        try:
-            provider = await _require_provider(db, body.provider_id)
-            if provider.provider_type == "ollama":
-                keys = provider_api_keys(provider)
-                base_url = provider.base_url or base_url
-                api_key = keys[0] if keys else None
-                target_id = str(provider.id)
-                target_label = provider.label
-        except Exception:
-            logger.warning(
-                "ollama pull: provider %s could not be resolved; falling back to raw base_url",
-                body.provider_id,
-                exc_info=True,
-            )
+        # Resolution failures surface (404 for unknown ids, 400 for
+        # non-Ollama providers) instead of silently degrading the fetch to
+        # the raw body base_url.
+        provider = await _require_provider(db, body.provider_id)
+        if provider.provider_type != "ollama":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an Ollama provider")
+        keys = provider_api_keys(provider)
+        base_url = provider.base_url or base_url
+        api_key = keys[0] if keys else None
+        target_id = str(provider.id)
+        target_label = provider.label
+
+    try:
+        await validate_base_url(normalize_base(base_url), "ollama")
+    except ProviderConfigError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
 
     model = body.model
     record_audit(
