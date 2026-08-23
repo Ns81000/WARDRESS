@@ -461,9 +461,10 @@ class Scan(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), default=None)
     html_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     screenshot_path: Mapped[str | None] = mapped_column(String(1024), default=None)
-    # Per-layer results: {"layer1_hash": {"score": 1.0, "evidence": {...}}}.
-    # Kept as the compact summary the scan table reads; the full per-layer
-    # evidence for UI drilldown lives in scan_findings rows (§5).
+    # Per-layer summary: {"layer1_hash": {"score": 1.0, "skipped": false,
+    # "degraded": false}, ...}. `degraded` marks capture/probe-side
+    # failures (channel dark) as distinct from structural gate skips; the
+    # site-detail and health degradation aggregates read it.
     layer_scores: Mapped[dict | None] = mapped_column(default=None)
     # Fused risk score from layer 9 (0-1). Own indexed column — the
     # dashboard filters and thresholds on it (never buried in JSON).

@@ -61,5 +61,27 @@ def layer_result(score: float, evidence: dict) -> dict:
 
 def skip_result(reason: str, **extra) -> dict:
     """A skipped layer still logs why (§5: 'always log that the layer was
-    skipped and why'). Score None distinguishes 'not run' from 'ran, 0.0'."""
+    skipped and why'). Score None distinguishes 'not run' from 'ran, 0.0'.
+
+    skip_result means "structurally nothing to measure" — the caller has a
+    PROOF that the layer's value is zero (e.g. the identical-content-hash
+    gate: byte-identical serialized DOM cannot produce structural, link,
+    signature, or semantic deltas). For "tried to measure and could not",
+    use degraded_result instead — fusion must not read a dark channel as a
+    trusted zero."""
     return {"score": None, "skipped": True, "evidence": {"reason": reason, **extra}}
+
+
+def degraded_result(reason: str, **extra) -> dict:
+    """The capture/probe side failed: the layer TRIED to measure and could
+    not. Score is None (no measurement exists), skipped=True (nothing was
+    scored), and the top-level `degraded` flag marks it so fusion can treat
+    the channel as UNKNOWN instead of evidence-of-zero — a missing
+    screenshot or a dead metadata probe must never read exactly like a
+    measured-identical page downstream."""
+    return {
+        "score": None,
+        "skipped": True,
+        "degraded": True,
+        "evidence": {"reason": reason, **extra},
+    }

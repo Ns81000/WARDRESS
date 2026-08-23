@@ -19,8 +19,17 @@ logged with its reason as a §5 requirement):
 
 Each layer is individually crash-isolated: a layer that raises
 unexpectedly is recorded as failed evidence (score None, skipped=True,
-reason=internal error) and the pipeline continues — one broken parser
-must never blind the other eight layers (rule 6).
+degraded=True, reason=internal error) and the pipeline continues — one
+broken parser must never blind the other eight layers (rule 6).
+
+Two distinct kinds of "did not run" exist, and downstream (fusion)
+must not conflate them:
+- skip_result ("gated by layer 1"): a PROOF of zero. Byte-identical
+  serialized DOM cannot produce DOM-structure/link/signature/semantic
+  deltas, so treating these as trusted zeros is sound.
+- degraded_result: capture/probe-side failure (lost artifact, missing
+  screenshot, dead probe, crashed layer). Nothing was measured; fusion
+  treats these channels as UNKNOWN rather than evidence-of-zero.
 """
 
 import logging
@@ -32,7 +41,7 @@ from worker.detection.metadata import layer6_security_metadata
 from worker.detection.semantics import layer8_semantics
 from worker.detection.signatures import layer5_signatures
 from worker.detection.suppress import Suppression, suppressed_copy
-from worker.detection.types import PageData, ScanPageData, skip_result
+from worker.detection.types import PageData, ScanPageData, degraded_result, skip_result
 from worker.hashing import layer1_hash_diff
 
 logger = logging.getLogger(__name__)
@@ -136,7 +145,7 @@ def run_detection(
             )
             continue
         if baseline_html_missing and key in GATED_BY_IDENTICAL_HASH:
-            results[key] = skip_result(
+            results[key] = degraded_result(
                 "baseline HTML artifact unavailable — content comparison impossible"
             )
             continue
@@ -150,9 +159,11 @@ def run_detection(
             else:
                 results[key] = _LAYER_FUNCS[key](baseline, current)
         except Exception as exc:
-            # One broken layer must not blind the rest (rule 6).
+            # One broken layer must not blind the rest (rule 6). The
+            # channel is dark, not zero: recorded as degraded so fusion
+            # discounts its missing evidence instead of trusting a 0.0.
             logger.exception("Layer %s (%s) failed", number, key)
-            results[key] = skip_result(
+            results[key] = degraded_result(
                 "layer failed unexpectedly — see worker logs",
                 error=f"{type(exc).__name__}: {str(exc)[:200]}",
             )

@@ -12,9 +12,12 @@ Full-page captures of the same site can legitimately differ in height
 top region at a common width/height; the raw dimensions go into
 evidence, and the perceptual hashes (whole-image) still see the tails.
 
-An unreadable/absent screenshot on either side is a content problem,
-not a crash: reported via evidence with score 0.0 (the other eight
-layers still see everything).
+An unreadable/absent screenshot on either side is a capture problem,
+not a measurement: the layer reports a degraded result (score None,
+`degraded=True`) so fusion treats the visual channel as UNKNOWN instead
+of silently reading it as "pixels identical" — that conflation once let
+a broken capture pipeline disable the product's only pixel ground truth
+while scans completed looking clean.
 """
 
 import io
@@ -24,7 +27,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 from skimage.metrics import structural_similarity
 
-from worker.detection.types import PageData, layer_result
+from worker.detection.types import PageData, degraded_result, layer_result
 
 # Compare at a bounded size: SSIM on multi-megapixel full-page PNGs is
 # slow and no more informative for "did the page visibly change".
@@ -93,13 +96,10 @@ def layer4_visual_diff(
     c_img = _load_grayscale(current.screenshot)
 
     if b_img is None or c_img is None:
-        return layer_result(
-            0.0,
-            {
-                "note": "screenshot missing or unreadable on one side — visual diff not computed",
-                "baseline_screenshot_ok": b_img is not None,
-                "current_screenshot_ok": c_img is not None,
-            },
+        return degraded_result(
+            "screenshot missing or unreadable on one side — visual diff not computed",
+            baseline_screenshot_ok=b_img is not None,
+            current_screenshot_ok=c_img is not None,
         )
 
     # Suppressed regions are masked identically on both sides BEFORE any

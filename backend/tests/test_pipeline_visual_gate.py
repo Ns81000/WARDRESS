@@ -103,11 +103,21 @@ def test_pixel_change_raises_fused_risk_above_identical_control() -> None:
 
 
 def test_missing_screenshots_under_identical_hash_still_report_layer4() -> None:
-    # Artifact loss must surface as a ran-with-note layer result, never as
-    # a silent gate skip: the degradation stays visible downstream.
+    # Phase 24: artifact loss surfaces as a DEGRADED result — skipped with
+    # score None and the degraded flag — so fusion treats the visual
+    # channel as unknown instead of a trusted pixel-identical zero, and
+    # operators see exactly why nothing was compared. (Formerly this
+    # returned 0.0-with-note: numerically indistinguishable downstream
+    # from truly identical pixels.)
     base, cur = _pages(b"", b"")
     results = run_detection(base, cur)
     l4 = results["layer4_visual_diff"]
-    assert not l4.get("skipped")
-    assert l4["score"] == 0.0
-    assert "note" in l4["evidence"]
+    assert l4["skipped"] is True
+    assert l4["degraded"] is True
+    assert l4["score"] is None
+    assert "screenshot missing or unreadable" in l4["evidence"]["reason"]
+    # And fusion records the dark channel explicitly instead of silently
+    # trusting it as zero.
+    fusion = results["layer9_fusion"]
+    assert "layer4_visual_diff" in fusion["evidence"]["unmeasured"]
+    assert fusion["evidence"]["confidence_mass"] < 1.0

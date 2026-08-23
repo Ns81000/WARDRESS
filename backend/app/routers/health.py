@@ -193,6 +193,29 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
 
     last_dispatch_tick_at = await asyncio.to_thread(_dispatch_heartbeat)
 
+    # Fleet view of capture health: sites whose LATEST completed scan in
+    # the window ran with at least one degraded (capture/probe-failed)
+    # detection layer. A systematic capture failure otherwise completes
+    # scans that look perfectly clean — this is the visible trace.
+    sites_with_degraded_scans = 0
+    if db_up:
+        recent = (
+            await db.execute(
+                select(Scan.site_id, Scan.layer_scores)
+                .where(Scan.status == ScanStatus.completed, Scan.created_at >= day_ago)
+                .order_by(Scan.created_at.desc())
+                .limit(2000)
+            )
+        ).all()
+        latest_degraded: dict = {}
+        for site_id, layer_scores in recent:
+            if site_id in latest_degraded:
+                continue
+            latest_degraded[site_id] = any(
+                (entry or {}).get("degraded") for entry in (layer_scores or {}).values()
+            )
+        sites_with_degraded_scans = sum(1 for degraded in latest_degraded.values() if degraded)
+
     components: dict[str, HealthComponent] = {
         "database": HealthComponent(status="ok" if db_up else "down"),
         # Sync clients (redis-py, Celery control) run in threads so the
@@ -221,4 +244,5 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
         last_scan_at=last_scan_at,
         last_dispatch_tick_at=last_dispatch_tick_at,
         components=components,
+        sites_with_degraded_scans=sites_with_degraded_scans,
     )

@@ -37,14 +37,19 @@ Scoring model (graded, direction-aware):
 
 Failed variant fetches and bot-blocking (403/429, challenge pages) are
 common and legitimate: they are recorded as evidence, not scored as
-cloaking. Only readable 2xx responses are compared for divergence.
+cloaking. That is a deliberate distinction from probe-side degradation —
+when the rotation fetches never happened at all (no variants, or the
+desktop reference itself unusable) the layer reports a degraded result
+(score None) so fusion treats cloaking as UNKNOWN rather than as a
+measured "no divergence"; a target that refuses bot UAs is a stable,
+observed property, while a dead probe is our measurement being broken.
 
 Multi-region fetch via proxy nodes (§5 optional) is not configured in
 Phase 2 — the evidence notes it as unavailable.
 """
 
 from worker.detection.signatures import extract_visible_text
-from worker.detection.types import ScanPageData, UAVariant, layer_result
+from worker.detection.types import ScanPageData, UAVariant, degraded_result, layer_result
 
 REFERENCE_UA_KEY = "desktop_chrome"
 
@@ -121,21 +126,15 @@ def layer7_cloaking(baseline: object, current: ScanPageData) -> dict:
     rotated = [v for v in variants if v.ua_key != REFERENCE_UA_KEY]
 
     if reference is None or not rotated:
-        return layer_result(
-            0.0,
-            {
-                "note": "UA-rotation fetches unavailable for this scan (probe degraded)",
-                "variants": [{"ua": v.ua_key, "error": v.error} for v in variants],
-            },
+        return degraded_result(
+            "UA-rotation fetches unavailable for this scan (probe degraded)",
+            variants=[{"ua": v.ua_key, "error": v.error} for v in variants],
         )
     if not _usable(reference):
-        return layer_result(
-            0.0,
-            {
-                "note": "reference (desktop UA) raw fetch not usable — cannot compare",
-                "reference_status": reference.http_status,
-                "reference_error": reference.error,
-            },
+        return degraded_result(
+            "reference (desktop UA) raw fetch not usable — cannot compare",
+            reference_status=reference.http_status,
+            reference_error=reference.error,
         )
 
     reference_text = extract_visible_text(reference.html)

@@ -17,6 +17,7 @@ from app.models import (
     Baseline,
     Scan,
     ScanFinding,
+    ScanStatus,
     Site,
     SuppressionRule,
 )
@@ -56,6 +57,37 @@ async def _current_baseline(db: AsyncSession, site_id: uuid.UUID) -> Baseline | 
     return await db.scalar(
         select(Baseline).where(Baseline.site_id == site_id, Baseline.is_current.is_(True))
     )
+
+
+# How far back the consecutive-degradation walk looks. Bounded: this is an
+# investigation aid, not a forensic query.
+_DEGRADED_LOOKBACK = 10
+
+
+def _has_degraded_layer(layer_scores: dict | None) -> bool:
+    """True when any layer of this scan ran degraded (capture/probe side
+    failed). Historical rows predating the flag read as non-degraded —
+    their capture health simply cannot be reclassified."""
+    return any((entry or {}).get("degraded") for entry in (layer_scores or {}).values())
+
+
+async def _consecutive_degraded_scans(db: AsyncSession, site_id: uuid.UUID) -> int:
+    """Length of the leading run of completed scans (newest first) that
+    each had at least one degraded detection layer."""
+    scores = (
+        await db.scalars(
+            select(Scan.layer_scores)
+            .where(Scan.site_id == site_id, Scan.status == ScanStatus.completed)
+            .order_by(Scan.created_at.desc(), Scan.id.desc())
+            .limit(_DEGRADED_LOOKBACK)
+        )
+    ).all()
+    count = 0
+    for layer_scores in scores:
+        if not _has_degraded_layer(layer_scores):
+            break
+        count += 1
+    return count
 
 
 @router.post("", response_model=SiteDetailOut, status_code=status.HTTP_201_CREATED)
@@ -168,6 +200,7 @@ async def get_site(
         baseline_status=baseline.status if baseline else None,
         baseline_captured_at=baseline.captured_at if baseline else None,
         baseline_error=baseline.error if baseline else None,
+        consecutive_degraded_scans=await _consecutive_degraded_scans(db, site.id),
     )
 
 

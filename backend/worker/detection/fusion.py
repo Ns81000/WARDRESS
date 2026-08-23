@@ -29,6 +29,18 @@ visible inside the LLM escalation band even when the model's estimate
 alone would fall below it. Skipped layers contribute 0.0 with a `ran`
 mask in evidence so the UI can show which layers actually voted.
 
+Unmeasured channels (capture/probe degradation): a layer marked
+`degraded` did not measure anything — a lost screenshot artifact or a
+dead metadata probe must never read exactly like a measured-identical
+page. Known-evidence contributions stay exact; the intercept shrinks
+proportionally to the model's REMAINING evidence mass, which moves the
+score up toward uncertainty relative to the assume-zero reading. The
+uplift is capped (_UNMEASURED_RISK_CEIL) so capture-health problems can
+never, by themselves, cross the material-change bar / escalation floor
+(0.35) let alone the default flag threshold (0.5) — degradation lowers
+confidence honestly without manufacturing alarms. Floors compose
+afterwards exactly as before.
+
 Any failure (missing/corrupt artifact, malformed input) degrades to
 max(fallback sub-score, floors) with a note — detection never crashes
 because its classifier is unavailable.
@@ -173,6 +185,15 @@ _RULE_FLOORS: tuple[tuple[str, float, float, str], ...] = (
     ("layer3_link_audit", 0.55, 0.40, "new_sensitive_infrastructure"),
 )
 
+# Uncertainty ceiling for unmeasured channels: with every layer degraded
+# the intercept shrinkage alone would land a scan at ~0.5 — above the
+# default flag threshold, i.e. capture failures manufacturing alerts. The
+# adjustment therefore saturates here, safely below the material-change
+# bar / escalation floor (both 0.35) while still lifting a degraded scan
+# far above the measured-clean baseline (~0.09). Coherence with those
+# bars is pinned by tests (test_phase24_degradation_signaling.py).
+_UNMEASURED_RISK_CEIL = 0.30
+
 
 def _rule_floor(features_by_key: dict[str, float]) -> tuple[float, list[dict]]:
     """Strongest floor whose trigger fired, plus per-rule evidence.
@@ -206,7 +227,12 @@ def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], d
     """Flatten per-layer results into the fixed feature order. A skipped
     layer contributes 0.0 (its gate already established 'no change') and
     is marked ran=False. A present-but-malformed score also contributes 0.0
-    (see _coerce_score) so fusion stays robust to a misbehaving layer."""
+    (see _coerce_score) so fusion stays robust to a misbehaving layer.
+
+    NOTE: the 0.0 here is only the FEATURE VALUE. Whether that 0.0 is
+    trusted evidence (a structural gate proof) or an unmeasured channel
+    (`degraded` flag / result absent entirely) is decided in layer9_fusion,
+    which shrinks the intercept over degraded channels' missing mass."""
     features: list[float] = []
     ran: dict[str, bool] = {}
     for key in FEATURE_KEYS:
@@ -218,6 +244,19 @@ def build_feature_vector(layer_results: dict[str, dict]) -> tuple[list[float], d
             features.append(_coerce_score(result.get("score")))
             ran[key] = True
     return features, ran
+
+
+def _unmeasured_keys(layer_results: dict[str, dict]) -> list[str]:
+    """Feature keys whose channels hold NO measurement: the result is
+    missing entirely, or it is a degraded_result (capture/probe failure).
+    Plain skip_result entries are deliberately excluded — they are proofs
+    of zero (e.g. the identical-hash gate), not absences of measurement."""
+    unmeasured = []
+    for key in FEATURE_KEYS:
+        result = layer_results.get(key)
+        if result is None or result.get("degraded"):
+            unmeasured.append(key)
+    return unmeasured
 
 
 def layer9_fusion(layer_results: dict[str, dict]) -> dict:
@@ -233,10 +272,32 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
         features, ran = build_feature_vector(layer_results)
         floor_value, floor_rules = _rule_floor(dict(zip(FEATURE_KEYS, features, strict=True)))
         model = get_fusion_model()
-        z = math.fsum(c * v for c, v in zip(model.coefficients, features, strict=True)) + (
-            model.intercept
+        unmeasured = _unmeasured_keys(layer_results)
+        known_mask = [key not in unmeasured for key in FEATURE_KEYS]
+        z_known = math.fsum(
+            c * v
+            for c, v, known in zip(model.coefficients, features, known_mask, strict=True)
+            if known
         )
-        proba = _sigmoid(z)
+        if unmeasured:
+            # Unknown channels shrink the intercept toward the prior in
+            # proportion to the evidence mass that actually exists — the
+            # score moves up toward uncertainty relative to reading the
+            # dark channels as trusted zeros — but never past
+            # _UNMEASURED_RISK_CEIL (see constant comment).
+            w_total = math.fsum(model.coefficients)
+            w_known = math.fsum(
+                c for c, known in zip(model.coefficients, known_mask, strict=True) if known
+            )
+            ratio = (w_known / w_total) if w_total > 0.0 else 1.0
+            proba_adjusted = _sigmoid(z_known + model.intercept * ratio)
+            proba_zero_assumed = _sigmoid(z_known + model.intercept)
+            proba = min(proba_adjusted, max(proba_zero_assumed, _UNMEASURED_RISK_CEIL))
+            capped = proba < proba_adjusted
+        else:
+            ratio = 1.0
+            proba = _sigmoid(z_known + model.intercept)
+            capped = False
         score = max(proba, floor_value)
         contributions = {
             key: round(coef * val, 4)
@@ -256,10 +317,17 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
             "layers_ran": ran,
             "contributions": contributions,
             "intercept": round(model.intercept, 4),
+            # Share of the model's evidence mass that actually exists this
+            # scan (1.0 = every channel measured or proof-of-zero).
+            "confidence_mass": round(ratio, 4),
             "upgrade_path": (
                 "retrain on labeled scan history; gradient boosting once volume allows (§5)"
             ),
         }
+        if unmeasured:
+            evidence["unmeasured"] = unmeasured
+            if capped:
+                evidence["uncertainty_capped"] = True
         if floor_rules:
             evidence["rule_floor"] = {
                 "applied": floor_rules,
@@ -273,12 +341,15 @@ def layer9_fusion(layer_results: dict[str, dict]) -> dict:
         # when the fit itself is unavailable. zip non-strict: features may
         # be empty/partial if the vector build itself failed.
         floor_value, floor_rules = _rule_floor(dict(zip(FEATURE_KEYS, features, strict=False)))
+        unmeasured = _unmeasured_keys(layer_results)
         evidence = {
             "model": "fallback_max (fusion model unavailable)",
             "error": str(exc)[:200],
             "features": {k: round(v, 4) for k, v in zip(FEATURE_KEYS, features, strict=False)},
             "layers_ran": ran,
         }
+        if unmeasured:
+            evidence["unmeasured"] = unmeasured
         if floor_rules:
             evidence["rule_floor"] = {"applied": floor_rules}
         return layer_result(

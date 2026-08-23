@@ -135,6 +135,23 @@ async def _capture_baseline(baseline_id: uuid.UUID) -> str:
         return "ready"
 
 
+def _summarize_layer_scores(results: dict[str, dict]) -> dict[str, dict]:
+    """Compact per-layer summary persisted on the scan row (full evidence
+    lives in scan_findings rows): score, whether the layer ran at all,
+    and — for skipped layers — whether it was structurally gated (proof of
+    zero) or DEGRADED (capture/probe failure; the channel is dark). The
+    degraded flag is what the site-detail and health aggregates key on to
+    surface systematic capture failures."""
+    return {
+        k: {
+            "score": r.get("score"),
+            "skipped": bool(r.get("skipped")),
+            "degraded": bool(r.get("degraded")),
+        }
+        for k, r in results.items()
+    }
+
+
 def _baseline_page_data(baseline: Baseline) -> PageData:
     """Materialize the baseline side of the comparison from stored rows +
     artifacts. Missing artifacts degrade (empty html/screenshot) — the
@@ -271,10 +288,7 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
                 db,
                 site_url=site.url,
                 risk=risk,
-                layer_scores={
-                    k: {"score": r.get("score"), "skipped": bool(r.get("skipped"))}
-                    for k, r in results.items()
-                },
+                layer_scores=_summarize_layer_scores(results),
                 new_text=_escalation_new_text(baseline_page, current_page),
             )
             layer8 = results.get("layer8_semantics")
@@ -287,10 +301,7 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         scan.html_path = html_rel
         scan.screenshot_path = shot_rel
         # Compact summary for the scan table; full evidence in findings.
-        scan.layer_scores = {
-            k: {"score": r.get("score"), "skipped": bool(r.get("skipped"))}
-            for k, r in results.items()
-        }
+        scan.layer_scores = _summarize_layer_scores(results)
         scan.risk_score = risk
         if flagged:
             scan.verdict = ScanVerdict.flagged

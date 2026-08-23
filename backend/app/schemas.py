@@ -109,6 +109,10 @@ class SiteDetailOut(SiteOut):
     baseline_status: BaselineStatus | None = None
     baseline_captured_at: datetime | None = None
     baseline_error: str | None = None
+    # Consecutive completed scans (newest first, lookback window) whose
+    # detection ran with at least one degraded (capture/probe-failed)
+    # layer. Populated on GET /sites/{id}; None where not computed.
+    consecutive_degraded_scans: int | None = None
 
 
 # --- Baselines / scans ---
@@ -919,3 +923,7 @@ class HealthDetails(BaseModel):
     last_scan_at: datetime | None
     last_dispatch_tick_at: datetime | None
     components: dict[str, HealthComponent]
+    # Sites whose LATEST completed scan in the last 24h ran with at least
+    # one degraded (capture/probe-failed) detection layer — the fleet-wide
+    # view of systematic capture failures.
+    sites_with_degraded_scans: int = 0

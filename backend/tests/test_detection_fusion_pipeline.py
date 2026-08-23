@@ -65,9 +65,13 @@ def test_layer6_no_changes() -> None:
 
 
 def test_layer6_no_metadata_at_all() -> None:
+    # Phase 24: a probe that captured nothing comparable is a degraded
+    # measurement, not a trusted zero (https final URLs mean absent TLS
+    # data cannot be explained away as a plain-HTTP site).
     result = layer6_security_metadata(page(), page())
-    assert _score(result) == 0.0
-    assert "note" in result["evidence"]["tls"]
+    assert result["score"] is None
+    assert result["skipped"] is True
+    assert result["degraded"] is True
 
 
 def test_layer6_cert_reissue_same_issuer_scores_low() -> None:
@@ -116,8 +120,13 @@ def test_layer6_robots_txt_changed() -> None:
 
 def test_layer6_degraded_header_probe_not_a_downgrade() -> None:
     """A scan whose header probe failed (empty map) must not report every
-    baseline security header as removed."""
-    result = layer6_security_metadata(page(headers=HEADERS_SECURE), page(headers={}))
+    baseline security header as removed. The TLS channel is healthy here,
+    so the layer still measures what it can; a FULLY dark probe degrades
+    the whole layer instead (test_phase24_degradation_signaling.py)."""
+    result = layer6_security_metadata(
+        page(tls=dict(TLS_A), headers=HEADERS_SECURE),
+        page(tls=dict(TLS_A), headers={}),
+    )
     assert result["evidence"]["headers"].get("security_headers_removed") is None
     assert "note" in result["evidence"]["headers"]
     assert _score(result) == 0.0
@@ -198,6 +207,9 @@ def test_layer7_bot_blocking_is_not_cloaking() -> None:
 
 
 def test_layer7_variant_fetch_error_degrades() -> None:
+    """One failed crawler fetch beside a healthy reference: the target
+    refused/failed, which is an observation (not cloaking), not a broken
+    probe — the layer still measures and scores 0.0."""
     current = scan_page(
         ua_variants=[
             _variant("desktop_chrome", HTML),
@@ -206,12 +218,17 @@ def test_layer7_variant_fetch_error_degrades() -> None:
     )
     result = layer7_cloaking(page(), current)
     assert _score(result) == 0.0
+    assert not result.get("degraded")
 
 
 def test_layer7_no_variants_at_all() -> None:
+    # Phase 24: no rotation fetches at all = probe-side degradation, not a
+    # measured "no divergence".
     result = layer7_cloaking(page(), scan_page())
-    assert _score(result) == 0.0
-    assert "note" in result["evidence"]
+    assert result["score"] is None
+    assert result["skipped"] is True
+    assert result["degraded"] is True
+    assert "probe degraded" in result["evidence"]["reason"]
 
 
 def test_layer7_unusable_reference_degrades() -> None:
@@ -222,8 +239,10 @@ def test_layer7_unusable_reference_degrades() -> None:
         ]
     )
     result = layer7_cloaking(page(), current)
-    assert _score(result) == 0.0
-    assert "reference" in result["evidence"]["note"]
+    assert result["score"] is None
+    assert result["skipped"] is True
+    assert result["degraded"] is True
+    assert "reference" in result["evidence"]["reason"]
 
 
 def test_layer7_mild_dynamic_variation_below_knee() -> None:
@@ -456,21 +475,55 @@ def test_pipeline_identical_hash_gates_content_layers() -> None:
     ):
         assert results[gated]["skipped"] is True
         assert "gated by layer 1" in results[gated]["evidence"]["reason"]
+        # A hash-gate skip is a PROOF of zero, not a degradation.
+        assert not results[gated].get("degraded")
     # The visual layer runs even on an identical hash: the serialized DOM
     # says nothing about externally-referenced assets or pixels (see
-    # test_pipeline_visual_gate.py). No screenshots here -> ran-with-note.
+    # test_pipeline_visual_gate.py). No screenshots here -> degraded
+    # (capture-side failure), never a silent measured-zero.
     visual = results["layer4_visual_diff"]
-    assert not visual.get("skipped")
-    assert visual["score"] == 0.0
-    # Metadata + cloaking still ran.
-    assert "skipped" not in results["layer6_security_metadata"]
-    assert "skipped" not in results["layer7_cloaking"]
+    assert visual["skipped"] is True
+    assert visual["degraded"] is True
+    assert "screenshot missing or unreadable" in visual["evidence"]["reason"]
+    # Metadata + cloaking: these bare fixtures carry no probe data, so the
+    # channels are dark too — degraded, not trusted zeros.
+    for key in ("layer6_security_metadata", "layer7_cloaking"):
+        assert results[key]["degraded"] is True
+        assert results[key]["score"] is None
     assert results["layer9_fusion"]["score"] is not None
+
+
+def _png_bytes(color=(250, 250, 250)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), color).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_pipeline_changed_hash_runs_all_layers() -> None:
     changed = HTML.replace("Acme", "HACKED BY XYZ")
-    results = run_detection(page(), scan_page(changed))
+    shot = _png_bytes()
+    healthy = dict(
+        tls=dict(TLS_A),
+        headers=dict(HEADERS_SECURE),
+        robots_txt="User-agent: *",
+        screenshot=shot,
+    )
+    variants = [
+        UAVariant(
+            ua_key="desktop_chrome", html=HTML, http_status=200, content_hash=content_sha256(HTML)
+        ),
+        UAVariant(
+            ua_key="googlebot", html=HTML, http_status=200, content_hash=content_sha256(HTML)
+        ),
+        UAVariant(
+            ua_key="mobile_safari", html=HTML, http_status=200, content_hash=content_sha256(HTML)
+        ),
+    ]
+    results = run_detection(page(**healthy), scan_page(changed, ua_variants=variants, **healthy))
     for _, key in pipeline_mod.LAYERS:
         assert key in results
         if key != "layer9_fusion":

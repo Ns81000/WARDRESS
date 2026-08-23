@@ -172,8 +172,15 @@ def test_layer4_completely_different_screenshots() -> None:
 
 
 def test_layer4_missing_screenshot_degrades() -> None:
+    # Phase 24: a lost/unreadable screenshot is a capture failure, not a
+    # measurement — the layer reports degraded (score None) so fusion
+    # treats the visual channel as UNKNOWN instead of a trusted zero
+    # (formerly this returned 0.0-with-note, indistinguishable from
+    # pixel-identical evidence downstream).
     result = layer4_visual_diff(page(screenshot=b""), page(screenshot=_png_bytes((0, 0, 0))))
-    assert _score(result) == 0.0
+    assert result["score"] is None
+    assert result["skipped"] is True
+    assert result["degraded"] is True
     assert result["evidence"]["baseline_screenshot_ok"] is False
 
 
@@ -181,8 +188,10 @@ def test_layer4_corrupt_png_degrades() -> None:
     result = layer4_visual_diff(
         page(screenshot=b"not a png at all"), page(screenshot=_png_bytes((0, 0, 0)))
     )
-    assert _score(result) == 0.0
-    assert "note" in result["evidence"]
+    assert result["score"] is None
+    assert result["skipped"] is True
+    assert result["degraded"] is True
+    assert "screenshot missing or unreadable" in result["evidence"]["reason"]
 
 
 def test_layer4_different_heights_compared() -> None:

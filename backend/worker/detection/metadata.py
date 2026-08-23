@@ -12,10 +12,15 @@ current scan against what the baseline stored:
 - robots.txt content diff (defacers sometimes replace or delete it).
 
 Missing probe data (site was HTTP-only, probe failed) is evidence, not
-an error — the layer scores what it can see.
+an error. A genuinely HTTP-only site has no TLS to compare — that is a
+measured property, scored as stable-zero. But when the probe captured
+nothing comparable at all (no TLS either side on a non-plain-HTTP pair,
+and no header map on one side, and no robots signal), the layer reports
+a degraded result so fusion treats metadata as UNKNOWN rather than as a
+measured zero.
 """
 
-from worker.detection.types import PageData, layer_result
+from worker.detection.types import PageData, degraded_result, layer_result
 
 SECURITY_HEADERS = (
     "content-security-policy",
@@ -121,6 +126,26 @@ def _robots_diff(baseline_robots: str | None, current_robots: str | None) -> tup
 
 
 def layer6_security_metadata(baseline: PageData, current: PageData) -> dict:
+    # A plain-HTTP site (both final URLs http://) genuinely has no TLS:
+    # absent cert data is the measured truth, not a broken probe. Any
+    # other scheme — or an unknown one (legacy baselines) — leaves TLS
+    # unmeasurable when both sides lack cert data.
+    b_http = (baseline.final_url or "").lower().startswith("http://")
+    c_http = (current.final_url or "").lower().startswith("http://")
+    tls_unmeasured = not baseline.tls and not current.tls and not (b_http and c_http)
+    headers_unmeasured = not baseline.headers or not current.headers
+    robots_signal = (baseline.robots_txt or "") != (current.robots_txt or "")
+
+    if tls_unmeasured and headers_unmeasured and not robots_signal:
+        # Every channel is dark: nothing here was measured. A real robots
+        # change still rescues the layer below — it carries signal even
+        # when TLS/headers could not be captured.
+        return degraded_result(
+            "security-metadata probe captured no comparable data on either side",
+            tls_available=bool(baseline.tls or current.tls),
+            headers_available=bool(baseline.headers and current.headers),
+        )
+
     tls_score, tls_ev = _tls_diff(baseline.tls, current.tls)
     hdr_score, hdr_ev = _header_diff(
         _norm_headers(baseline.headers), _norm_headers(current.headers)
