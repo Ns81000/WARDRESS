@@ -71,6 +71,11 @@ class FixedWindowLimiter:
 
 _per_ip: FixedWindowLimiter | None = None
 _per_user: FixedWindowLimiter | None = None
+# Login gets its own, much tighter per-IP budget than the general API
+# surface: password guessing and spraying should hit a wall long before
+# 300 requests/min. Keyed separately from the middleware limiter so
+# dashboard traffic never consumes the login budget (and vice versa).
+_login_per_ip: FixedWindowLimiter | None = None
 
 
 def _limiters() -> tuple[FixedWindowLimiter, FixedWindowLimiter]:
@@ -84,9 +89,10 @@ def _limiters() -> tuple[FixedWindowLimiter, FixedWindowLimiter]:
 
 def reset_limiters() -> None:
     """Test hook: forget accumulated state and rebuild from current env."""
-    global _per_ip, _per_user
+    global _per_ip, _per_user, _login_per_ip
     _per_ip = None
     _per_user = None
+    _login_per_ip = None
 
 
 def client_ip(request: Request) -> str:
@@ -113,6 +119,21 @@ def enforce_ip_rate_limit(request: Request) -> None:
     allowed, retry_after = per_ip.check(f"ip:{client_ip(request)}")
     if not allowed:
         _raise_429(retry_after)
+
+
+def enforce_login_rate_limit(request: Request) -> None:
+    """Tight per-IP budget for POST /api/auth/login (see _login_per_ip)."""
+    global _login_per_ip
+    if _login_per_ip is None:
+        s = get_settings()
+        _login_per_ip = FixedWindowLimiter(s.login_rate_limit_per_ip, s.rate_limit_window_seconds)
+    allowed, retry_after = _login_per_ip.check(f"login-ip:{client_ip(request)}")
+    if not allowed:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many login attempts — slow down and retry shortly",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def enforce_user_rate_limit(request: Request, user_id: str) -> None:

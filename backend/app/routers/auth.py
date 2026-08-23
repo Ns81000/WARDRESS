@@ -9,8 +9,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from sqlalchemy import select, update
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import record_audit
@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import CurrentUser
 from app.models import RefreshToken, User, ensure_utc
+from app.ratelimit import enforce_login_rate_limit
 from app.schemas import LoginRequest, TokenResponse, UserOut
 from app.security import (
     create_access_token,
@@ -37,6 +38,17 @@ REFRESH_COOKIE = "wardress_refresh"
 # Constant-cost dummy hash so login timing does not reveal whether an
 # email exists (verify runs either way).
 _DUMMY_HASH = hash_password("wardress-timing-equalizer")
+
+# --- Brute-force defense (per-account, DB-persisted) ---
+# Consecutive failed attempts are counted on the user row (survives
+# restarts, unlike the in-memory IP windows). Crossing the threshold locks
+# the account for a window that doubles per additional failure, capped.
+# While locked, even a CORRECT password is denied: answering 200 mid-lock
+# would hand a guessing attacker an instant oracle the moment they hit the
+# right password. Every successful login resets counter and lock.
+_LOCKOUT_THRESHOLD = 5
+_LOCKOUT_BASE_SECONDS = 60
+_LOCKOUT_CAP_SECONDS = 900
 
 
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
@@ -74,23 +86,104 @@ async def _issue_refresh_token(db: AsyncSession, user: User) -> str:
     return raw
 
 
+async def _register_failed_attempt(db: AsyncSession, user: User, reason: str) -> None:
+    """Count one failed attempt against `user` atomically, lock if due,
+    audit + log the failure, and commit. The increment is a single SQL
+    expression so N concurrent failures produce an exact count."""
+    count = await db.scalar(
+        update(User)
+        .where(User.id == user.id)
+        .values(failed_login_attempts=User.failed_login_attempts + 1)
+        .returning(User.failed_login_attempts)
+    )
+    lock_engaged = False
+    assert count is not None  # the row exists; narrowing for arithmetic
+    if count >= _LOCKOUT_THRESHOLD:
+        exponent = min(count - _LOCKOUT_THRESHOLD, 16)  # bound the power math
+        duration = min(_LOCKOUT_BASE_SECONDS * (2**exponent), _LOCKOUT_CAP_SECONDS)
+        until = datetime.now(UTC) + timedelta(seconds=duration)
+        # Two racers computing locks concurrently: only ever extend a
+        # committed lock, never shorten it.
+        await db.execute(
+            update(User)
+            .where(
+                User.id == user.id,
+                or_(User.locked_until.is_(None), User.locked_until < until),
+            )
+            .values(locked_until=until)
+        )
+        lock_engaged = True
+    record_audit(
+        db,
+        actor=None,
+        action="auth.login_failed",
+        target_type="user",
+        target_id=user.id,
+        target_label=user.email,
+        after={"reason": reason, "failed_attempts": int(count), "lockout_engaged": lock_engaged},
+    )
+    logger.warning(
+        "Failed login for %s (%s, attempt %d%s)",
+        user.email,
+        reason,
+        count,
+        " — lockout engaged" if lock_engaged else "",
+    )
+    await db.commit()
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
     response: Response,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
-    user = await db.scalar(select(User).where(User.email == body.email.strip().lower()))
+    enforce_login_rate_limit(request)
+    email = body.email.strip().lower()
+    user = await db.scalar(select(User).where(User.email == email))
     if user is None:
         verify_password(_DUMMY_HASH, body.password)  # equalize timing
+        record_audit(
+            db,
+            actor=None,
+            action="auth.login_failed",
+            target_type="user",
+            target_id=None,
+            target_label=email,
+            after={"reason": "unknown_account"},
+        )
+        logger.warning("Failed login for unregistered address %s", email)
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
-    if not verify_password(user.password_hash, body.password) or not user.is_active:
+
+    locked_until = ensure_utc(user.locked_until) if user.locked_until else None
+    now = datetime.now(UTC)
+    if locked_until is not None and locked_until > now:
+        # Fast rejection while locked: no password verification, no audit
+        # row (the tripping attempt already recorded why), no counter
+        # change — the lock simply runs out. Correct passwords are denied
+        # too (no mid-lock oracle).
+        remaining = int((locked_until - now).total_seconds()) + 1
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many failed login attempts — try again shortly",
+            headers={"Retry-After": str(max(1, remaining))},
+        )
+
+    password_ok = verify_password(user.password_hash, body.password)
+    if not password_ok or not user.is_active:
+        reason = "inactive_account" if password_ok else "invalid_credentials"
+        await _register_failed_attempt(db, user, reason)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
 
     # Transparently upgrade the stored hash if Argon2 parameters have moved
     # on since this password was last set (only on a verified-correct login).
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(body.password)
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
 
     raw_refresh = await _issue_refresh_token(db, user)
     record_audit(

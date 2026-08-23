@@ -30,6 +30,7 @@ os.environ.setdefault(
 # unrelated tests). test_phase5_ratelimit_ssrf.py sets its own limits explicitly.
 os.environ.setdefault("RATE_LIMIT_PER_IP", "0")
 os.environ.setdefault("RATE_LIMIT_PER_USER", "0")
+os.environ.setdefault("LOGIN_RATE_LIMIT_PER_IP", "0")
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

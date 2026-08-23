@@ -264,7 +264,10 @@ class TestUrlUniqueness:
                 )
                 return result.scalar_one_or_none()
 
-        alembic("downgrade", "-1")
+        # Anchor to the repair revision itself (not "-1" from head): later
+        # migrations may be appended after i3j4k5l6m7n8, and the test needs
+        # the schema as it was BEFORE the dedupe/unique-index revision.
+        alembic("downgrade", "i3j4k5l6m7n8-1")
 
         try:
             await insert_site(

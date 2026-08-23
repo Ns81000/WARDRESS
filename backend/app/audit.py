@@ -47,6 +47,12 @@ _MAX_KEYS = 40
 # Bound recursion so a pathologically nested snapshot can't blow the stack
 # or the audit-write budget. Beyond this depth we stringify+cap the branch.
 _MAX_DEPTH = 6
+# Matches AuditLog.target_label's VARCHAR(256): a label longer than the
+# column would abort the caller's whole commit (Postgres enforces widths,
+# SQLite does not — the overflow shipped invisible to tests). Callers pass
+# composite labels ("site.name: hook.name" can reach 402 chars), so the cap
+# lives here where every writer is covered structurally.
+_MAX_LABEL_CHARS = 256
 
 
 def _key_is_sensitive(key: Any) -> bool:
@@ -89,6 +95,18 @@ def _cap_text(text: str) -> str:
     return text[:_MAX_VALUE_CHARS] + ("…" if len(text) > _MAX_VALUE_CHARS else "")
 
 
+def _cap_label(text: str) -> str:
+    """Fit a target label into the column width, marking the cut.
+
+    The ellipsis keeps total length <= _MAX_LABEL_CHARS (unlike _cap_text,
+    whose output may exceed its cap — safe there only because snapshots go
+    into unbounded JSONB).
+    """
+    if len(text) <= _MAX_LABEL_CHARS:
+        return text
+    return text[: _MAX_LABEL_CHARS - 1] + "…"
+
+
 def _redact(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
     """Defensive scrub: drop sensitive keys (at any nesting depth), strip
     URL userinfo, stringify+cap odd values, bounded in depth/breadth."""
@@ -126,7 +144,7 @@ def record_audit(
                 action=action,
                 target_type=target_type,
                 target_id=str(target_id) if target_id is not None else None,
-                target_label=(target_label or None),
+                target_label=_cap_label(target_label) if target_label else None,
                 before_json=_redact(before),
                 after_json=_redact(after),
             )

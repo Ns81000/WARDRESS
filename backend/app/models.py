@@ -172,6 +172,15 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(_enum(UserRole, "user_role"), default=UserRole.admin)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Brute-force defense (login handler): consecutive failed password
+    # attempts and, past the lockout threshold, the moment the account
+    # unlocks again. DB-backed on purpose so the lockout survives restarts;
+    # reset to zero/NULL by every successful login. Escalating durations are
+    # computed in app/routers/auth.py from these persisted facts.
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

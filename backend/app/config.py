@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     rate_limit_per_ip: int = 300
     rate_limit_per_user: int = 240
     rate_limit_window_seconds: int = 60
+    # Dedicated per-IP budget for POST /api/auth/login, on top of the
+    # general window above (a login request charges both). Much tighter:
+    # guessing/spraying must wall off long before dashboard traffic does.
+    # 0 disables (unit tests).
+    login_rate_limit_per_ip: int = 30
     max_request_body_bytes: int = 1024 * 1024
     # Honor X-Forwarded-For for the per-IP limit only when explicitly
     # fronted by a trusted reverse proxy. Default off: the socket peer is
