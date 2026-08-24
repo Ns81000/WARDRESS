@@ -46,6 +46,10 @@ services:
       # the dashboard (Settings → AI providers) and stored in the DB. See §8.
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Emergency recovery knob consumed by `python -m app.seed_admin` (see
+      # docs/user-management.mdx). Keep false in normal operation; the only
+      # reader is the manually-invoked seeding command.
+      ADMIN_RESET_PASSWORD: ${ADMIN_RESET_PASSWORD:-false}
       # Phase 5 hardening knobs (API-only; workers never see requests).
       RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-300}
       RATE_LIMIT_PER_USER: ${RATE_LIMIT_PER_USER:-240}

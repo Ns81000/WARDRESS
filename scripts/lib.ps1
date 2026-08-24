@@ -53,6 +53,90 @@ function Invoke-Quiet([scriptblock]$Block) {
     finally { $ErrorActionPreference = $prev }
 }
 
+function Invoke-NativeWithDeadline {
+    # Run a native command with a hard wall-clock deadline. Returns:
+    #   $true  - exited 0 within the deadline
+    #   $false - exited non-zero within the deadline
+    #   $null  - did NOT exit within the deadline (the CLI is wedged)
+    # Exists for the Docker engine-reachability probes at the top of every
+    # entry-point script: a wedged Docker CLI (stuck daemon pipe, hung WSL2
+    # backend, credential-helper stall) otherwise blocks the scripts
+    # forever with no output and no error. Output is deliberately NOT
+    # captured - it flows to the console, which also rules out any
+    # pipe-buffer deadlock while we wait.
+    #
+    # PS 5.1 compatible by design: no ArgumentList (build .Arguments with
+    # manual quoting), no ternary/null-coalescing operators.
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 30
+    )
+    $resolved = Get-Command $FilePath -ErrorAction SilentlyContinue
+    if (-not $resolved) { return $false }
+    $exePath = $resolved.Source
+
+    function Quote-Arg([string]$Value) {
+        if ($Value -match '[\s"]') { return '"' + ($Value -replace '"', '\"') + '"' }
+        return $Value
+    }
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $ext = [System.IO.Path]::GetExtension($exePath).ToLowerInvariant()
+    if ($ext -eq ".cmd" -or $ext -eq ".bat") {
+        # Batch shims must go through cmd.exe (CreateProcess cannot exec
+        # them directly); /d /s /c "..." quotes the whole command safely.
+        $inner = @(Quote-Arg $exePath)
+        foreach ($a in $ArgumentList) { $inner += @(Quote-Arg $a) }
+        $psi.FileName = $env:ComSpec
+        $psi.Arguments = "/d /s /c `"$($inner -join ' ')`""
+    }
+    else {
+        $parts = @()
+        foreach ($a in $ArgumentList) { $parts += @(Quote-Arg $a) }
+        $psi.FileName = $exePath
+        $psi.Arguments = ($parts -join ' ')
+    }
+    $psi.UseShellExecute = $false
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    if (-not $proc.Start()) { return $false }
+    $null = $proc.Handle   # cache immediately so ExitCode is reliable later
+
+    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        # Deadline blown: kill the whole tree (docker.exe can spawn plugin
+        # children that would otherwise outlive us holding resources).
+        # NOTE: do not name anything $IsWindows here - that collides with
+        # PowerShell 7's read-only automatic variable and any assignment
+        # to it throws (silently skipping the kill if caught upstream).
+        try {
+            if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+                $prevEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    & taskkill /PID $proc.Id /T /F *> $null
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host ("    Could not terminate the wedged CLI process tree (pid " +
+                            "$($proc.Id), taskkill exit $LASTEXITCODE) - it may keep running.") `
+                            -ForegroundColor Yellow
+                    }
+                } finally { $ErrorActionPreference = $prevEap }
+            }
+            else {
+                $proc.Kill()
+            }
+        }
+        catch {
+            Write-Host ("    Could not terminate the wedged CLI process tree (pid $($proc.Id)): " +
+                "$($_.Exception.Message)") -ForegroundColor Yellow
+        }
+        try { [void]$proc.WaitForExit(3000) } catch { }
+        return $null
+    }
+    return ($proc.ExitCode -eq 0)
+}
+
 function Invoke-Compose([string[]]$ComposeArgs, [string]$FailureHint) {
     Write-Host "    Running: docker compose $($ComposeArgs -join ' ')" -ForegroundColor DarkGray
     & docker compose @ComposeArgs

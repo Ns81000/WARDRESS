@@ -14,6 +14,9 @@ Set-StrictMode -Version Latest
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
+# Shared helpers (Invoke-NativeWithDeadline for the bounded Docker probe).
+. (Join-Path $PSScriptRoot "lib.ps1")
+
 if (-not $OutputPath) {
     $OutputPath = Join-Path $RepoRoot "diagnostics_$timestamp.txt"
 }
@@ -69,19 +72,25 @@ $output += ""
 
 $output += Write-Section "DOCKER STATUS"
 
-try {
-    $dockerInfo = docker info 2>&1
-    if ($LASTEXITCODE -eq 0) {
+Write-Host "    Probing Docker engine (30 second deadline)..." -ForegroundColor Gray
+$infoResult = Invoke-NativeWithDeadline "docker" @("info") 30
+if ($null -eq $infoResult) {
+    $output += "Docker CLI did not respond within 30 seconds - the Docker Desktop backend appears wedged."
+} elseif (-not $infoResult) {
+    $output += "Docker engine is not running"
+} else {
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $dockerInfo = docker info 2>&1
+        $ErrorActionPreference = $prev
         $output += "Docker engine is running"
         $output += ""
         $output += "Docker Info:"
         $output += $dockerInfo
-    } else {
-        $output += "Docker engine is not running"
-        $output += $dockerInfo
+    } catch {
+        $output += "Error collecting Docker info: $($_.Exception.Message)"
     }
-} catch {
-    $output += "Error checking Docker: $($_.Exception.Message)"
 }
 
 $output += ""

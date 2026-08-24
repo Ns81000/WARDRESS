@@ -5,11 +5,12 @@
 # What it does, in order:
 #   1. Verifies Docker Desktop is running.
 #   2. Backs up everything recoverable to a timestamped folder (unless
-#      -SkipBackup): your .env, a logical Postgres dump (pg_dump), and the
-#      scan-artifacts volume (tar.gz). If any attempted part of the backup
-#      fails, the script STOPS before anything is deleted - re-run with
-#      -AllowIncompleteBackup to proceed anyway (the summary and exit code
-#      will report the incomplete backup).
+#      -SkipBackup): your .env, a logical Postgres dump (pg_dump, captured
+#      byte-exact via docker compose cp - never re-encoded by a host
+#      shell), and the scan-artifacts volume (tar.gz). If any attempted
+#      part of the backup fails, the script STOPS before anything is
+#      deleted - re-run with -AllowIncompleteBackup to proceed anyway (the
+#      summary and exit code will report the incomplete backup).
 #   3. Removes the whole Wardress footprint from Docker: containers,
 #      networks, named volumes (db-data, redis-data, scan-artifacts,
 #      ollama-data), and the locally-built images.
@@ -67,7 +68,12 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Fail ("Docker is not installed (the 'docker' command was not found). " +
         "There is nothing for this script to remove.")
 }
-if (-not (Invoke-Quiet { docker info })) {
+$info = Invoke-NativeWithDeadline "docker" @("info") 30
+if ($null -eq $info) {
+    Fail ("The Docker CLI did not respond within 30 seconds - the Docker Desktop backend appears wedged. " +
+        "Restart Docker Desktop, wait for 'Engine running', then re-run this script.")
+}
+if (-not $info) {
     Fail ("Docker Desktop is installed but the engine is not running. " +
         "Start Docker Desktop, wait for 'Engine running', then re-run this script.")
 }
@@ -164,23 +170,65 @@ if (-not $SkipBackup) {
         
         if ($ready) {
             $dumpFile = Join-Path $backupDir "database.sql"
-            $prev = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            
+            # The dump is produced INSIDE the container and copied out with
+            # `docker compose cp`, so no host shell ever touches the byte
+            # stream: redirecting native output through PowerShell's text
+            # layer re-encodes it (UTF-16LE + BOM under Windows PowerShell
+            # 5.1, with content loss whenever the console codepage is not
+            # UTF-8), which silently corrupts every non-ASCII character.
+            $containerDump = "/tmp/wardress-uninstall-dump.sql"
+
             Write-Progress-Inline "Dumping database..."
-            docker compose exec -T db pg_dump -U $pgUser --clean --if-exists $pgDb `
-                > $dumpFile 2>$null
-            $dumpOk = ($LASTEXITCODE -eq 0)
-            $ErrorActionPreference = $prev
-            
-            if ($dumpOk -and (Test-Path $dumpFile) -and (Get-Item $dumpFile).Length -gt 0) {
-                $sizeMB = [math]::Round((Get-Item $dumpFile).Length / 1MB, 2)
-                Write-Progress-Done "Saved database.sql ($sizeMB MB)"
+            $dumpOk = Invoke-Quiet {
+                docker compose exec -T db sh -c 'pg_dump -U "$1" --clean --if-exists "$2" > "$3"' sh $pgUser $pgDb $containerDump
+            }
+            if ($dumpOk) {
+                $dumpOk = Invoke-Quiet { docker compose cp "db:$containerDump" "$dumpFile" }
+                if (-not $dumpOk) {
+                    Write-Host "    Database dump could not be copied out of the container" -ForegroundColor Yellow
+                    $missing.Add("database.sql (database dump could not be copied out)")
+                }
             }
             else {
                 Write-Host "    Database dump failed - database may already be gone" -ForegroundColor Yellow
                 $missing.Add("database.sql (pg_dump failed)")
-                if (Test-Path $dumpFile) { Remove-Item $dumpFile -ErrorAction SilentlyContinue }
+            }
+            # Best-effort cleanup of the container-side copy either way.
+            [void](Invoke-Quiet { docker compose exec -T db rm -f $containerDump })
+
+            # A failed attempt may leave a partial copy behind - clear it so
+            # the completeness check below cannot pass on leftover bytes.
+            if (-not $dumpOk) {
+                Remove-Item $dumpFile -ErrorAction SilentlyContinue
+            }
+
+            if ($missing.Count -eq 0) {
+                # Sanity check before declaring victory: a plain-format
+                # pg_dump always begins with an ASCII "--" comment header,
+                # so a zero-byte or binary-garbage file is a failed capture
+                # even when every command exited 0.
+                $sane = $false
+                try {
+                    $fs = [System.IO.File]::OpenRead($dumpFile)
+                    try {
+                        $buf = New-Object byte[] 32
+                        $n = $fs.Read($buf, 0, 32)
+                        $head = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
+                        $sane = ($n -gt 0) -and $head.StartsWith("--")
+                    }
+                    finally { $fs.Dispose() }
+                }
+                catch { $sane = $false }
+
+                if ($sane) {
+                    $sizeMB = [math]::Round((Get-Item $dumpFile).Length / 1MB, 2)
+                    Write-Progress-Done "Saved database.sql ($sizeMB MB, byte-exact)"
+                }
+                else {
+                    Write-Host "    Database dump verification failed (empty or malformed file)" -ForegroundColor Yellow
+                    $missing.Add("database.sql (database dump verification failed)")
+                    Remove-Item $dumpFile -ErrorAction SilentlyContinue
+                }
             }
         }
         else {
@@ -268,7 +316,7 @@ if (-not $SkipBackup) {
     $readme += "  $stepNo. Start the stack once so the database exists:`r`n         powershell -ExecutionPolicy Bypass -File scripts\install.ps1`r`n"
     if ($hasDump) {
         $stepNo++
-        $readme += "  $stepNo. Restore the database:`r`n         Get-Content `"$backupDir\database.sql`" | docker compose exec -T db psql -U $pgUser -d $pgDb`r`n"
+        $readme += "  $stepNo. Restore the database (byte-exact copy into the container, then load -`r`n     never pipe the file through a host shell, which would re-encode it):`r`n         docker compose cp `"$backupDir\database.sql`" db:/tmp/restore.sql`r`n         docker compose exec -T db psql -U $pgUser -d $pgDb -f /tmp/restore.sql`r`n         docker compose exec -T db rm /tmp/restore.sql`r`n"
     }
     if ($hasTar -and $helperImage) {
         $stepNo++

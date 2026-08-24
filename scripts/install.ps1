@@ -82,12 +82,22 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         "Wardress requires Docker Desktop: https://www.docker.com/products/docker-desktop/")
 }
 
-if (-not (Invoke-Quiet { docker info })) {
+$info = Invoke-NativeWithDeadline "docker" @("info") 30
+if ($null -eq $info) {
+    Fail ("The Docker CLI did not respond within 30 seconds - the Docker Desktop backend appears wedged. " +
+        "Restart Docker Desktop, wait for it to say 'Engine running', then re-run this script.")
+}
+if (-not $info) {
     Fail ("Docker Desktop is installed but the engine is not running. " +
         "Start Docker Desktop, wait for it to say 'Engine running', then re-run this script.")
 }
 
-if (-not (Invoke-Quiet { docker compose version })) {
+$composeProbe = Invoke-NativeWithDeadline "docker" @("compose", "version") 30
+if ($null -eq $composeProbe) {
+    Fail ("'docker compose version' did not respond within 30 seconds - the Docker CLI appears wedged. " +
+        "Restart Docker Desktop, then re-run this script.")
+}
+if (-not $composeProbe) {
     Fail ("The 'docker compose' plugin is unavailable. Update Docker Desktop " +
         "to a current version: https://www.docker.com/products/docker-desktop/")
 }

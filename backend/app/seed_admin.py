@@ -73,7 +73,15 @@ async def seed() -> int:
                 note = " (account reactivated)" if reactivated else ""
                 print(f"Reset password for existing user {email}; existing sessions revoked{note}")
             else:
-                print(f"User {email} already exists (set ADMIN_RESET_PASSWORD=true to reset)")
+                print(f"User {email} already exists.")
+                print("To reset its password to the current ADMIN_PASSWORD value:")
+                print("  1. Set ADMIN_PASSWORD (in .env) to the new password.")
+                print("  2. Apply it to the container:  docker compose up -d app")
+                print("  3. Run the reset:")
+                print(
+                    "       docker compose exec -T -e ADMIN_RESET_PASSWORD=true"
+                    " app python -m app.seed_admin"
+                )
     finally:
         await engine.dispose()
     return 0

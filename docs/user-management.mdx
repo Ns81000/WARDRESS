@@ -30,6 +30,24 @@ User sessions are secured using JWT (JSON Web Tokens) with robust rotation mecha
 - **Token Rotation**: Every time a refresh token is used, it is rotated and a successor UUID is tracked (`replaced_by`). If a stolen refresh token is reused, the system detects the anomaly and instantly revokes the entire session chain.
 - **Absolute Expiry**: Sessions cannot slide infinitely. They have an absolute maximum Time-To-Live (TTL) tied to `session_started_at`.
 
+## Emergency Admin Password Reset
+
+If the single admin account is locked out (forgotten password, departing admin), the seeding tool can reset it. The reset sets the account's password back to whatever `ADMIN_PASSWORD` currently says in `.env`, reactivates a deactivated account, and revokes all of its sessions.
+
+1. Put the new password into `ADMIN_PASSWORD` in `.env` (at least 12 characters).
+2. Apply it to the running container (environment changes need a recreate):
+   ```bash
+   docker compose up -d app
+   ```
+3. Run the reset:
+   ```bash
+   docker compose exec -T -e ADMIN_RESET_PASSWORD=true app python -m app.seed_admin
+   ```
+
+<Warning>
+  **Remove the flag afterwards.** `ADMIN_RESET_PASSWORD=true` makes the seeding command overwrite the admin password on every run. If you set it in `.env` instead of passing `-e`, delete that line and re-create the container (`docker compose up -d app`) once the reset is done.
+</Warning>
+
 ## API Keys
 
 Users can generate API keys for automated scripting against the Wardress REST API.

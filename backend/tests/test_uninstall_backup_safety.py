@@ -54,6 +54,11 @@ Write-Log ("CALL|" + ($args -join ' '))
 $c0 = if ($args.Count -gt 0) { $args[0] } else { '' }
 $c1 = if ($args.Count -gt 1) { $args[1] } else { '' }
 
+# Fake container filesystem: since Phase 29 the script dumps INSIDE the
+# container (sh -c "... > /tmp/...") and copies out with `compose cp`, so
+# the shim stages the dump bytes there instead of writing stdout.
+$fakeDump = Join-Path $env:P13_CONTAINER_DIR 'wardress-uninstall-dump.sql'
+
 if ($c0 -eq 'info') { exit 0 }
 
 if ($c0 -eq 'volume') {
@@ -92,20 +97,33 @@ if ($c0 -eq 'compose') {
             if ($mode -eq 'wontstart') { exit 1 }
             exit 0
         }
+        'cp' {
+            if ($mode -eq 'copyfail') { exit 1 }
+            $src = if ($args.Count -gt 2) { $args[2] } else { '' }
+            $dst = if ($args.Count -gt 3) { $args[3] } else { '' }
+            if ((Test-Path $fakeDump) -and $dst) { Copy-Item $fakeDump $dst -Force }
+            exit 0
+        }
         'exec' {
-            $cmd = if ($args.Count -gt 4) { $args[4] } else { '' }
-            if ($cmd -eq 'pg_isready') {
+            $joined = $args -join ' '
+            if ($joined -match 'pg_isready') {
                 if ($mode -eq 'neverready') { Start-Sleep -Milliseconds 100; exit 1 }
                 exit 0
             }
-            if ($cmd -eq 'pg_dump') {
+            if ($joined -match 'pg_dump') {
                 if ($mode -eq 'dumpfail') {
                     [Console]::Error.WriteLine('pg_dump: error: could not write to output file')
                     exit 1
                 }
-                Write-Output '-- PGDUMP stub'
-                Write-Output "SET client_encoding = 'UTF8';"
-                Write-Output 'CREATE TABLE stub (id int);'
+                $stub = "-- PGDUMP stub`nSET client_encoding = 'UTF8';`n"
+                $stub += "CREATE TABLE stub (id int);`n"
+                [IO.File]::WriteAllText($fakeDump, $stub)
+                exit 0
+            }
+            if ($joined -match ' rm ') {
+                if (Test-Path $fakeDump) {
+                    Remove-Item $fakeDump -Force -ErrorAction SilentlyContinue
+                }
                 exit 0
             }
             exit 0
@@ -197,6 +215,8 @@ def sandbox(tmp_path):
         env = os.environ.copy()
         env["P13_MODE"] = mode
         env["P13_LOG"] = str(log)
+        env["P13_CONTAINER_DIR"] = str(tmp_path / f"fakecontainer_{tag}")
+        os.makedirs(env["P13_CONTAINER_DIR"], exist_ok=True)
         env["PATH"] = str(bin_dir) + os.path.pathsep + env.get("PATH", "")
         proc = subprocess.run(
             [

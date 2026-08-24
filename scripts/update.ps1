@@ -44,7 +44,12 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Fail ("Docker is not installed (the 'docker' command was not found). " +
         "Wardress requires Docker Desktop: https://www.docker.com/products/docker-desktop/")
 }
-if (-not (Invoke-Quiet { docker info })) {
+$info = Invoke-NativeWithDeadline "docker" @("info") 30
+if ($null -eq $info) {
+    Fail ("The Docker CLI did not respond within 30 seconds - the Docker Desktop backend appears wedged. " +
+        "Restart Docker Desktop, wait for it to say 'Engine running', then re-run this script.")
+}
+if (-not $info) {
     Fail ("Docker Desktop is installed but the engine is not running. " +
         "Start Docker Desktop, wait for it to say 'Engine running', then re-run this script.")
 }

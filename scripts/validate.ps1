@@ -51,13 +51,21 @@ if (-not (Test-CommandExists "docker")) {
         Write-Host "    Version: $dockerVersion" -ForegroundColor Gray
     }
     
-    if (-not (Invoke-Quiet { docker info })) {
+    $info = Invoke-NativeWithDeadline "docker" @("info") 30
+    if ($null -eq $info) {
+        Add-ValidationError "The Docker CLI did not respond within 30 seconds - the Docker Desktop backend appears wedged; restart Docker Desktop"
+    }
+    elseif (-not $info) {
         Add-ValidationError "Docker engine is not running - start Docker Desktop"
     } else {
         Write-Host "    Docker engine is running" -ForegroundColor Green
     }
-    
-    if (-not (Invoke-Quiet { docker compose version })) {
+
+    $composeProbe = Invoke-NativeWithDeadline "docker" @("compose", "version") 30
+    if ($null -eq $composeProbe) {
+        Add-ValidationError "'docker compose version' did not respond within 30 seconds - restart Docker Desktop"
+    }
+    elseif (-not $composeProbe) {
         Add-ValidationError "Docker Compose plugin not available"
     } else {
         $prev = $ErrorActionPreference
@@ -178,24 +186,33 @@ if (Test-CompilationErrors $RepoRoot) {
 
 Step "Checking Docker resources"
 
-$prev = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$dockerInfo = docker info --format json 2>&1 | ConvertFrom-Json
-$ErrorActionPreference = $prev
+$alive = Invoke-NativeWithDeadline "docker" @("info") 30
+if ($null -eq $alive) {
+    Add-ValidationWarning "The Docker CLI did not respond within 30 seconds - skipping the resource check"
+}
+elseif (-not $alive) {
+    Add-ValidationWarning "Docker engine is not running - skipping the resource check"
+}
+else {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $dockerInfo = docker info --format json 2>&1 | ConvertFrom-Json
+    $ErrorActionPreference = $prev
 
-if ($dockerInfo) {
-    $cpus = $dockerInfo.NCPU
-    $memGB = [math]::Round($dockerInfo.MemTotal / 1GB, 1)
-    
-    Write-Host "    Available CPUs: $cpus" -ForegroundColor Gray
-    Write-Host "    Available Memory: $memGB GB" -ForegroundColor Gray
-    
-    if ($memGB -lt 4) {
-        Add-ValidationWarning "Less than 4GB RAM allocated to Docker - builds may be slow"
-    }
-    
-    if ($cpus -lt 2) {
-        Add-ValidationWarning "Less than 2 CPUs allocated to Docker - builds may be slow"
+    if ($dockerInfo) {
+        $cpus = $dockerInfo.NCPU
+        $memGB = [math]::Round($dockerInfo.MemTotal / 1GB, 1)
+
+        Write-Host "    Available CPUs: $cpus" -ForegroundColor Gray
+        Write-Host "    Available Memory: $memGB GB" -ForegroundColor Gray
+
+        if ($memGB -lt 4) {
+            Add-ValidationWarning "Less than 4GB RAM allocated to Docker - builds may be slow"
+        }
+
+        if ($cpus -lt 2) {
+            Add-ValidationWarning "Less than 2 CPUs allocated to Docker - builds may be slow"
+        }
     }
 }
 

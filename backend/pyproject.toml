@@ -102,6 +102,9 @@ ignore = ["S101"]  # allow asserts in tests
 # Phase 18's migration-repair proof also drives the real alembic CLI —
 # same trusted, literal argv shape.
 "tests/test_phase18_concurrency_races.py" = ["S603"]
+# Phase 29's ops-scripts sandbox shells out to pwsh/powershell driving the
+# fake docker shim — argv lists built entirely from trusted, literal values.
+"tests/test_phase29_ops_robustness.py" = ["S603"]
 # Dataset builder seeds random.Random for synthetic-content variety only —
 # no security surface consumes these values.
 "tools/*" = ["S311"]
