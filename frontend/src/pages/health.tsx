@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { SpotlightCard } from "@/components/ui/spotlight-card"
 import * as apiClient from "@/lib/api"
+import { usePrefersReducedMotion } from "@/lib/use-reduced-motion"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -140,7 +141,7 @@ function getTopologyNodeIcon(id: string, size: number, x: number, y: number) {
     case "scheduler":
       return (
         <svg x={px} y={py} width={size} height={size} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="16 16 32 32">
-          <path fill="url(#py-topo-a)" d="M31.885 16c-8.124 0-7.617 3.523-7.617 3.523l.01 3.65h7.752v1.095H21.197S16 23.678 16 31.876c0 8.196 4.537 7.906 4.537 7.906h2.708v-3.804s-.146-4.537 4.465-4.537h7.688s4.32.07 4.32-4.175v-7.019S40.374 16 31.885 16zm-4.275 2.454a1.394 1.394 0 1 1 0 2.79 1.393 0 0 1-1.395-1.395c0-.771.624-1.395 1.395-1.395z" />
+          <path fill="url(#py-topo-a)" d="M31.885 16c-8.124 0-7.617 3.523-7.617 3.523l.01 3.65h7.752v1.095H21.197S16 23.678 16 31.876c0 8.196 4.537 7.906 4.537 7.906h2.708v-3.804s-.146-4.537 4.465-4.537h7.688s4.32.07 4.32-4.175v-7.019S40.374 16 31.885 16zm-4.275 2.454a1.394 1.394 0 1 1 0 2.79 1.393 1.393 0 0 1-1.395-1.395c0-.771.624-1.395 1.395-1.395z" />
           <path fill="url(#py-topo-b)" d="M32.115 47.833c8.124 0 7.617-3.523 7.617-3.523l-.01-3.65H31.97v-1.095h10.832S48 40.155 48 31.958c0-8.197-4.537-7.906-4.537-7.906h-2.708v3.803s.146 4.537-4.465 4.537h-7.688s-4.32-.07-4.32 4.175v7.019s-.656 4.247 7.833 4.247zm4.275-2.454a1.393 1.393 0 0 1-1.395-1.395 1.394 1.394 0 1 1 1.395 1.395z" />
           <defs>
             <linearGradient id="py-topo-a" x1="19.075" x2="34.898" y1="18.782" y2="34.658" gradientUnits="userSpaceOnUse">
@@ -172,6 +173,9 @@ interface ServiceTopologyMapProps {
 
 function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProps) {
   const [activeNode, setActiveNode] = useState<string>("gateway")
+  // SMIL <animate> and the decorative ripple are unreachable from the
+  // global CSS reduced-motion block, so they gate here at render time.
+  const reduceMotion = usePrefersReducedMotion()
 
   const dbStatus = isError ? "down" : data?.components.database.status ?? "ok"
   const redisStatus = isError ? "down" : data?.components.redis.status ?? "ok"
@@ -366,7 +370,7 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
           y2={y2}
           className={cn("fill-none transition-[stroke-width,opacity] duration-300", strokeWidth, strokeColor, baseOpacity)}
         />
-        {/* Glowing pulse dash */}
+        {/* Glowing pulse dash — static under reduced motion */}
         {status !== "down" && !isLoading && (
           <line
             x1={x1}
@@ -376,13 +380,15 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
             className={cn("fill-none transition-[stroke-width,opacity] duration-300", pulseWidth, strokeColor, activeOpacity)}
             strokeDasharray="6 24"
           >
-            <animate
-              key={speed}
-              attributeName="stroke-dashoffset"
-              values={reverse ? "0;30" : "30;0"}
-              dur={speed}
-              repeatCount="indefinite"
-            />
+            {!reduceMotion && (
+              <animate
+                key={speed}
+                attributeName="stroke-dashoffset"
+                values={reverse ? "0;30" : "30;0"}
+                dur={speed}
+                repeatCount="indefinite"
+              />
+            )}
           </line>
         )}
       </g>
@@ -461,8 +467,10 @@ function ServiceTopologyMap({ isLoading, isError, data }: ServiceTopologyMapProp
                   style={{ stroke: `var(--color-accent-${node.status === "degraded" ? "orange" : node.status === "down" ? "red" : "green"})`, strokeWidth: 4, filter: 'blur(3px)' }}
                 />
 
-                {/* Selected Ripple ring */}
-                {isActive && node.status !== "down" && (
+                {/* Selected Ripple ring — decorative only; selection state
+                    stays visible via the border color, so it is skipped
+                    entirely under reduced motion */}
+                {isActive && node.status !== "down" && !reduceMotion && (
                   <circle
                     cx={node.x}
                     cy={node.y}

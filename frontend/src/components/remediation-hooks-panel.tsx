@@ -4,6 +4,7 @@ import { Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+import { parseDecimalInRange } from "@/lib/numeric-inputs"
 
 import { listboxAction } from "@/lib/listbox-keys"
 
@@ -161,12 +162,12 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
     void queryClient.invalidateQueries({ queryKey: ["remediation-hooks", siteId] })
 
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (triggerThreshold: number) =>
       apiClient.createRemediationHook(siteId, {
         name,
         action_type: actionType,
         webhook_url: webhookUrl,
-        trigger_threshold: Number(threshold) || 0.5,
+        trigger_threshold: triggerThreshold,
         requires_manual_confirm: !autoExecute,
       }),
     onSuccess: () => {
@@ -205,8 +206,15 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
+    // Strict validation: garbage in the threshold field must never reach
+    // the API as a silently-substituted default (0 fires on everything).
+    const triggerThreshold = parseDecimalInRange(threshold, 0, 1)
+    if (triggerThreshold === null) {
+      setFormError("Trigger threshold must be a number between 0 and 1")
+      return
+    }
     setFormError(null)
-    create.mutate()
+    create.mutate(triggerThreshold)
   }
 
   return (

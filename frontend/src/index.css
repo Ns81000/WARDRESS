@@ -321,9 +321,28 @@ body {
 /* Developer-tool background grid pattern */
 .bg-grid-pattern {
   background-size: 24px 24px;
-  background-image: 
+  background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+}
+
+/*
+ * Honor the OS reduce-motion preference (WCAG 2.3.3 / vestibular safety):
+ * ambient pings, pulses, blurs and hover/press motion stop, and content
+ * appears instantly instead of animating in. SVG SMIL <animate> elements
+ * are not reachable from CSS — the health topology gates those separately
+ * via usePrefersReducedMotion().
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 

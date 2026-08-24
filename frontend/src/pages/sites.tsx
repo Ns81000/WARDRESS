@@ -299,10 +299,11 @@ export function SitesPage() {
             <p className="text-heading-sm text-ink">No sites yet</p>
             <p className="max-w-sm text-body-sm text-charcoal">
               Add the first site to put it under watch. Wardress captures a
-              trusted baseline and re-checks it on demand.
+              trusted baseline immediately, then re-checks it automatically
+              on an adaptive schedule.
             </p>
             <Badge variant="secondary" className="mt-2">
-              Phase 1 — manual scans only
+              Automatic baseline capture · adaptive scheduled scans
             </Badge>
           </div>
         )}

@@ -16,6 +16,14 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { WardressMark } from "@/components/wardress-mark"
 import { cn } from "@/lib/utils"
 import * as apiClient from "@/lib/api"
@@ -130,6 +138,10 @@ export function AssistantPage() {
     onError: (err) => toast.error(errMessage(err, "Could not delete the conversation")),
   })
 
+  // Deleting a conversation cascades its whole message history server-side,
+  // so it confirms like every other destructive action in the dashboard.
+  const [convToDelete, setConvToDelete] = useState<AgentConversation | null>(null)
+
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden">
       {/* Ambient background glow — a single blue wash anchored top-centre. */}
@@ -142,7 +154,7 @@ export function AssistantPage() {
         activeId={activeId}
         onSelect={setActiveId}
         onNew={() => createConv.mutate()}
-        onDelete={(id) => deleteConv.mutate(id)}
+        onDelete={setConvToDelete}
         creating={createConv.isPending}
       />
 
@@ -154,6 +166,40 @@ export function AssistantPage() {
         onStartFirst={() => createConv.mutate()}
         creating={createConv.isPending}
       />
+
+      <Dialog
+        open={convToDelete !== null}
+        onOpenChange={(open) => !open && setConvToDelete(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-accent-red">Delete conversation?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes &ldquo;
+              {convToDelete?.title || "New conversation"}&rdquo; and its entire
+              message history. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConvToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteConv.isPending}
+              onClick={() => {
+                if (convToDelete) {
+                  deleteConv.mutate(convToDelete.id, {
+                    onSuccess: () => setConvToDelete(null),
+                  })
+                }
+              }}
+            >
+              {deleteConv.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -176,7 +222,7 @@ function ConversationRail({
   activeId: string | null
   onSelect: (id: string) => void
   onNew: () => void
-  onDelete: (id: string) => void
+  onDelete: (conv: AgentConversation) => void
   creating: boolean
 }) {
   return (
@@ -235,7 +281,7 @@ function ConversationRail({
                   <button
                     type="button"
                     aria-label="Delete conversation"
-                    onClick={() => onDelete(conv.id)}
+                    onClick={() => onDelete(conv)}
                     className="shrink-0 text-mute opacity-0 transition-opacity hover:text-accent-red group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Trash2 className="size-3.5" />
@@ -376,6 +422,10 @@ function ChatPanel({
         const msg = errMessage(err, "The assistant stream failed")
         setDraft((d) => ({ ...d, streaming: false, error: msg }))
         toast.error(msg)
+        // Reconcile with the server: the turn may or may not have been
+        // persisted before the stream died, so refetch the transcript
+        // instead of keeping blind optimistic state around.
+        refreshDetail()
       }
     } finally {
       abortRef.current = null
@@ -563,7 +613,21 @@ function ChatPanel({
                         variant="ghost"
                         onClick={() => {
                           setDraft((d) => ({ ...d, error: null }))
-                          void send(lastFailedMessage)
+                          const text = lastFailedMessage
+                          // Drop any prior bubble for this exact text (the
+                          // failed attempt's optimistic copy, or its persisted
+                          // twin) before resending, so the retried turn renders
+                          // exactly one user bubble instead of stacking a
+                          // duplicate.
+                          setMessages((prev) => {
+                            const idx = prev.findIndex(
+                              (m) => m.role === "user" && m.content === text,
+                            )
+                            return idx === -1
+                              ? prev
+                              : [...prev.slice(0, idx), ...prev.slice(idx + 1)]
+                          })
+                          void send(text)
                         }}
                       >
                         <RotateCcw className="size-3.5" />

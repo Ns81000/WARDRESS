@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import * as apiClient from "@/lib/api"
 import { ApiError } from "@/lib/api"
+import { assignModelToTasks } from "@/lib/ai-task-assignment"
 
 function errMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -190,35 +191,30 @@ function AddProviderDialog({ onAdded }: { onAdded: () => void }) {
         api_keys: isOllama && ollamaMode === "local" ? [] : apiKey.trim() ? [apiKey.trim()] : [],
         base_url: baseUrl.trim() || catalogApiBase || (isOllama && ollamaMode === "local" ? "http://ollama:11434" : null),
       })
-      
-      // Auto-assign tasks if a model ID was entered
-      if (modelId.trim()) {
-        const trimmedModel = modelId.trim()
-        if (assignExplanation) {
-          try {
-            await apiClient.putAiAssignment("explanation", {
-              provider_id: created.id,
-              model_id: trimmedModel,
-            })
-          } catch {
-            // silent catch on task assignment
-          }
-        }
-        if (assignAgentChat) {
-          try {
-            await apiClient.putAiAssignment("agent_chat", {
-              provider_id: created.id,
-              model_id: trimmedModel,
-            })
-          } catch {
-            // silent catch on task assignment
-          }
-        }
-      }
-      return created
+
+      // Auto-assign tasks if a model ID was entered. Failures are
+      // collected and surfaced — never swallowed (the provider itself was
+      // created successfully, so the dialog still closes).
+      const assignmentFailures = await assignModelToTasks(
+        (task) =>
+          apiClient.putAiAssignment(task, {
+            provider_id: created.id,
+            model_id: modelId.trim(),
+          }),
+        [
+          { task: "explanation", wanted: assignExplanation },
+          { task: "agent_chat", wanted: assignAgentChat },
+        ],
+      )
+      return { created, assignmentFailures }
     },
-    onSuccess: () => {
+    onSuccess: ({ assignmentFailures }) => {
       toast.success(`${providerCleanName} provider added`)
+      for (const failure of assignmentFailures) {
+        toast.error(
+          `Provider added, but the ${failure.task} model assignment failed: ${failure.message}`,
+        )
+      }
       setOpen(false)
       setSearchQuery("")
       setLabel("")

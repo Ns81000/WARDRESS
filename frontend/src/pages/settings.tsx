@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { parsePort } from "@/lib/numeric-inputs"
 
 import { ApiKeysCard } from "@/components/api-keys-card"
 import { AiSettingsCard } from "@/components/ai-settings-card"
@@ -249,7 +250,9 @@ function errMessage(err: unknown, fallback: string): string {
 
 // --- SMTP card (§8: a passing Send Test gates the Save action) ---
 
-function SmtpCard() {
+// Exported for the config-input validation suite (component export keeps
+// react-refresh happy).
+export function SmtpCard() {
   const queryClient = useQueryClient()
   const settings = useQuery({ queryKey: ["settings", "smtp"], queryFn: apiClient.getSmtpSettings })
 
@@ -278,16 +281,25 @@ function SmtpCard() {
     }
   }, [settings.data, hydrated])
 
-  const formValues = (): apiClient.SmtpSettingsPatch => ({
-    host,
-    port: Number(port) || 587,
-    security,
-    username: username || null,
-    // No password typed = keep/fall back to the stored one.
-    password: password ? password : null,
-    from_addr: fromAddr,
-    from_name: fromName || null,
-  })
+  const formValues = (): apiClient.SmtpSettingsPatch | null => {
+    // Strict port parsing: garbage must never reach the API as a silently
+    // substituted 587 (the test would pass against a port nobody typed and
+    // unlock Save for it).
+    const parsedPort = parsePort(port)
+    if (parsedPort === null) return null
+    return {
+      host,
+      port: parsedPort,
+      security,
+      username: username || null,
+      // No password typed = keep/fall back to the stored one.
+      password: password ? password : null,
+      from_addr: fromAddr,
+      from_name: fromName || null,
+    }
+  }
+
+  const PORT_ERROR = "Port must be a whole number between 1 and 65535"
 
   function edited<T>(setter: (v: T) => void) {
     return (v: T) => {
@@ -304,7 +316,7 @@ function SmtpCard() {
   const setFromNameE = edited(setFromName)
 
   const save = useMutation({
-    mutationFn: () => apiClient.putSmtpSettings(formValues()),
+    mutationFn: (values: apiClient.SmtpSettingsPatch) => apiClient.putSmtpSettings(values),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings", "smtp"] })
       setPassword("")
@@ -315,7 +327,7 @@ function SmtpCard() {
 
   const test = useMutation({
     // Tests the unsaved form values so Save can require a passing test.
-    mutationFn: () => apiClient.testSmtp(testTo, formValues()),
+    mutationFn: (values: apiClient.SmtpSettingsPatch) => apiClient.testSmtp(testTo, values),
     onSuccess: (result) => {
       if (result.ok) {
         setTestedOk(true)
@@ -327,9 +339,23 @@ function SmtpCard() {
     onError: (err) => toast.error(errMessage(err, "Test failed")),
   })
 
+  function runTest() {
+    const values = formValues()
+    if (values === null) {
+      toast.error(PORT_ERROR)
+      return
+    }
+    test.mutate(values)
+  }
+
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
-    save.mutate()
+    const values = formValues()
+    if (values === null) {
+      toast.error(PORT_ERROR)
+      return
+    }
+    save.mutate(values)
   }
 
   return (
@@ -446,7 +472,7 @@ function SmtpCard() {
                 variant="outline"
                 size="sm"
                 disabled={!host || !fromAddr || !testTo || test.isPending}
-                onClick={() => test.mutate()}
+                onClick={runTest}
               >
                 <Send />
                 {test.isPending ? "Sending" : "Send test"}
