@@ -1,13 +1,13 @@
 ---
 title: "Layer 9: Risk Fusion"
-description: "The logistic-regression classifier that fuses eight sub-scores into one calibrated risk score."
+description: "The logistic-regression classifier that fuses eight sub-scores into one risk score."
 icon: "chart-network"
 ---
 
-The **Risk Fusion Layer** is the final step. It flattens the scores from Layers 1–8 into a fixed-order feature vector and passes it through a calibrated classifier to produce a single `risk_score` in `[0.0, 1.0]`. This is the number that drives alerting, adaptive cadence, and remediation.
+The **Risk Fusion Layer** is the final step. It flattens the scores from Layers 1–8 into a fixed-order feature vector and passes it through a fitted logistic regression to produce a single `risk_score` in `[0.0, 1.0]`. This is the number that drives alerting, adaptive cadence, and remediation. The score is a **ranking signal**, not a calibrated probability — treat it as "more/less evidence of defacement," not as an expected frequency.
 
 <Info>
-  Source: `backend/worker/detection/fusion.py` (`layer9_fusion`, `get_fusion_model`, `build_feature_vector`). The classifier is a scikit-learn `LogisticRegression`.
+  Source: `backend/worker/detection/fusion.py` (`layer9_fusion`, `get_fusion_model`, `build_feature_vector`). The deployed model is a committed artifact (`training/fusion_model.json`); rule-based minimum-risk floors compose with it.
 </Info>
 
 ## The model
@@ -24,8 +24,8 @@ flowchart LR
       L6 --- L7["layer7_cloak"]:::feat
       L7 --- L8["layer8_sem"]:::feat
     end
-    V ==> MODEL{{"LogisticRegression<br/>C=50 · lbfgs · seed-fitted"}}:::model
-    MODEL -->|"predict_proba"| PROB["Calibrated<br/>probability"]:::node
+    V ==> MODEL{{"Logistic regression<br/>non-negative MAP fit · committed artifact"}}:::model
+    MODEL -->|sigmoid| PROB["Risk score<br/>(ranking signal)"]:::node
     PROB --> OUT[/"Risk score<br/>0.0 – 1.0"/]:::out
     MODEL -.->|"exception"| MAX(["Fallback<br/>max sub-score"]):::fallback
     MAX -.-> OUT
@@ -38,38 +38,26 @@ flowchart LR
     style V fill:#1b2e12,stroke:#558b2f,color:#dcedc8;
 ```
 
-Rather than a brittle hand-tuned weighted average, fusion uses a `LogisticRegression(C=50.0, solver="lbfgs", max_iter=5000)`. The feature order (`FEATURE_KEYS`, layers 1–8) is fixed forever so that findings rows and any future retraining stay compatible. The fitted model is cached per worker process; fitting is deterministic (fixed seed data, fixed solver).
+Rather than a brittle hand-tuned weighted average, fusion uses a logistic regression whose coefficients were **constrained non-negative** during fitting, so fused risk is monotone in every evidence channel by construction — more attack evidence can never lower the score. The feature order (`FEATURE_KEYS`, layers 1–8) is fixed forever so that findings rows and any future retraining stay compatible. The model ships as a committed artifact (`worker/detection/training/fusion_model.json`) produced by `tools/refit_fusion_model.py` from the measured dataset in `training/fusion_dataset.json`; loading validates the schema, feature order, and non-negativity constraint and refuses anything else. The loaded model is cached per worker process; loading is deterministic (fixed artifact bytes).
 
 ### Why a model instead of a formula
 
-At install time there is no labeled scan history, so the model is fitted on a **seed dataset**: hand-authored layer-score vectors for documented scenarios. These encode the same domain knowledge a weighted sum would — but routing through logistic regression yields *calibrated probabilities* now and a drop-in upgrade path later.
+At install time there is no labeled scan history, so the deployed fit was trained on a **synthetic measured dataset**: procedurally generated benign-drift and attack scenarios run through the real detection layers to produce labeled 8-feature vectors (balanced classes, stratified across evasion axes and languages, with train/validation/held-out-test splits recorded inside the artifact alongside cross-validation and calibration metrics). The fit is deliberately conservative — a one-standard-error regularization choice avoids saturating on separable training rows — because the coarse eight-dimensional space genuinely cannot separate some profiles (notably "operator added third-party scripts" from "attacker injected scripts"; their measured vectors collide). Per-site suppression rules and the human confirmation queue are the designed mitigations where features cannot decide.
 
-The seed scenarios (from `_SEED_ROWS`) include:
-
-| Scenario | Example vector (L1–L8) | Label |
-| :--- | :--- | :---: |
-| Clean rescan | `[0, 0, 0, 0, 0, 0, 0, 0]` | 0 |
-| Dynamic-content noise | `[1, 0.05, 0, 0.02, 0, 0, 0, 0]` | 0 |
-| Benign deploy | `[1, 0.35, 0.25, 0.3, 0, 0, 0, 0.2]` | 0 |
-| Cert rotation only | `[0, 0, 0, 0, 0, 0.3, 0, 0]` | 0 |
-| Classic full defacement | `[1, 0.9, 0.8, 0.85, 1.0, 0.5, 0, 0.9]` | 1 |
-| Stealthy script injection | `[1, 0.4, 0.85, 0.1, 0, 0, 0, 0.1]` | 1 |
-| Cloaking (browser clean) | `[0, 0, 0, 0, 0, 0, 0.95, 0]` | 1 |
-| Visual takeover | `[1, 0.15, 0.05, 0.9, 0, 0, 0, 0.3]` | 1 |
-
-<Info>
-  **Upgrade path.** Once enough per-site scan history with operator verdicts accumulates, the seed set can be replaced with real labeled rows — and the model stepped up to gradient boosting — without touching the pipeline, because the feature contract never changes.
-</Info>
+Rule-based **minimum-risk floors** compose with the model: wherever individual layer evidence is unambiguous — strong defacement signatures or severe crawler cloaking (score ≥ 0.85 → floor 0.90), or brand-new external script/iframe/form-action domains (weighted count ≥ ~0.89 → floor 0.40, inside the LLM escalation band) — the final score is `max(model probability, floor)`. Floors read only the fixed feature vector, are independent of any future refit, and guarantee that low-churn single-vector attacks cannot be laundered below review by padding benign churn into other channels.
 
 ## Evidence: full transparency
 
 `layer9_fusion` records exactly how the score was reached, so the UI can show which layers actually voted:
 
 - `model` — the model identifier.
+- `model_artifact` — deployed-artifact provenance (file, selected regularization, dataset hash).
 - `features` — the rounded feature vector.
 - `layers_ran` — a per-layer boolean `ran` mask (a skipped/gated layer is `False`).
 - `contributions` — `coefficient × feature` per layer, revealing which signals pushed the score.
 - `intercept` — the model intercept.
+- `confidence_mass` — share of the model's evidence mass that actually measured this scan; degraded channels are listed under `unmeasured`.
+- `rule_floor` — present only when a minimum-risk floor fired, naming the rule and the model's own probability.
 
 ## Missing data and fail-safes
 

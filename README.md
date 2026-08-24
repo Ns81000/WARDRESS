@@ -153,7 +153,7 @@ To update Wardress to the latest release while maintaining all database records,
 
 ## System Features & Heuristics
 
-*   **Adaptive Cadence Scanning**: To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies. If a scan crosses the material change threshold (`fused_risk >= 0.15`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).
+*   **Adaptive Cadence Scanning**: To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies. If a scan crosses the material change threshold (`fused_risk >= 0.35`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).
 *   **Guarded Remediation Hooks**: Flagged scans can trigger outbound webhooks (e.g. rollback endpoints or maintenance pages). By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator. A webhook endpoint timeout of 20 seconds is enforced, and each firing runs as its own Celery task — never inside the scan body. Note that firings share the same single queue and worker pool as scans and captures, so several slow endpoints can temporarily tie up worker capacity rather than being isolated from scanning.
 *   **AI Incident Assistant Cache**: The plain-English analysis of an incident is generated via a structured prompt built from active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences) and requested from whichever model you have assigned to the **Explanations** task (any cloud provider from the models.dev catalog, or a local/cloud Ollama model). The final description is cached directly in the `scans` table column to eliminate duplicate API requests.
 
@@ -196,7 +196,7 @@ Each scan drives the target page through 9 specialized analysis layers designed 
 
 ### Gating and Optimizations
 To preserve system resources and prevent false alarms from dynamic rendering variations, the pipeline implements **intelligent gating rules**:
-*   **Layer 1 (Content Hash) Gating**: If the byte-level hash of the page is identical to the baseline, the engine skips Layers 2, 3, 4, 5, and 8. If nothing changed at the byte level, DOM trees, text semantics, visual pixels, and signatures are guaranteed to be identical.
+*   **Layer 1 (Content Hash) Gating**: If the byte-level hash of the page is identical to the baseline, the engine skips Layers 2, 3, 5, and 8. The hashed content is the serialized DOM, so an identical hash proves those DOM-derived views unchanged — but it does not cover externally-referenced assets or rendered pixels, so Layer 4 (Visual Diff) compares screenshots on every scan regardless of the gate.
 *   **Persistent Probes**: Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan. TLS cert details, response headers, and UA-rotated fetches are invisible to the primary DOM content hash and could indicate high-impact MITM attacks or crawler-specific cloaking.
 *   **Crash Isolation**: Each layer is isolated inside try/except enclosures. A parser failure in one layer records the error as evidence, assigns a `None` score, and allows the remaining eight layers to continue functioning
 
@@ -213,7 +213,7 @@ To preserve system resources and prevent false alarms from dynamic rendering var
 | **6. Security Metadata** | `layer6_security_metadata` | Network headers | Audits TLS certificate validity, fingerprints (distinguishes CA reissues from subject shifts), security header policies (HSTS, CSP, CORS), and `robots.txt` changes. |
 | **7. Cloaking** | `layer7_cloaking` | HTTP variant fetches | Rotates the User-Agent (Googlebot, Mobile Safari, Desktop Chrome) and compares raw HTML content similarities to identify content cloaked specifically for search engines. |
 | **8. Text Semantics** | `layer8_semantics` | Suppressed text | Computes the sentence embeddings of visible text using a local **MiniLM-L6-v2** neural network, measuring semantic cosine distance from the baseline. |
-| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | A deterministic seed-fitted **logistic regression** (`scikit-learn`) fuses the eight sub-scores into one calibrated **0.0–1.0 risk score**. |
+| **9. Risk Fusion** | `layer9_fusion` | Fused inputs | A deterministic, non-negative-fitted **logistic regression** (deployed as a validated artifact) fuses the eight sub-scores into one **0.0–1.0 risk score** — a ranking signal with rule-based minimum-risk floors, not a calibrated probability. |
 
 ---
 

@@ -18,7 +18,7 @@ The **Content Hash Layer** is the first, fastest, and most fundamental layer in 
 | Algorithm | SHA-256 over normalized HTML |
 | Score domain | Binary: `0.0` (identical) or `1.0` (any difference) |
 | Runs on | The **original**, unsuppressed HTML — always |
-| Gates | Layers 2, 3, 4, 5, 8 when identical |
+| Gates | Layers 2, 3, 5, 8 when identical (Layer 4 runs regardless) |
 
 A hash cannot grade *how much* a page changed — that is the job of the downstream layers. Layer 1 only reports change versus no-change, and it is deliberately the one signal suppression rules can never silence: the hash is a tamper-evidence anchor.
 
@@ -52,15 +52,15 @@ A hash cannot grade *how much* a page changed — that is the job of the downstr
 
 ## Pipeline gating
 
-Layer 1 is the pipeline's largest performance optimization. A byte-identical document cannot differ in its DOM tree, its links, its rendered pixels, its visible text, or its semantics — so an identical hash skips those layers entirely.
+Layer 1 is the pipeline's largest performance optimization. The hashed content is the serialized post-JS DOM, so a byte-identical document cannot differ in its DOM tree, its links, its visible text, or its semantics — an identical hash skips those layers entirely. It does **not** prove anything about rendered pixels: externally-referenced assets (images, external scripts, cross-origin iframes) are never part of the serialized DOM, so Layer 4 compares screenshots on every scan regardless of the gate.
 
 ```mermaid
 flowchart LR
     B[("Baseline<br/>SHA-256")]:::src --> EQ{"Digests<br/>equal?"}
     C[("Current<br/>SHA-256")]:::src --> EQ
-    EQ -->|"Identical · 0.0"| SKIP(["Gate CLOSED<br/>skip 2·3·4·5·8"]):::cool
-    EQ -->|"Different · 1.0"| RUN(["Gate OPEN<br/>run 2·3·4·5·8"]):::hot
-    SKIP --> ALW[["6 · 7 · 9 run regardless"]]
+    EQ -->|"Identical · 0.0"| SKIP(["Gate CLOSED<br/>skip 2·3·5·8"]):::cool
+    EQ -->|"Different · 1.0"| RUN(["Gate OPEN<br/>run 2·3·5·8"]):::hot
+    SKIP --> ALW[["4 · 6 · 7 · 9 run regardless"]]
     RUN --> ALW
 
     classDef src fill:#006064,stroke:#00acc1,color:#fff;
@@ -74,15 +74,15 @@ flowchart LR
     Defined in `pipeline.py` as `GATED_BY_IDENTICAL_HASH`:
     - **Layer 2** — DOM Structure
     - **Layer 3** — Link Audit
-    - **Layer 4** — Visual Diff
     - **Layer 5** — Signatures
     - **Layer 8** — Semantics
 
     Skipped layers are not silently dropped. Each records a `skip_result` with score `None` and the reason *"gated by layer 1: content hash identical, layer cannot produce new signal"*, so the scan output always shows why a layer did not run.
 
-    Layer 4 is included in the gate on purpose: a byte-identical page could only differ visually through non-deterministic rendering noise in the headless browser, which is exactly the false-positive class the gate exists to suppress.
+    Layer 4 is deliberately **not** in the gate. The hashed content is the serialized DOM — asset bytes (`<img>`/CSS-referenced images, external scripts that paint after load, cross-origin iframe internals) never appear in it — so a server-side asset swap keeps the hash identical while changing what visitors see. The visual layer therefore runs on every scan and handles its own rendering-noise tolerance internally.
   </Accordion>
   <Accordion title="Never skipped" icon="circle-check">
+    - **Layer 4** (Visual Diff): rendered pixels depend on externally-referenced assets the serialized DOM never contains — the exact class an identical hash cannot cover.
     - **Layer 6** (Security Metadata): TLS certificates and HTTP headers shift independently of the HTML payload.
     - **Layer 7** (Cloaking): per-User-Agent divergence is invisible to the primary content hash.
     - **Layer 9** (Risk Fusion): always runs. Gated layers contribute `0.0` to the feature vector and are marked `ran=False`.

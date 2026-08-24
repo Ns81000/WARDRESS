@@ -4,7 +4,7 @@ description: "The 9 specialized analysis layers that power Wardress's fused risk
 icon: "layer-group"
 ---
 
-Every scan drives the target page through nine specialized layers, each designed to catch a different defacement style — from blunt script injections to stealthy semantic hijacking. The layers run in a fixed order with gating, then a machine-learning model fuses their scores into a single calibrated risk value.
+Every scan drives the target page through nine specialized layers, each designed to catch a different defacement style — from blunt script injections to stealthy semantic hijacking. The layers run in a fixed order with gating, then a machine-learning model fuses their scores into a single risk value in `0.0–1.0` (a ranking signal with rule-based floors, not a calibrated probability).
 
 <Info>
   Source of truth: `backend/worker/detection/pipeline.py` orchestrates the layers; each layer lives in its own module under `backend/worker/detection/`.
@@ -42,7 +42,7 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 
 <CardGroup cols={3}>
   <Card title="Hash gate" icon="hashtag">
-    If the normalized content hash is identical to the baseline, Layers 2, 3, 4, 5, and 8 are skipped — byte-identical content cannot differ structurally, in links, visually, in signatures, or semantically. Each skip is logged with its reason.
+    If the normalized content hash is identical to the baseline, Layers 2, 3, 5, and 8 are skipped — the hash is computed over the serialized DOM, so an identical hash proves those DOM-derived views unchanged. Layer 4 (Visual Diff) runs on every scan regardless of the gate: rendered pixels depend on externally-referenced assets that the serialized DOM never contains. Each skip is logged with its reason.
   </Card>
   <Card title="Persistent probes" icon="rotate">
     Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan regardless of the hash. TLS details, response headers, and UA-rotated fetches are invisible to the primary content hash and could reveal MITM or crawler-specific cloaking.
@@ -64,7 +64,7 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 | [6 · Security Metadata](/layers/6-security-metadata) | `layer6_security_metadata` | TLS + headers + robots | Cert issuer/subject shifts, security-header downgrades, robots.txt changes. |
 | [7 · Cloaking](/layers/7-cloaking) | `layer7_cloaking` | UA-rotated raw fetches | Jaccard divergence between Googlebot/mobile and the desktop reference. |
 | [8 · Semantics](/layers/8-semantics) | `layer8_semantics` | Suppressed text | MiniLM cosine drift, aggression lexicon, defacement topic keywords. |
-| [9 · Risk Fusion](/layers/9-risk-fusion) | `layer9_fusion` | Layers 1–8 | Seed-fitted logistic regression → one calibrated `0.0–1.0` score. |
+| [9 · Risk Fusion](/layers/9-risk-fusion) | `layer9_fusion` | Layers 1–8 | Non-negative-fitted logistic regression + rule-based minimum-risk floors → one `0.0–1.0` ranking score. |
 
 <Note>
   **Input scope** matters. Layers 2, 3, 5, and 8 receive the *suppression-filtered* copy of both pages; Layer 4 gets bbox-masked screenshots; Layer 1 always hashes the *original* content so tampering is never hidden. Layers 6 and 7 read transport and per-UA data, not the primary DOM.
@@ -76,7 +76,7 @@ Wardress scales monitoring frequency by the fused risk score, so real changes ar
 
 ```mermaid
 flowchart LR
-    SCAN[Scan completes] --> Q{risk ≥ 0.15?}
+    SCAN[Scan completes] --> Q{risk ≥ 0.35?}
     Q -->|Material change| T["Tighten → base ÷ 4"]
     Q -->|Clean| R["Relax → current × 1.5"]
     T --> C[Clamp 5 min – 24 h]
@@ -87,7 +87,7 @@ flowchart LR
     class T hot;
 ```
 
-- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.15` — deliberately below any sane flag threshold (so real change is watched before it becomes alarming) and above dynamic-content noise.
+- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.35` — deliberately below the default flag threshold (so real change is watched before it becomes alarming), aligned with the LLM escalation floor, and above the fused risk that pure dynamic-content noise produces under the deployed fusion model (measured on held-out benign scenarios: ~0.22–0.27).
 - **Tighten:** a detected change sets the next interval to `base ÷ 4`.
 - **Relax:** each subsequent clean scan multiplies the interval by `1.5`, walking back up to the site's configured base.
 - **Clamp:** every interval is bounded to `[5 minutes, 24 hours]`.

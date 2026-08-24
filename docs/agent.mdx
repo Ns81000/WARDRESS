@@ -4,7 +4,7 @@ description: "Interact with Wardress via a conversational AI interface."
 icon: "robot"
 ---
 
-Wardress ships a conversational AI agent that helps operators analyze incidents and manage the system. It is an interface *over* the platform: every tool the agent can call runs the same domain logic as the REST routers, so RBAC, SSRF protection, audit logging, and detection semantics stay identical across surfaces. Nothing the model emits is trusted — role and confirmation gating happen in the dispatcher, not in the declarations the model sees.
+Wardress ships a conversational AI agent that helps operators analyze incidents and manage the system. It is an interface *over* the platform: every tool the agent can call runs the same domain logic as the REST routers, and each tool declares a minimum role that matches the equivalent REST surface, so RBAC stays consistent across surfaces. Nothing the model emits is trusted — role and confirmation gating happen in the dispatcher, not in the declarations the model sees.
 
 <Info>
   Source: `backend/app/agent/` (`engine.py`, `tools.py`, `guard.py`, `context.py`). The assistant runs on **any tool-calling-capable model** assigned to the **Agent Chat** task in **Settings → AI providers** — any cloud provider (OpenAI, Groq, OpenRouter, Cerebras, Google/Gemini, Anthropic, Mistral, …) or a tool-capable Ollama model, local or cloud.
@@ -23,20 +23,27 @@ You can talk to the agent two ways, and conversation history is stored in the da
 
 ## Tools and tiers
 
-Each tool declares a **tier** and a **minimum role**. Tiers 0–1 auto-execute; tier 2 and above are frozen and require explicit confirmation.
+Each tool declares a **tier** and a **minimum role**. Tier 0 reads auto-execute; tier 1 writes auto-execute only while the current turn's context is free of untrusted content (see [Prompt-injection containment](#prompt-injection-containment)); tier 2 and above are frozen and require explicit confirmation.
 
 | Tier | Behavior | Tools |
 | :--- | :--- | :--- |
-| **0 · read** | Auto-execute (viewer+) | `list_sites`, `get_site`, `get_status_overview`, `list_scans`, `get_scan_findings`, `explain_incident`, `list_alerts` |
+| **0 · read** | Auto-execute | `list_sites`, `get_site`, `get_status_overview`, `list_scans`, `get_scan_findings`, `explain_incident`, `list_alerts`, `list_suppression_rules` *(viewer+)* · `list_remediation_hooks` *(admin only — mirrors the admin-only REST hook surface)* |
 | **1 · safe write** | Auto-execute (analyst+) | `run_scan_now`, `acknowledge_alert`, `mute_site`, `unmute_site` |
-| **2 · high impact** | Confirm required (analyst+) | `add_site`, `rebaseline_site`, `set_flag_threshold`, `set_scan_interval` |
+| **2 · high impact** | Confirm required (analyst+) | `add_site`, `rebaseline_site`, `set_flag_threshold`, `set_scan_interval`, `create_suppression_rule` |
 | **3 · destructive** | Confirm required (analyst+) | `delete_site` |
 
 <Note>
-  Acknowledging an alert or running a scan-now is a **safe** action and executes without a confirmation card. Only changing configuration (thresholds, intervals), adding or rebaselining a site, or deleting a site pauses for confirmation.
+  Acknowledging an alert or running a scan-now is a **safe** action and normally executes without a confirmation card. Only changing configuration (thresholds, intervals), adding or rebaselining a site, creating a suppression rule, or deleting a site pauses for confirmation — and after untrusted content appears in a turn, every state-changing action does too.
 </Note>
 
-Tool results are compact JSON — ids truncated, no raw HTML or evidence blobs — for token efficiency and prompt-injection containment. Tool output is treated as *data*, never as instructions.
+## Prompt-injection containment
+
+Monitored pages are hostile input: a defaced page can contain text crafted to steer an AI assistant. Wardress treats that as a structural problem, not a prompt-politeness one:
+
+- **Fenced evidence channel.** Incident explanations quote page text between explicit `<<<UNTRUSTED-DATA-BEGIN>>>` / `<<<UNTRUSTED-DATA-END>>>` markers (with forged marker lookalikes inside the payload defanged), and the system instruction teaches the model that everything inside those markers is quoted data to describe — never instructions, even when it claims to be a system message or an operator command.
+- **Execution gate, not just guidance.** Once untrusted content has entered the current turn's context, the dispatcher stops auto-executing state-changing tools entirely: any tier ≥ 1 call from that point freezes into an ordinary confirmation card instead. A fully compliant-with-the-injection model can therefore produce, at worst, a card the operator sees — never a silent mute, ack, or scan trigger.
+
+Tool results remain compact JSON for token efficiency — ids truncated, no raw HTML or evidence blobs — except the deliberately fenced explanation channel above. Tool output is treated as *data*, never as instructions.
 
 ## The action confirmation loop
 
@@ -53,10 +60,10 @@ Because a model can misinterpret a request, all tier ≥ 2 actions go through a 
     The UI renders a confirmation card (or Telegram sends a prompt). The user presses Confirm or Cancel — a button, never model output. Cards expire after **10 minutes**.
   </Step>
   <Step title="Re-checked execution">
-    On confirm, ownership (the confirmer must be the proposer), the pending status, expiry, and the user's current role are all re-checked. Only then are the frozen arguments executed exactly as stored. A role change or expiry between propose and confirm fails closed.
+    On confirm, ownership (the confirmer must be the proposer), the pending status, expiry, and the user's current role are all re-checked, and the pending row is claimed atomically — under concurrent confirms exactly one wins and executes. Only then are the frozen arguments executed exactly as stored. A role change or expiry between propose and confirm fails closed.
   </Step>
 </Steps>
 
 <Warning>
-  **Safety guarantee.** The LLM is never in the loop between propose and execute. It cannot bypass the confirmation, alter the frozen arguments after approval, or escalate its own privileges. The action is marked confirmed *before* execution so a crash can never leave a re-runnable pending row.
+  **Safety boundary.** The LLM is never in the loop between propose and execute. It cannot bypass the confirmation, alter the frozen arguments after approval, or escalate its own privileges. The action is marked confirmed *before* execution so a crash can never leave a re-runnable pending row.
 </Warning>
