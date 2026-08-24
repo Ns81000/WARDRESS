@@ -110,6 +110,13 @@ async def test_logout_revokes_refresh(client: httpx.AsyncClient, admin_user: Use
         "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
     )
     cookie = _refresh_cookie(login)
+    # Audit Finding 1.3: /api/auth/logout currently declares no auth
+    # dependency at all, while deps.py's docstring and two docs pages claim it
+    # requires an interactive JWT session and rejects API keys. This request
+    # intentionally sends no bearer; the 204 below is descriptive of current
+    # behavior, NOT normative. Phase 35 owns the posture decision (add
+    # SessionAuthContext vs correct the docs); when it lands, rewrite this
+    # test to the decided contract and add the missing invariant coverage.
     out = await client.post("/api/auth/logout")
     assert out.status_code == 204
     client.cookies.set("wardress_refresh", cookie, path="/api/auth")

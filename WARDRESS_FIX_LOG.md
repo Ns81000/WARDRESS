@@ -39,7 +39,7 @@ Source of truth for *how it's being fixed*: this file.
 | 29 | Ops/Scripts Robustness (Medium) | Complete | 2026-08-24 | fix(phase29) |
 | 30 | Test-Quality Mechanical Fixes | Complete | 2026-08-24 | fix(phase30) + fix(phase30b) |
 | 31 | Test-Quality New Coverage (webhook + agent loop) | Complete | 2026-08-24 | fix(phase31) |
-| 32 | Test-Quality Post-Fix Rewrite | Not started | | |
+| 32 | Test-Quality Post-Fix Rewrite | In progress (partial — see notes) | 2026-08-24 | fix(phase32) |
 | 33 | Docs Sweep A (ops/remediation) | Not started | | |
 | 34 | Docs Sweep B (detection/agent) | Not started | | |
 | 35 | Low Sweep — Backend Correctness | Not started | | |
@@ -1524,4 +1524,49 @@ Complete.
 - **Interactions with prior fixes**: the module REUSES the seams earlier phases built (Phase 4+5 claim semantics asserted via row states; Phase 26's opt-in/pinning transport honored by the opted-in loopback receiver; Phase 11's scripted-model technique; Phase 25's guard claims untouched by tier-0-only scripts) and modifies none; all their suites re-ran green inside the 923.
 - **Residual risk / follow-ups**: (1) Telegram bot handlers remain covered only by two DB helpers (audit note; outside this finding's two-path scope — candidate if a bot-surface finding is ever filed or at Phase 42's re-audit). (2) The `prereqs-missing` arm is dead-under-schema defensive depth — removal would be a production-code change outside a test phase; documented instead. (3) New leads observed: none.
 - **Commit**: fix(phase31)
+
+## Phase 32 Notes (partial — remainder executes inside Phase 35, do not re-open separately)
+
+The phase plan (§4.3) gates Phase 32 on "the Low-severity unauthenticated-logout fix
+(Low sweep 1) having landed" — but that fix is Phase 35's scope and the listed phase
+order puts 32 before 35. The conflict is real and was resolved as follows: everything
+completable before the posture decision WAS completed this session (three of the
+finding's four cited codifying tests were already rewritten by Phases 6/24/27 under
+documented Rule-7 pull-forwards — re-verified green on the current tree today; the
+fourth, `test_auth.py::test_logout_revokes_refresh`, now carries the audit's own
+interim directive: an annotation marking it descriptive-not-normative). The sole
+remainder — rewriting that test to the corrected expectations AND adding the missing
+interactive-session/API-key-rejection invariant coverage — cannot exist until Phase 35
+decides Finding 1.3's posture (add SessionAuthContext vs correct docs/deps docstring).
+
+**Disposition**: tracker stays `In progress (partial)`; the remainder EXECUTES INSIDE
+PHASE 35. Phase 35's fix entry must record the logout-test rewrite + invariant
+coverage and flip Phase 32's row to Complete. No standalone Phase-32 session is needed.
+
+---
+
+### [PARTIALLY FIXED — all work completable before Phase 35's Finding-1.3 posture decision] Tests codify defective behavior as expected: hash-gating the visual layer, degradation-scored-as-zero, third-party favicon leakage, and unauthenticated logout are each asserted as the correct outcome
+
+*(Header deviates from the §3 template deliberately: three of the four cited items were already rewritten to corrected expectations by their owning phases; the fourth is blocked on a later phase by the plan's own precondition. See the Phase 32 Notes block above for the disposition.)*
+
+- **Original severity**: Medium
+- **Phase**: 32 — Test-Quality Post-Fix Rewrite
+- **Files changed**: `backend/tests/test_auth.py:108-121` (`test_logout_revokes_refresh` gains the audit-directed annotation comment; no assertion changed)
+- **Re-verification (Step 1)**: all four cited sites read on current code before anything else. (1) `test_detection_fusion_pipeline.py::test_pipeline_identical_hash_gates_content_layers` (:488) — rewritten by Phase 6 and further amended by Phase 24: asserts layers 2/3/5/8 hash-gated WITH `"gated by layer 1"` reasons and explicitly NOT degraded (proofs-of-zero), layer 4 degraded (`score is None`, screenshot-missing reason) rather than silently skipped, dark layers 6/7 degraded — the corrected contract, with the old `layer4 skipped=True` blessing long gone. (2) `test_detection_layers.py::test_layer4_missing_screenshot_degrades`/:197 corrupt sibling (:184/:197) — rewritten by Phase 24: assert the degraded shape (`score None` / `skipped` / `degraded` / evidence flags) with an in-file comment naming Phase 24 and the formerly-blessed 0.0-with-note defect. (3) `frontend/tests/ai-provider-logo.test.tsx` — fully rewritten by Phase 27: every assertion demands same-origin bundled assets, bans any `https?://` src, keeps the no-inlined-SVG XSS property, letter-avatar fallback for unknown providers; zero Google-favicon assertions remain. All three RE-EXECUTED green this session per Rule 11: the two backend files → **67 passed**; the frontend file → **13 passed** — confirming the rewrites still pin corrected behavior after Phases 25–31's intervening changes. (4) `backend/tests/test_auth.py::test_logout_revokes_refresh` (:108) — confirmed UNCHANGED verbatim from the audit's citation: drives `POST /api/auth/logout` with no Authorization header and asserts 204, i.e. still exercising the undocumented unauthenticated surface that Finding 1.3 records.
+- **Root cause (Step 2)**: two distinct residuals compose this phase. (a) The detection/frontend trio were classic bug-blessing assertions whose owning findings' fixes landed in Phases 6/24/27 — each phase pulled its rewrite forward under Rule 7 because a green suite cannot coexist with an assertion of removed behavior; nothing remained but verification, which passed. (b) The logout item has NO corrected expectation to rewrite toward yet: Finding 1.3 is a docs-mismatch finding whose remedy requires deciding the endpoint's auth posture (add `SessionAuthContext`, making the documented invariant true, vs correct deps.py's docstring and both docs pages), and that decision is production-scope work assigned to Phase 35. The protocol's precondition for this phase therefore cannot hold while phases run in listed order — an ordering conflict inside the plan itself, recorded here explicitly rather than papered over or preempted.
+- **Edge cases enumerated (Step 3)**:
+  - *Annotation content precision*: placed inside the test body at the exact request it qualifies; names Finding 1.3, states the mismatch (no auth dependency vs docstring/docs claim), marks the 204 assertion descriptive-not-normative, names Phase 35 as owner, and demands BOTH follow-ups (rewrite + missing invariant coverage).
+  - *Comment-only change risk*: none behavioral — proven by the full regression (collection and execution identical: 923 backend tests).
+  - *Interaction with prior fixes (Rule 11)*: the three prior-phase rewrites were re-executed (not merely cited) green on the current tree this session; Phase 30's tautology rewrites untouched and green inside the regression.
+  - *Scope discipline*: deliberately NOT deciding Finding 1.3 here (would implement another phase's production change out of order — Rules 1/8); deliberately NOT writing the invariant test now (it would codify a posture nobody has decided — recreating exactly the bug-blessing class this finding exists to eliminate).
+  - *Auth/RBAC, concurrency, unicode/boundary, retry, backward compat, performance*: N/A — comment-only test-file edit; no production surface moved.
+  - *Fix-failure mode*: worst case the annotation rots if Phase 35 overlooks it — mitigated by recording the obligation here AND in the Phase 32 Notes block AND in Phase 35's own cluster scope (its finding list leads with the logout item).
+- **Fix design considered (Step 4)**: (A) execute the audit's explicit interim directive for not-yet-fixed underlying findings — "until then annotate them (comment referencing the finding) so the next reader knows the assertion is descriptive, not normative" — **chosen**; it is literally the prescribed state for this item at this point in the effort. (B) Pick a posture now and rewrite the test — rejected: implements Finding 1.3 out of scope/order and forecloses Phase 35's design space. (C) Leave the test bare with only log-level documentation — rejected: leaves the exact fix-friction/regression-theater harm the finding describes armed for Phase 35's maintainer.
+- **Fix applied (Step 5)**: annotation comment added to `test_logout_revokes_refresh` (content summarized under Step 3). Nothing else.
+- **Tests added/modified (Step 6)**: none executable — Rule 6's escape hatch invoked explicitly: a comment cannot fail, and the evidence-bearing checks are the three re-executed suites recorded under Step 1 (67 + 13 green). The missing logout-invariant coverage remains intentionally unwritten until Phase 35 decides what it must assert.
+- **Full regression result (Step 7)**: Backend `.venv\Scripts\python.exe -m pytest -q --tb=short` → **923 passed, 0 failed, 1 warning** (~809 s; warning = the pre-existing apprise/imghdr DeprecationWarning recorded since Phase 0). Frontend: `pnpm test` → **12 files / 82 passed**; `pnpm type-check` (`tsc -b --noEmit`) → clean exit; `pnpm exec oxlint src` → **0 errors / 12 warnings** (= recorded baseline exactly). Backend `uv run --frozen ruff check .` → All checks passed!; `ruff format --check .` → 147 files formatted. No dependency changes → supply-chain gates stand green from Phase 9.
+- **Interactions with prior fixes**: Phases 6/24/27 — their pull-forward rewrites verified still-green and still-pinning-corrected-behavior on the current tree (re-executed this session). Phase 30 — tautology/vacuity rewrites untouched, green inside the 923. No other phase touches any of the four cited files' relevant assertions.
+- **Residual risk / follow-ups (THE REMAINDER)**: exactly one item — rewrite `test_auth.py::test_logout_revokes_refresh` to the corrected expectations once Finding 1.3's posture is decided, AND add the interactive-session/API-key-rejection invariant coverage the audit notes has never existed. Both execute INSIDE PHASE 35; its fix entry must record the closure and flip Phase 32's tracker row to Complete. Do not re-open Phase 32 standalone.
+- **Commit**: fix(phase32)
+
 
