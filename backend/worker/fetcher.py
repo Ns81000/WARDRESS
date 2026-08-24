@@ -102,7 +102,9 @@ def _make_ssrf_route_guard(allow_private_networks: bool):
 
 
 async def fetch_page(url: str, *, allow_private_networks: bool = False) -> FetchResult:
-    assert_url_allowed(url, allow_private_networks=allow_private_networks)
+    # DNS resolution is blocking — offload like the route guard below
+    # (Finding: sync assert_url_allowed inside async functions).
+    await asyncio.to_thread(assert_url_allowed, url, allow_private_networks=allow_private_networks)
 
     try:
         async with async_playwright() as pw:
@@ -129,7 +131,14 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                 # Redirect landed on a different host? Re-run the SSRF check
                 # on where we actually ended up.
                 if _hostnames_differ(url, final_url):
-                    assert_url_allowed(final_url, allow_private_networks=allow_private_networks)
+                    # Offloaded like every other direct check (the route
+                    # guard above sets the precedent): resolution is
+                    # blocking and must not stall the loop.
+                    await asyncio.to_thread(
+                        assert_url_allowed,
+                        final_url,
+                        allow_private_networks=allow_private_networks,
+                    )
 
                 html = await page.content()
                 if len(html.encode("utf-8", errors="replace")) > MAX_HTML_BYTES:

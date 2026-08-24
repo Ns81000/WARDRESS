@@ -1,7 +1,9 @@
 """Wardress API entrypoint."""
 
 import asyncio
+import json
 import logging
+import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -113,10 +115,112 @@ class RequestBodySizeLimitMiddleware:
         await response(scope, receive, send)
 
 
+# NOTE: middleware registration happens AFTER both classes below (see the
+# ordering comment at the bottom of this file) — Starlette's add_middleware
+# prepends, so the LAST registration runs FIRST (outermost).
+class StrictJSONBodyMiddleware:
+    """Reject NaN/Infinity numeric literals with 422 before pydantic sees
+    them (Finding: "NaN/Infinity in any float field returns 500").
+
+    Python's lenient `json.loads` accepts `NaN`/`Infinity`/`-Infinity`,
+    which are NOT valid JSON. Pydantic then correctly rejects the value,
+    but FastAPI's validation-error response embeds the raw input, and
+    Starlette's JSONResponse renders with allow_nan=False — serializing
+    that error raises ValueError and the client receives a misleading 500.
+    Parsing strictly here kills the class for every JSON endpoint at once:
+    a body containing non-finite constants is malformed JSON (422), the
+    same verdict any strict JSON parser gives."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        content_type = headers.get(b"content-type", b"").decode("latin-1")
+        if content_type.split(";")[0].strip().lower() != "application/json":
+            await self.app(scope, receive, send)
+            return
+
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body = message.get("body", b"")
+            chunks.append(body)
+            if not message.get("more_body", False):
+                break
+
+        raw = b"".join(chunks)
+        try:
+            data = json.loads(raw, parse_constant=_reject_constant)
+            # Valid JSON text can STILL carry non-finite numbers via
+            # overflow (`1e400` parses to inf), and pydantic's rejection of
+            # such a value would crash response serialization exactly like
+            # the literal form did — reject them here too.
+            _ensure_finite(data)
+        except (ValueError, UnicodeDecodeError):
+            # Covers NaN/Infinity/-Infinity literals (routed through
+            # parse_constant), overflowed non-finite floats, and ordinary
+            # malformed JSON. A 422 detail keeps the shape clients already
+            # handle for invalid bodies; nothing downstream ever runs.
+            response = JSONResponse({"detail": "Request body is not valid JSON"}, status_code=422)
+            await response(scope, receive, send)
+            return
+
+        sent = False
+
+        async def replay_receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": raw, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
+def _reject_constant(value: str):  # noqa: ARG001 - signature fixed by json module
+    raise ValueError(f"{value} is not valid JSON")
+
+
+def _ensure_finite(node, _depth: int = 0) -> None:
+    """Reject any non-finite float anywhere in a parsed JSON body (overflow
+    forms like 1e400 are valid JSON text but serialize as Infinity). Depth-
+    and size-capped: request bodies already passed the 1 MiB limit middleware,
+    so recursion depth beyond 64 means hostile nesting, not real payloads."""
+    if _depth > 64:
+        raise ValueError("JSON nesting too deep")
+    if isinstance(node, float) and not math.isfinite(node):
+        raise ValueError("JSON numbers must be finite")
+    if isinstance(node, dict):
+        for value in node.values():
+            _ensure_finite(value, _depth + 1)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            _ensure_finite(value, _depth + 1)
+
+
+# --- Middleware registration (ORDER MATTERS) ---
+# Starlette's add_middleware PREPENDS: the LAST registration is the
+# OUTERMOST middleware. The required chain is:
+#   rate-limit -> body-size gate (413) -> strict JSON (422) -> CORS -> app.
+# The @app.middleware("http") rate limiter below registers after these, so it
+# ends up outermost of the three. Registering the size gate LAST puts it
+# outside the strict parser, so an over-limit body stops at 413 before any
+# parsing work — exactly as before the parser existed (pinned by
+# test_over_limit_body_returns_413_before_parsing). The parser sits inside
+# it and rejects NaN/Infinity/overflow bodies before pydantic ever runs.
+app.add_middleware(StrictJSONBodyMiddleware)
 app.add_middleware(
     RequestBodySizeLimitMiddleware,
     max_bytes=get_settings().max_request_body_bytes,
 )
+
 
 # CORS locked to explicitly-configured origins (§9). The Phase 0 decision
 # serves the SPA same-origin, so the default list is empty and no cross-

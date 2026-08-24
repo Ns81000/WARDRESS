@@ -337,6 +337,20 @@ class NotificationChannelUpdate(BaseModel):
     is_active: bool | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
 
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str | None) -> str | None:
+        # Mirror NotificationChannelCreate.strip_name: a whitespace-only
+        # value must reject here, not survive min_length on the raw input
+        # and then be stripped to "" by the router before storing (Finding:
+        # "Whitespace-only names pass PATCH validation").
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
 
 # --- Phase 4: settings blobs (§7 /api/settings/*) ---
 
@@ -420,7 +434,6 @@ class TelegramSettingsOut(BaseModel):
     # assistant is off and only the legacy slash commands answer.
     acting_user_id: str | None = None
     acting_user_email: str | None = None  # display hint for the linked user
-    acting_user_email: str | None = None
 
 
 class GeminiSettingsIn(BaseModel):
@@ -833,6 +846,20 @@ class RemediationHookUpdate(BaseModel):
     trigger_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     requires_manual_confirm: bool | None = None
     is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str | None) -> str | None:
+        # Mirror RemediationHookCreate.strip_name: reject whitespace-only
+        # values at the schema instead of letting the router's strip turn
+        # them into an empty stored name (Finding: "Whitespace-only names
+        # pass PATCH validation").
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
 
     @field_validator("webhook_url")
     @classmethod

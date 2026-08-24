@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import record_audit
 from app.config import get_settings
 from app.db import get_db
-from app.deps import CurrentUser
+from app.deps import CurrentUser, SessionAuthContext
 from app.models import RefreshToken, User, ensure_utc
 from app.ratelimit import enforce_login_rate_limit
 from app.schemas import LoginRequest, TokenResponse, UserOut
@@ -316,8 +316,17 @@ async def refresh(
 async def logout(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
+    session: SessionAuthContext,
     wardress_refresh: Annotated[str | None, Cookie()] = None,
 ) -> None:
+    """Revoke the presented refresh token and clear the cookie.
+
+    Guarded by SessionAuthContext (Finding 1.3): only an interactive JWT
+    session may log out — API keys are refused (403), and a missing bearer
+    is rejected (401). The endpoint still acts solely on the request's own
+    `wardress_refresh` cookie; the guard exists so a leaked key cannot
+    manage credentials, exactly as deps.py's docstring and the docs
+    promise."""
     if wardress_refresh:
         record = await db.scalar(
             select(RefreshToken).where(

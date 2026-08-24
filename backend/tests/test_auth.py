@@ -6,12 +6,30 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from app.config import get_settings
 from app.models import RefreshToken, User
 from tests.conftest import TEST_PASSWORD
 
 
 def _refresh_cookie(resp: httpx.Response) -> str | None:
     return resp.cookies.get("wardress_refresh")
+
+
+def _expired_access_token(user_id, role: str) -> str:
+    """An access token whose exp is already past (well beyond the 30 s
+    leeway decode_access_token allows) — for probing expired-bearer paths."""
+    import jwt
+
+    settings = get_settings()
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "role": role,
+        "iat": now - timedelta(hours=2),
+        "exp": now - timedelta(hours=1),
+        "type": "access",
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
 async def test_login_success(client: httpx.AsyncClient, admin_user: User) -> None:
@@ -105,23 +123,98 @@ async def test_refresh_with_bogus_cookie(client: httpx.AsyncClient, admin_user: 
     assert resp.status_code == 401
 
 
-async def test_logout_revokes_refresh(client: httpx.AsyncClient, admin_user: User) -> None:
+async def test_logout_revokes_refresh(
+    client: httpx.AsyncClient, auth_headers, admin_user: User
+) -> None:
     login = await client.post(
         "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
     )
     cookie = _refresh_cookie(login)
-    # Audit Finding 1.3: /api/auth/logout currently declares no auth
-    # dependency at all, while deps.py's docstring and two docs pages claim it
-    # requires an interactive JWT session and rejects API keys. This request
-    # intentionally sends no bearer; the 204 below is descriptive of current
-    # behavior, NOT normative. Phase 35 owns the posture decision (add
-    # SessionAuthContext vs correct the docs); when it lands, rewrite this
-    # test to the decided contract and add the missing invariant coverage.
-    out = await client.post("/api/auth/logout")
+    # Audit Finding 1.3 (fixed Phase 35): logout now requires an interactive
+    # JWT session (SessionAuthContext) — API keys are refused 403 and a bare
+    # unauthenticated call is rejected 401 — exactly as deps.py's docstring
+    # and the docs pages always claimed. This test drives the documented,
+    # guarded flow: a bearer-authenticated logout revokes the refresh token.
+    out = await client.post("/api/auth/logout", headers=auth_headers)
     assert out.status_code == 204
     client.cookies.set("wardress_refresh", cookie, path="/api/auth")
     resp = await client.post("/api/auth/refresh")
     assert resp.status_code == 401
+
+
+class TestLogoutSessionGuard:
+    """Finding 1.3's invariant: /api/auth/logout requires an interactive JWT
+    session and rejects API keys. The audit noted this coverage never existed;
+    it lands with the fix itself (Phase 35)."""
+
+    async def test_logout_rejects_api_keys_with_403(
+        self, client: httpx.AsyncClient, auth_headers, admin_user: User
+    ) -> None:
+        login = await client.post(
+            "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
+        )
+        cookie = _refresh_cookie(login)
+        key_resp = await client.post(
+            "/api/api-keys", headers=auth_headers, json={"label": "logout-probe"}
+        )
+        assert key_resp.status_code == 201, key_resp.text
+        raw_key = key_resp.json()["key"]
+
+        # A leaked key must not be able to manage credentials — including
+        # revoking the session's refresh token via logout.
+        resp = await client.post(
+            "/api/auth/logout",
+            headers={"Authorization": f"Bearer {raw_key}"},
+        )
+        assert resp.status_code == 403
+
+        # The refresh token is untouched by the refused attempt.
+        client.cookies.set("wardress_refresh", cookie, path="/api/auth")
+        still_alive = await client.post("/api/auth/refresh")
+        assert still_alive.status_code == 200
+
+    async def test_logout_without_any_credential_is_401_not_204(
+        self, client: httpx.AsyncClient, admin_user: User
+    ) -> None:
+        """The formerly-unauthenticated surface: no Authorization header at
+        all used to return 204 and revoke whatever cookie accompanied the
+        request. Under the guard it is a plain 401."""
+        login = await client.post(
+            "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
+        )
+        cookie = _refresh_cookie(login)
+
+        resp = await client.post("/api/auth/logout")
+        assert resp.status_code == 401
+        # No Set-Cookie deletion header on an unauthenticated rejection.
+        assert resp.headers.get("set-cookie") is None
+
+        # And nothing was revoked server-side.
+        client.cookies.set("wardress_refresh", cookie, path="/api/auth")
+        still_alive = await client.post("/api/auth/refresh")
+        assert still_alive.status_code == 200
+
+    async def test_expired_bearer_cannot_logout_but_cookie_survives(
+        self, client: httpx.AsyncClient, admin_user: User
+    ) -> None:
+        """An expired access token must not reach the credential-management
+        surface; the refresh cookie stays usable so the interactive user can
+        continue their session (or refresh and log out properly)."""
+        login = await client.post(
+            "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
+        )
+        cookie = _refresh_cookie(login)
+
+        # Mint an already-expired access token (well past the 30 s leeway).
+        expired = _expired_access_token(admin_user.id, admin_user.role.value)
+
+        resp = await client.post("/api/auth/logout", headers={"Authorization": f"Bearer {expired}"})
+        assert resp.status_code == 401
+        assert "not authenticated" in resp.json()["detail"].lower()
+
+        client.cookies.set("wardress_refresh", cookie, path="/api/auth")
+        still_alive = await client.post("/api/auth/refresh")
+        assert still_alive.status_code == 200
 
 
 async def test_login_validation_errors(client: httpx.AsyncClient) -> None:
@@ -241,9 +334,10 @@ async def test_refresh_logout_reuse_does_not_escalate(
         "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
     )
     cookie = _refresh_cookie(login)
+    auth = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     # Logout revokes without setting replaced_by.
-    await client.post("/api/auth/logout")
+    await client.post("/api/auth/logout", headers=auth)
 
     # Replay the logout-revoked cookie — 401, but no family kill.
     client.cookies.set("wardress_refresh", cookie, path="/api/auth")
@@ -337,7 +431,10 @@ async def test_logout_cookie_deleted_with_mirrored_attributes(
     assert "httponly" in set_cookie_header.lower()
     assert "samesite=strict" in set_cookie_header.lower()
 
-    logout = await client.post("/api/auth/logout")
+    logout = await client.post(
+        "/api/auth/logout",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
     delete_header = logout.headers.get("set-cookie", "")
     # The deletion must carry the same attributes.
     assert "httponly" in delete_header.lower()

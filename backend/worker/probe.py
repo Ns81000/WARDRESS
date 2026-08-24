@@ -141,8 +141,13 @@ def _redirect_guard(allow_private_networks: bool):
 
     async def check(response: httpx.Response) -> None:
         if response.next_request is not None:
-            assert_url_allowed(
-                str(response.next_request.url), allow_private_networks=allow_private_networks
+            # Resolution is blocking (socket.getaddrinfo inside
+            # assert_url_allowed) — offload so the hook never stalls the
+            # loop it runs on (Finding: sync assert_url_allowed in async).
+            await asyncio.to_thread(
+                assert_url_allowed,
+                str(response.next_request.url),
+                allow_private_networks=allow_private_networks,
             )
 
     return check
@@ -175,7 +180,11 @@ async def probe_site(url: str, *, allow_private_networks: bool = False) -> Probe
     result = ProbeResult()
 
     try:
-        assert_url_allowed(url, allow_private_networks=allow_private_networks)
+        # Offloaded: resolution is blocking and probe_site runs on the task's
+        # event loop (Finding: sync assert_url_allowed in async functions).
+        await asyncio.to_thread(
+            assert_url_allowed, url, allow_private_networks=allow_private_networks
+        )
     except SSRFBlockedError as exc:
         # The main fetch already refused this URL; record and bail.
         logger.warning("Probe skipped, URL blocked: %s", exc)

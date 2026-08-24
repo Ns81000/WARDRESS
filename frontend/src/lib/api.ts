@@ -107,6 +107,17 @@ export async function api<T>(
       throw new ApiError(401, "Session expired")
     }
   }
+  // Logout is auth-guarded server-side (interactive sessions only), but
+  // sits under /api/auth/, where the generic 401-retry above is exempted to
+  // protect refresh rotation. A single explicit retry covers an expired
+  // access token so the cookie revocation actually happens; if that also
+  // fails the session was already dead — clearing local state (the caller's
+  // finally block) is the correct outcome either way.
+  if (resp.status === 401 && path === "/api/auth/logout") {
+    if (await refreshSession()) {
+      resp = await doFetch()
+    }
+  }
   if (!resp.ok) throw new ApiError(resp.status, await parseDetail(resp))
   if (resp.status === 204) return undefined as T
   return (await resp.json()) as T
