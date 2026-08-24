@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Search, User } from "lucide-react"
 
@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input"
 import * as apiClient from "@/lib/api"
 import type { AuditLogEntry } from "@/lib/api"
 import { cn } from "@/lib/utils"
+
+import { listboxAction } from "@/lib/listbox-keys"
 
 /*
  * Audit log (Phase 5, §6/§7) — admin-only. Filterable who/what/when
@@ -178,6 +180,7 @@ function SnapshotBlock({
 
 function AuditRow({ entry }: { entry: AuditLogEntry }) {
   const [open, setOpen] = useState(false)
+  const detailsId = useId()
   const hasDetail = entry.before_json != null || entry.after_json != null
   const targetLabel = entry.target_label ?? entry.target_id ?? entry.target_type
 
@@ -190,58 +193,70 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
     second: "2-digit",
   })
 
+  const headerGrid = (
+    <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[160px_220px_1fr_200px_32px] sm:items-center sm:gap-4">
+      {/* Timestamp */}
+      <span className="font-mono text-code-md text-charcoal flex items-center gap-1.5">
+        <Clock className="size-3.5 text-mute sm:hidden" />
+        {formattedDate}
+      </span>
+
+      {/* Action Badge */}
+      <div className="flex items-center min-w-0">
+        <Badge variant="outline" className={cn("px-2.5 py-0.5 text-[10px] font-mono tracking-wider max-w-full truncate inline-block", auditActionClass(entry.action))} title={entry.action}>
+          {entry.action}
+        </Badge>
+      </div>
+
+      {/* Target Label */}
+      <span className="min-w-0 truncate text-body-sm font-medium text-ink flex items-center gap-2" title={targetLabel}>
+        {getTargetIcon(entry.target_type, entry.action, targetLabel)}
+        <span className="truncate">{targetLabel}</span>
+      </span>
+
+      {/* Actor Email */}
+      <span className="truncate font-mono text-caption text-mute" title={entry.actor_email ?? "system"}>
+        {entry.actor_email ?? "system"}
+      </span>
+
+      {/* Details toggle chevron */}
+      <div className="flex justify-end" aria-hidden>
+        {hasDetail ? (
+          <span className="text-mute transition-colors">
+            {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          </span>
+        ) : (
+          <span className="text-stone select-none font-mono text-[10px]">—</span>
+        )}
+      </div>
+    </div>
+  )
+
   return (
     <li className="border-b border-hairline last:border-b-0">
-      {/* Clickable Row Header Container */}
-      <div
-        onClick={() => hasDetail && setOpen((v) => !v)}
-        className={cn(
-          "px-6 py-3.5 transition-all duration-150 select-none",
-          hasDetail ? "cursor-pointer hover:bg-white/[0.015]" : "cursor-default",
-          open && "bg-white/[0.01]"
-        )}
-      >
-        <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[160px_220px_1fr_200px_32px] sm:items-center sm:gap-4">
-          {/* Timestamp */}
-          <span className="font-mono text-code-md text-charcoal flex items-center gap-1.5">
-            <Clock className="size-3.5 text-mute sm:hidden" />
-            {formattedDate}
-          </span>
-
-          {/* Action Badge */}
-          <div className="flex items-center min-w-0">
-            <Badge variant="outline" className={cn("px-2.5 py-0.5 text-[10px] font-mono tracking-wider max-w-full truncate inline-block", auditActionClass(entry.action))} title={entry.action}>
-              {entry.action}
-            </Badge>
-          </div>
-
-          {/* Target Label */}
-          <span className="min-w-0 truncate text-body-sm font-medium text-ink flex items-center gap-2" title={targetLabel}>
-            {getTargetIcon(entry.target_type, entry.action, targetLabel)}
-            <span className="truncate">{targetLabel}</span>
-          </span>
-
-          {/* Actor Email */}
-          <span className="truncate font-mono text-caption text-mute" title={entry.actor_email ?? "system"}>
-            {entry.actor_email ?? "system"}
-          </span>
-
-          {/* Details toggle chevron */}
-          <div className="flex justify-end">
-            {hasDetail ? (
-              <span className="text-mute hover:text-ink transition-colors">
-                {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-              </span>
-            ) : (
-              <span className="text-stone select-none font-mono text-[10px]">—</span>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* Row Header — a real disclosure button when a snapshot exists so the
+          expander is keyboard-reachable and its state is announced */}
+      {hasDetail ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls={detailsId}
+          className={cn(
+            "block w-full px-6 py-3.5 text-left transition-all duration-150 select-none cursor-pointer",
+            "hover:bg-white/[0.015]",
+            open && "bg-white/[0.01]"
+          )}
+        >
+          {headerGrid}
+        </button>
+      ) : (
+        <div className="px-6 py-3.5 select-none">{headerGrid}</div>
+      )}
 
       {/* Expanded Diff Block */}
       {open && hasDetail && (
-        <div className="animate-detail-in bg-surface-deep/30 border-t border-hairline p-6 flex flex-col gap-4 sm:flex-row">
+        <div id={detailsId} className="animate-detail-in bg-surface-deep/30 border-t border-hairline p-6 flex flex-col gap-4 sm:flex-row">
           {entry.before_json && <SnapshotBlock label="Before" data={entry.before_json} type="before" />}
           {entry.after_json && <SnapshotBlock label="After" data={entry.after_json} type="after" />}
         </div>
@@ -256,6 +271,46 @@ export function AuditPage() {
   const [targetType, setTargetType] = useState("")
   const [actor, setActor] = useState("")
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const dropdownTriggerRef = useRef<HTMLButtonElement>(null)
+  const dropdownOptionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const justOpenedRef = useRef(false)
+  const listboxId = useId()
+
+  useEffect(() => {
+    if (!dropdownOpen || !justOpenedRef.current) return
+    justOpenedRef.current = false
+    const idx = Math.max(
+      0,
+      TARGET_TYPES.findIndex((t) => t === targetType)
+    )
+    dropdownOptionRefs.current[idx]?.focus()
+  }, [dropdownOpen, targetType])
+
+  useEffect(() => {
+    if (!dropdownOpen) return
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        setDropdownOpen(false)
+        dropdownTriggerRef.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [dropdownOpen])
+
+  const focusDropdownOption = (index: number) => {
+    dropdownOptionRefs.current[index]?.focus()
+  }
+
+  const commitTargetType = (t: string) => {
+    setTargetType(t)
+    setPage(0)
+    setDropdownOpen(false)
+    dropdownTriggerRef.current?.focus()
+  }
 
   const log = useQuery({
     queryKey: ["audit", { page, action, targetType, actor }],
@@ -307,26 +362,63 @@ export function AuditPage() {
           <div className="relative w-full sm:w-48">
             <button
               type="button"
-              onClick={() => setDropdownOpen((prev) => !prev)}
+              ref={dropdownTriggerRef}
+              aria-haspopup="listbox"
+              aria-expanded={dropdownOpen}
+              aria-controls={dropdownOpen ? listboxId : undefined}
+              onClick={() => {
+                if (!dropdownOpen) {
+                  justOpenedRef.current = true
+                  setDropdownOpen(true)
+                } else {
+                  setDropdownOpen(false)
+                }
+              }}
+              onKeyDown={(e) => {
+                if (!dropdownOpen && ["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+                  e.preventDefault()
+                  justOpenedRef.current = true
+                  setDropdownOpen(true)
+                }
+              }}
               className="w-full h-9 rounded-md border border-hairline-strong bg-surface-card px-3 text-left text-body-sm text-ink outline-none focus:border-ink transition-colors flex items-center justify-between cursor-pointer"
             >
               <span>{targetType === "" ? "All targets" : targetType.replaceAll("_", " ")}</span>
-              <ChevronDown className={cn("size-4 text-charcoal transition-transform duration-200", dropdownOpen && "rotate-180")} />
+              <ChevronDown aria-hidden className={cn("size-4 text-charcoal transition-transform duration-200", dropdownOpen && "rotate-180")} />
             </button>
 
             {dropdownOpen && (
               <>
                 {/* Backdrop to close list when clicking outside */}
                 <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md">
-                  {TARGET_TYPES.map((t) => (
+                <div
+                  role="listbox"
+                  id={listboxId}
+                  aria-label="Filter by target type"
+                  tabIndex={-1}
+                  className="absolute left-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 max-h-60 overflow-y-auto animate-detail-in font-mono text-code-md"
+                >
+                  {TARGET_TYPES.map((t, i) => (
                     <button
-                      key={t}
+                      key={t || "__all__"}
+                      ref={(el) => {
+                        dropdownOptionRefs.current[i] = el
+                      }}
                       type="button"
-                      onClick={() => {
-                        setTargetType(t)
-                        setPage(0)
-                        setDropdownOpen(false)
+                      role="option"
+                      aria-selected={t === targetType}
+                      tabIndex={-1}
+                      onClick={() => commitTargetType(t)}
+                      onKeyDown={(e) => {
+                        const act = listboxAction(e.key, i, TARGET_TYPES.length)
+                        if (!act) return
+                        e.preventDefault()
+                        if (act === "commit") commitTargetType(t)
+                        else if (act === "dismiss") setDropdownOpen(false)
+                        else if (act === "prev") focusDropdownOption(i - 1)
+                        else if (act === "next") focusDropdownOption(i + 1)
+                        else if (act === "first") focusDropdownOption(0)
+                        else if (act === "last") focusDropdownOption(TARGET_TYPES.length - 1)
                       }}
                       className={cn(
                         "w-full text-left px-3 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",

@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, Trash2 } from "lucide-react"
-import { useNavigate } from "react-router"
+import { Link } from "react-router"
 import { toast } from "sonner"
 
 import { StatusDot, type DotState } from "@/components/status-dot"
@@ -70,7 +70,6 @@ function baselineLabel(site: Site): string {
 
 export function SitesPage() {
   const { user } = useAuth()
-  const navigate = useNavigate()
   // Viewers are read-only; mutating controls are hidden (the API enforces
   // the role server-side regardless).
   const canManage = user?.role === "admin" || user?.role === "analyst"
@@ -247,15 +246,20 @@ export function SitesPage() {
               {sites.data.map((site) => (
                 <TableRow
                   key={site.id}
-                  className="cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
-                  onClick={() => navigate(`/sites/${site.id}`)}
+                  className="relative cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
                 >
                   <TableCell className="max-w-[240px] md:max-w-[360px]">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <SiteAvatar url={site.url} />
-                      <span className="truncate text-ink hover:underline font-medium">
+                      {/* The row navigates via this real link stretched over
+                          it (after:inset-0), so keyboard users reach the same
+                          target the mouse click hits. */}
+                      <Link
+                        to={`/sites/${site.id}`}
+                        className="truncate text-ink hover:underline focus-visible:underline font-medium after:absolute after:inset-0"
+                      >
                         {site.name}
-                      </span>
+                      </Link>
                     </div>
                   </TableCell>
                   <TableCell className="max-w-md truncate text-code-md text-charcoal">
@@ -272,14 +276,13 @@ export function SitesPage() {
                   <TableCell className="text-body-sm text-mute">
                     {new Date(site.created_at).toLocaleDateString()}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="relative z-10">
                     {canManage && (
                       <Button
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Delete ${site.name}`}
-                        onClick={(e) => {
-                          e.stopPropagation()
+                        onClick={() => {
                           setSiteToDelete(site)
                         }}
                       >

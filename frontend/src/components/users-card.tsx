@@ -1,8 +1,10 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useId, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, Plus } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+
+import { listboxAction } from "@/lib/listbox-keys"
 
 import { StatusDot } from "@/components/status-dot"
 import { Badge } from "@/components/ui/badge"
@@ -41,6 +43,12 @@ const ROLE_DESCRIPTIONS: Record<Role, string> = {
   viewer: "Read-only access to every page",
 }
 
+const ROLE_OPTIONS = [
+  { value: "admin", label: "Admin" },
+  { value: "analyst", label: "Analyst" },
+  { value: "viewer", label: "Viewer" },
+]
+
 function RoleSelect({
   value,
   onChange,
@@ -51,12 +59,43 @@ function RoleSelect({
   disabled?: boolean
 }) {
   const [isOpen, setIsOpen] = useState(false)
-  const options = [
-    { value: "admin", label: "Admin" },
-    { value: "analyst", label: "Analyst" },
-    { value: "viewer", label: "Viewer" }
-  ]
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const justOpenedRef = useRef(false)
+  const listboxId = useId()
+  const options = ROLE_OPTIONS
   const currentOption = options.find((opt) => opt.value === value) || options[0]
+
+  useEffect(() => {
+    if (!isOpen || !justOpenedRef.current) return
+    justOpenedRef.current = false
+    const idx = Math.max(
+      0,
+      options.findIndex((o) => o.value === value)
+    )
+    optionRefs.current[idx]?.focus()
+  }, [isOpen, options, value])
+
+  useEffect(() => {
+    if (!isOpen) return
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        setIsOpen(false)
+        triggerRef.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [isOpen])
+
+  const commit = (v: string) => {
+    onChange(v as Role)
+    setIsOpen(false)
+    triggerRef.current?.focus()
+  }
 
   if (disabled) {
     return (
@@ -66,11 +105,33 @@ function RoleSelect({
     )
   }
 
+  const focusOption = (index: number) => {
+    optionRefs.current[index]?.focus()
+  }
+
   return (
     <div className="relative w-28">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? listboxId : undefined}
+        onClick={() => {
+          if (!isOpen) {
+            justOpenedRef.current = true
+            setIsOpen(true)
+          } else {
+            setIsOpen(false)
+          }
+        }}
+        onKeyDown={(e) => {
+          if (!isOpen && ["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+            e.preventDefault()
+            justOpenedRef.current = true
+            setIsOpen(true)
+          }
+        }}
         className="w-full h-8 rounded-md border border-hairline-strong bg-surface-elevated px-2.5 text-left text-body-sm text-ink outline-none focus:border-white/25 transition-colors flex items-center justify-between cursor-pointer select-none"
       >
         <span className="truncate">{currentOption.label}</span>
@@ -81,14 +142,34 @@ function RoleSelect({
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 animate-detail-in font-mono text-code-md">
-            {options.map((opt) => (
+          <div
+            role="listbox"
+            id={listboxId}
+            aria-label="Role"
+            tabIndex={-1}
+            className="absolute right-0 mt-1 w-full rounded-md border border-hairline-strong bg-surface-card py-1 z-50 animate-detail-in font-mono text-code-md"
+          >
+            {options.map((opt, i) => (
               <button
                 key={opt.value}
+                ref={(el) => {
+                  optionRefs.current[i] = el
+                }}
                 type="button"
-                onClick={() => {
-                  onChange(opt.value as Role)
-                  setIsOpen(false)
+                role="option"
+                aria-selected={opt.value === value}
+                tabIndex={-1}
+                onClick={() => commit(opt.value)}
+                onKeyDown={(e) => {
+                  const action = listboxAction(e.key, i, options.length)
+                  if (!action) return
+                  e.preventDefault()
+                  if (action === "commit") commit(opt.value)
+                  else if (action === "dismiss") setIsOpen(false)
+                  else if (action === "prev") focusOption(i - 1)
+                  else if (action === "next") focusOption(i + 1)
+                  else if (action === "first") focusOption(0)
+                  else if (action === "last") focusOption(options.length - 1)
                 }}
                 className={cn(
                   "w-full text-left px-2.5 py-1.5 cursor-pointer transition-colors text-charcoal hover:bg-white/[0.04] hover:text-ink flex items-center justify-between",

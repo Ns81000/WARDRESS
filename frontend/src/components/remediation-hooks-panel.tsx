@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useId, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+
+import { listboxAction } from "@/lib/listbox-keys"
 
 import { StatusDot } from "@/components/status-dot"
 import { Badge } from "@/components/ui/badge"
@@ -115,6 +117,45 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
   const [formError, setFormError] = useState<string | null>(null)
   const [hookToDelete, setHookToDelete] = useState<RemediationHook | null>(null)
   const [selectOpen, setSelectOpen] = useState(false)
+  const selectTriggerRef = useRef<HTMLButtonElement>(null)
+  const selectOptionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const justOpenedRef = useRef(false)
+  const listboxId = useId()
+
+  useEffect(() => {
+    if (!selectOpen || !justOpenedRef.current) return
+    justOpenedRef.current = false
+    const idx = Math.max(
+      0,
+      ACTION_TYPES.findIndex((a) => a.value === actionType)
+    )
+    selectOptionRefs.current[idx]?.focus()
+  }, [selectOpen, actionType])
+
+  useEffect(() => {
+    if (!selectOpen) return
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        setSelectOpen(false)
+        selectTriggerRef.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [selectOpen])
+
+  const focusSelectOption = (index: number) => {
+    selectOptionRefs.current[index]?.focus()
+  }
+
+  const commitActionType = (v: RemediationActionType) => {
+    setActionType(v)
+    setSelectOpen(false)
+    selectTriggerRef.current?.focus()
+  }
 
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ["remediation-hooks", siteId] })
@@ -217,28 +258,66 @@ export function RemediationHooksPanel({ siteId }: { siteId: string }) {
                     <div className="relative">
                       <button
                         id="hook-action"
+                        ref={selectTriggerRef}
                         type="button"
-                        onClick={() => setSelectOpen((o) => !o)}
+                        aria-haspopup="listbox"
+                        aria-expanded={selectOpen}
+                        aria-controls={selectOpen ? listboxId : undefined}
+                        onClick={() => {
+                          if (!selectOpen) {
+                            justOpenedRef.current = true
+                            setSelectOpen(true)
+                          } else {
+                            setSelectOpen(false)
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (!selectOpen && ["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+                            e.preventDefault()
+                            justOpenedRef.current = true
+                            setSelectOpen(true)
+                          }
+                        }}
                         className="flex h-9 w-full items-center justify-between rounded-md border border-hairline-strong bg-surface-elevated px-3 text-body-sm text-ink outline-none transition-colors hover:bg-surface-card focus:border-white/25 cursor-pointer"
                       >
                         <span className="flex items-center gap-2">
                           {getActionTypeIcon(actionType, "size-4.5")}
                           <span>{ACTION_TYPES.find((a) => a.value === actionType)?.label}</span>
                         </span>
-                        <span className="text-mute text-xs">▼</span>
+                        <span className="text-mute text-xs" aria-hidden>▼</span>
                       </button>
 
                       {selectOpen && (
                         <>
                           <div className="fixed inset-0 z-40" onClick={() => setSelectOpen(false)} />
-                          <div className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-md border border-hairline-strong bg-surface-elevated p-1 animate-in fade-in-0 zoom-in-95 duration-100">
-                            {ACTION_TYPES.map((a) => (
+                          <div
+                            role="listbox"
+                            id={listboxId}
+                            aria-labelledby="hook-action"
+                            tabIndex={-1}
+                            className="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-y-auto rounded-md border border-hairline-strong bg-surface-elevated p-1 animate-in fade-in-0 zoom-in-95 duration-100"
+                          >
+                            {ACTION_TYPES.map((a, i) => (
                               <button
                                 key={a.value}
+                                ref={(el) => {
+                                  selectOptionRefs.current[i] = el
+                                }}
                                 type="button"
-                                onClick={() => {
-                                  setActionType(a.value)
-                                  setSelectOpen(false)
+                                role="option"
+                                aria-selected={a.value === actionType}
+                                tabIndex={-1}
+                                onClick={() => commitActionType(a.value)}
+                                onKeyDown={(e) => {
+                                  const action = listboxAction(e.key, i, ACTION_TYPES.length)
+                                  if (!action) return
+                                  e.preventDefault()
+                                  if (action === "commit") commitActionType(a.value)
+                                  else if (action === "dismiss") setSelectOpen(false)
+                                  else if (action === "prev") focusSelectOption(i - 1)
+                                  else if (action === "next") focusSelectOption(i + 1)
+                                  else if (action === "first") focusSelectOption(0)
+                                  else if (action === "last") focusSelectOption(ACTION_TYPES.length - 1)
                                 }}
                                 className={cn(
                                   "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-body-sm transition-colors cursor-pointer outline-none",

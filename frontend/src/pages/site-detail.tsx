@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect } from "react"
+import { Suspense, lazy, useState, useEffect, type KeyboardEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -56,6 +56,15 @@ const SCANS_PAGE_SIZE = 20
 // The timeline reads a deeper slice than the table page so history is
 // visible at a glance; pagination covers the rest.
 const TIMELINE_WINDOW = 200
+
+const TAB_ITEMS = [
+  { id: "overview", label: "Overview" },
+  { id: "scans", label: "Scans" },
+  { id: "suppression", label: "Suppression Rules" },
+  { id: "hooks", label: "Remediation Hooks" },
+] as const
+
+type TabId = (typeof TAB_ITEMS)[number]["id"]
 
 export const activeRebaselines = new Set<string>()
 
@@ -295,7 +304,21 @@ export function SiteDetailPage() {
   const [localRebaseline, setLocalRebaseline] = useState(() =>
     siteId ? activeRebaselines.has(siteId) : false
   )
-  const [activeTab, setActiveTab] = useState<"overview" | "scans" | "suppression" | "hooks">("overview")
+  const [activeTab, setActiveTab] = useState<TabId>("overview")
+
+  const onTablistKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const idx = TAB_ITEMS.findIndex((t) => t.id === activeTab)
+    let nextIdx: number | null = null
+    if (e.key === "ArrowRight") nextIdx = (idx + 1) % TAB_ITEMS.length
+    else if (e.key === "ArrowLeft") nextIdx = (idx - 1 + TAB_ITEMS.length) % TAB_ITEMS.length
+    else if (e.key === "Home") nextIdx = 0
+    else if (e.key === "End") nextIdx = TAB_ITEMS.length - 1
+    if (nextIdx === null) return
+    e.preventDefault()
+    // Activation follows focus: simple auto-activation tabs.
+    setActiveTab(TAB_ITEMS[nextIdx].id)
+    document.getElementById(`site-tab-${TAB_ITEMS[nextIdx].id}`)?.focus()
+  }
 
   const site = useQuery({
     queryKey: ["sites", siteId],
@@ -475,67 +498,39 @@ export function SiteDetailPage() {
 
 
 
-      <div className="mb-6 flex border-b border-hairline-strong pb-px gap-6">
-        <button
-          onClick={() => setActiveTab("overview")}
-          className={cn(
-            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
-            activeTab === "overview"
-              ? "text-ink"
-              : "text-mute hover:text-ink"
-          )}
-        >
-          Overview
-          {activeTab === "overview" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("scans")}
-          className={cn(
-            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
-            activeTab === "scans"
-              ? "text-ink"
-              : "text-mute hover:text-ink"
-          )}
-        >
-          Scans
-          {activeTab === "scans" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("suppression")}
-          className={cn(
-            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
-            activeTab === "suppression"
-              ? "text-ink"
-              : "text-mute hover:text-ink"
-          )}
-        >
-          Suppression Rules
-          {activeTab === "suppression" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("hooks")}
-          className={cn(
-            "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
-            activeTab === "hooks"
-              ? "text-ink"
-              : "text-mute hover:text-ink"
-          )}
-        >
-          Remediation Hooks
-          {activeTab === "hooks" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
-          )}
-        </button>
+      <div
+        role="tablist"
+        aria-label="Site sections"
+        onKeyDown={onTablistKeyDown}
+        className="mb-6 flex border-b border-hairline-strong pb-px gap-6"
+      >
+        {TAB_ITEMS.map((t) => (
+          <button
+            key={t.id}
+            id={`site-tab-${t.id}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === t.id}
+            aria-controls={`site-panel-${t.id}`}
+            tabIndex={activeTab === t.id ? 0 : -1}
+            onClick={() => setActiveTab(t.id)}
+            className={cn(
+              "pb-3 text-body-sm font-medium transition-all relative outline-hidden cursor-pointer",
+              activeTab === t.id
+                ? "text-ink"
+                : "text-mute hover:text-ink"
+            )}
+          >
+            {t.label}
+            {activeTab === t.id && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-blue rounded-full" />
+            )}
+          </button>
+        ))}
       </div>
 
       {activeTab === "overview" && (
-        <div className="animate-fade-in duration-200">
+        <div id="site-panel-overview" role="tabpanel" aria-labelledby="site-tab-overview" className="animate-fade-in duration-200">
           <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
@@ -667,7 +662,7 @@ export function SiteDetailPage() {
       )}
 
       {activeTab === "scans" && (
-        <div className="animate-fade-in duration-200">
+        <div id="site-panel-scans" role="tabpanel" aria-labelledby="site-tab-scans" className="animate-fade-in duration-200">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-heading-md text-ink">Scans</h2>
             {pageCount > 1 && (
@@ -719,13 +714,22 @@ export function SiteDetailPage() {
                   {scans.data.items.map((scan) => (
                     <TableRow
                       key={scan.id}
-                      className="cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
-                      onClick={() => void navigate(`/sites/${s.id}/scans/${scan.id}`)}
+                      className="relative cursor-pointer transition-transform duration-100 hover:bg-surface-elevated/40 active:scale-[0.998] active:bg-surface-elevated/60"
                     >
                       <TableCell>
                         <span className="flex items-center gap-2">
                           <StatusDot state={scanDot(scan)} />
-                          <span className="text-body-sm capitalize">{scan.status}</span>
+                          {/* Real link stretched over the row (after:inset-0)
+                              so the scan is keyboard-openable like a click. */}
+                          <Link
+                            to={`/sites/${s.id}/scans/${scan.id}`}
+                            aria-label={`Open ${scan.verdict ?? scan.status} scan started ${new Date(
+                              scan.started_at ?? scan.created_at
+                            ).toLocaleString()}`}
+                            className="capitalize after:absolute after:inset-0 focus-visible:underline"
+                          >
+                            {scan.status}
+                          </Link>
                         </span>
                       </TableCell>
                       <TableCell>{verdictBadge(scan)}</TableCell>
@@ -766,7 +770,7 @@ export function SiteDetailPage() {
       )}
 
       {activeTab === "suppression" && (
-        <div className="animate-fade-in duration-200">
+        <div id="site-panel-suppression" role="tabpanel" aria-labelledby="site-tab-suppression" className="animate-fade-in duration-200">
           <SuppressionPanel
             siteId={s.id}
             baselineScreenshotPath={
@@ -779,7 +783,7 @@ export function SiteDetailPage() {
       )}
 
       {activeTab === "hooks" && (
-        <div className="animate-fade-in duration-200">
+        <div id="site-panel-hooks" role="tabpanel" aria-labelledby="site-tab-hooks" className="animate-fade-in duration-200">
           <RemediationHooksPanel siteId={s.id} />
         </div>
       )}
