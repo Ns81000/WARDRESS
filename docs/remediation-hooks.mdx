@@ -25,7 +25,7 @@ Because automated infrastructure changes are highly destructive (and a false pos
     When a flagged scan's risk score meets or exceeds the **hook's own `trigger_threshold`**, an execution row is created in the `pending_confirm` state. It will **not execute**. Each `(hook, scan)` pair is unique, so an alert redelivery never double-fires a hook.
   </Step>
   <Step title="Operator Approval">
-    An operator (Admin or Analyst) must log into the dashboard or use the Telegram Bot to explicitly approve the pending remediation.
+    An operator (Admin or Analyst) must log into the dashboard to explicitly approve the pending remediation (or call the REST confirm endpoint directly with suitable credentials). There is no Telegram approval path — the Telegram Bot's Confirm/Cancel buttons apply to AI-assistant actions only, never to remediations.
   </Step>
   <Step title="Queued">
     Once confirmed, the hook transitions to `queued` and is dispatched to a Celery worker.

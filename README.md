@@ -154,7 +154,7 @@ To update Wardress to the latest release while maintaining all database records,
 ## System Features & Heuristics
 
 *   **Adaptive Cadence Scanning**: To conserve bandwidth and computational power, Wardress dynamically scales its monitoring frequencies. If a scan crosses the material change threshold (`fused_risk >= 0.15`), the scan interval tightens to **1/4th** of the site's configured base interval (clamped at a minimum of 5 minutes). As long as subsequent scans remain stable, the interval relaxes by **1.5x** per clean run until it settles back at the base interval (up to 24 hours).
-*   **Guarded Remediation Hooks**: Flagged scans can trigger outbound webhooks (e.g. rollback endpoints or maintenance pages). By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator. A webhook endpoint timeout of 20 seconds is enforced, and execution tasks are isolated in a separate Celery queue so that slow/broken endpoints never block the scan engine.
+*   **Guarded Remediation Hooks**: Flagged scans can trigger outbound webhooks (e.g. rollback endpoints or maintenance pages). By default, all hooks require manual confirmation (`requires_manual_confirm=true`). Executions park in the confirmation queue and will not fire until explicitly approved by an operator. A webhook endpoint timeout of 20 seconds is enforced, and each firing runs as its own Celery task — never inside the scan body. Note that firings share the same single queue and worker pool as scans and captures, so several slow endpoints can temporarily tie up worker capacity rather than being isolated from scanning.
 *   **AI Incident Assistant Cache**: The plain-English analysis of an incident is generated via a structured prompt built from active layer evidence (such as DOM tag additions, visual similarity scores, and metadata differences) and requested from whichever model you have assigned to the **Explanations** task (any cloud provider from the models.dev catalog, or a local/cloud Ollama model). The final description is cached directly in the `scans` table column to eliminate duplicate API requests.
 
 ---
@@ -269,11 +269,16 @@ Real-time health statistics charting Celery queue depth, worker heartbeats, and 
 
 ### Automated removal with backup (`uninstall.ps1`)
 
-The simplest way to remove Wardress is the uninstall script. It **backs up everything
-recoverable first** — your `.env`, a logical PostgreSQL dump (`pg_dump`), and the scan-artifacts
-volume — to a timestamped folder next to the repository, and only then removes all Wardress
-containers, the network, the data volumes, and the locally-built images. Each backup folder also
-gets a `RESTORE.txt` with exact restore commands.
+The simplest way to remove Wardress is the uninstall script. It backs up your `.env`, a logical
+PostgreSQL dump (`pg_dump`, produced inside the database container and copied out with
+`docker compose cp`, so the byte stream is never re-encoded by a host shell), and the scan-artifacts
+volume to a timestamped folder next to the repository. If any attempted part of that backup fails,
+the script **stops before deleting anything** (exit code 1) — your data is still intact in Docker.
+Pass `-AllowIncompleteBackup` to proceed anyway with an incomplete backup (exit code 2, reported in
+the summary and in that folder's `RESTORE.txt`). Only after a complete backup, or your explicit
+override, does it remove all Wardress containers, the network, the data volumes, and the
+locally-built images. Each backup folder gets a `RESTORE.txt` generated from what that run actually
+captured, with exact restore commands.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
@@ -282,6 +287,8 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 The script prompts for confirmation and prints the backup location when it finishes. Useful flags:
 
 *   `-SkipBackup` — remove everything without taking a backup (permanent data loss).
+*   `-AllowIncompleteBackup` — proceed with teardown even when the backup came out incomplete
+    (data loss). Without it, an incomplete backup stops the script before anything is deleted.
 *   `-Force` — skip the confirmation prompt (for unattended teardown).
 *   `-KeepImages` — remove containers and volumes but keep the built images (faster reinstall).
 *   `-PruneBaseImages` — also remove the pulled upstream base images (Postgres, Redis, and the
@@ -297,7 +304,8 @@ The script prompts for confirmation and prints the backup location when it finis
 
 > [!CAUTION]
 > The uninstall script removes the data volumes. With the default backup you can restore later
-> via the generated `RESTORE.txt`; with `-SkipBackup` the deletion is permanent.
+> via the generated `RESTORE.txt` (its steps copy files into the containers — never pipe a dump
+> through a host shell, which would re-encode it); with `-SkipBackup` the deletion is permanent.
 
 The repository files on disk are left in place — delete the folder yourself if you also want the
 source gone.

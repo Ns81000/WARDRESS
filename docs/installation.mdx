@@ -127,11 +127,16 @@ To update Wardress to the latest release while maintaining all database records,
 
 ### Automated removal with backup (`uninstall.ps1`)
 
-The recommended way to remove Wardress. It **backs up everything recoverable first** — your
-`.env`, a logical PostgreSQL dump (`pg_dump`), and the scan-artifacts volume — to a timestamped
-folder next to the repository, then removes all Wardress containers, the network, the data
-volumes, and the locally-built images. Every backup folder includes a `RESTORE.txt` with exact
-restore commands.
+The recommended way to remove Wardress. It backs up your `.env`, a logical PostgreSQL dump
+(`pg_dump`, produced inside the database container and copied out with `docker compose cp`, so the
+byte stream is never re-encoded by a host shell), and the scan-artifacts volume to a timestamped
+folder next to the repository. If any attempted part of that backup fails, the script **stops before
+deleting anything** (exit code 1) — your data is still intact in Docker; pass `-AllowIncompleteBackup`
+to proceed anyway with an incomplete backup (exit code 2, reported in the summary and in that
+folder's `RESTORE.txt`). Only after a complete backup, or your explicit override, does it remove all
+Wardress containers, the network, the data volumes, and the locally-built images. Every backup
+folder includes a `RESTORE.txt` generated from what that run actually captured, with exact restore
+commands.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
@@ -139,6 +144,10 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 
 <ParamField path="-SkipBackup" type="switch">
   Remove everything without taking a backup (permanent data loss).
+</ParamField>
+<ParamField path="-AllowIncompleteBackup" type="switch">
+  Proceed with teardown even when the backup came out incomplete (data loss). Without it, an
+  incomplete backup stops the script before anything is deleted.
 </ParamField>
 <ParamField path="-Force" type="switch">
   Skip the confirmation prompt (unattended teardown).
@@ -162,7 +171,8 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 
 <Caution>
   The uninstall script removes the data volumes. With the default backup you can restore later
-  via the generated `RESTORE.txt`; with `-SkipBackup` the deletion is permanent.
+  via the generated `RESTORE.txt` (its steps copy files into the containers — never pipe a dump
+  through a host shell, which would re-encode it); with `-SkipBackup` the deletion is permanent.
 </Caution>
 
 The repository files on disk are left in place — delete the folder yourself if you also want the
