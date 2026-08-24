@@ -2,6 +2,8 @@
 configuration, and live provider validation.
 """
 
+import ipaddress
+
 import litellm
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -153,7 +155,22 @@ def test_ollama_cloud_deployment_carries_bearer_key() -> None:
     assert _litellm_api_base(p) == "https://ollama.com"
 
 
-async def test_ollama_cloud_key_flows_into_deployment(db_factory) -> None:
+async def test_ollama_cloud_key_flows_into_deployment(db_factory, monkeypatch) -> None:
+    """Hermetic by construction (Phase 30): the provider-save path runs the
+    SSRF gate, which resolves DNS — a live query here made this test's
+    outcome depend on whatever the host resolver answered at run time (it
+    failed outright on DNS64/NAT64 networks pre-Phase-16). The policy itself
+    is pinned deterministically in test_phase16_outbound_fetch.py, including
+    the NAT64 literal case; this test stubs resolution so it verifies exactly
+    its own subject (key -> litellm deployment) on any network."""
+    from app import ssrf
+
+    monkeypatch.setattr(
+        ssrf,
+        "resolve_host",
+        lambda host: [ipaddress.ip_address("34.36.133.15")],
+    )
+
     async with db_factory() as db:
         p = await create_provider(
             db,

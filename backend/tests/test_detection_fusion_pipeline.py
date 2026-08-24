@@ -3,12 +3,15 @@ cloaking, semantics (lexicon parts — embeddings mocked to None here for
 hermeticity; test_end_to_end_flagging.py exercises the drift path with
 real vector-valued stubs), fusion, and gating."""
 
+import json
+
 import pytest
 
 from worker.detection import pipeline as pipeline_mod
 from worker.detection.cloaking import layer7_cloaking
 from worker.detection.fusion import (
     FEATURE_KEYS,
+    MODEL_ARTIFACT_PATH,
     build_feature_vector,
     get_fusion_model,
     layer9_fusion,
@@ -319,9 +322,27 @@ def _results_from_scores(scores: dict[str, float | None]) -> dict[str, dict]:
     return out
 
 
-def test_fusion_model_is_deterministic() -> None:
-    m1, m2 = get_fusion_model(), get_fusion_model()
-    assert m1 is m2  # process cache
+def test_fusion_model_matches_committed_artifact() -> None:
+    """Determinism of the FIT, not just Python memoization (audit Phase 11:
+    the former ``assert m1 is m2`` asserted cache identity — it passed even
+    if the fit were random per process). The deployed model is the committed
+    artifact; the runtime must load it exactly, and its coefficients must
+    satisfy the structural finding-5.1 constraint (no negative attack-
+    evidence weights), so a corrupted artifact or a regression to an
+    unconstrained refit cannot ship silently."""
+    committed = json.loads(MODEL_ARTIFACT_PATH.read_text(encoding="utf-8"))
+    model = get_fusion_model()
+
+    assert model.coefficients == tuple(float(c) for c in committed["model"]["coefficients"])
+    assert model.intercept == float(committed["model"]["intercept"])
+    assert all(c >= 0.0 for c in model.coefficients)
+    assert model.lambda_selected == committed["meta"]["fit"]["lambda_selected"]
+    assert model.dataset_sha256 == committed["meta"]["dataset"]["sha256"]
+
+    # Cache behavior, stated as exactly what it is: repeated calls reuse the
+    # same loaded object (identity), which follows from loading the identical
+    # bytes — not a substitute for the value equality above.
+    assert get_fusion_model() is model
 
 
 def test_fusion_all_clean_scores_low() -> None:

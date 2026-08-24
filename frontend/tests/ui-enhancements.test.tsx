@@ -66,12 +66,19 @@ describe("MarkdownMessage", () => {
     const { container } = render(
       <MarkdownMessage content='<img onerror="alert(1)" src="x">' />
     )
-    // No img element should be injected from raw HTML
-    const imgs = container.querySelectorAll("img")
-    // react-markdown may render markdown images but not raw HTML img tags
-    for (const img of imgs) {
-      expect(img.getAttribute("onerror")).toBeNull()
-    }
+    // Concrete expectations, not a loop over a possibly-empty set (audit
+    // Phase 11: the former loop passed vacuously whenever no imgs rendered,
+    // leaving the sanitization claim unchecked):
+    const text = container.textContent ?? ""
+    // 1. No live <img> element exists at all — the raw tag was not parsed.
+    expect(container.querySelectorAll("img")).toHaveLength(0)
+    // 2. What rendered is ESCAPED TEXT, not markup: the tag opener appears
+    //    entity-encoded, which is exactly why no handler could ever fire.
+    expect(container.innerHTML).toContain("&lt;img")
+    // 3. The payload text is still visible (rendered inertly), so this test
+    //    genuinely exercises the renderer with hostile input rather than
+    //    passing on an empty render.
+    expect(text).toContain("alert(1)")
   })
 
   it("returns null for empty content", () => {

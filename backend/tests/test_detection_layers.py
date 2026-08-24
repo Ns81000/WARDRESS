@@ -103,7 +103,17 @@ def test_layer2_non_html_content() -> None:
 def test_parse_html_handles_garbage() -> None:
     assert parse_html("") is None
     assert parse_html("   \n  ") is None
-    assert parse_html("\x00\x01\x02") is not None or parse_html("\x00\x01\x02") is None  # no raise
+    # Control characters alone are unrecoverable (no elements to recover) —
+    # a concrete outcome, not the former `is not None or is None` tautology
+    # that could never fail (audit Phase 11).
+    assert parse_html("\x00\x01\x02") is None
+    # But the same control bytes embedded in real markup must NOT take the
+    # whole parse down: recovery yields a tree containing the surviving text.
+    recovered = parse_html("<html><body><p>a\x00b</p></body></html>")
+    assert recovered is not None
+    assert "a" in (recovered.text_content() or "")
+    # A stray '<' with no tag name is likewise dropped without raising.
+    assert parse_html("<") is None
 
 
 # --- layer 3: link audit ---
