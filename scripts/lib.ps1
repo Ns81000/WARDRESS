@@ -325,6 +325,9 @@ function Build-Service([string[]]$BuildArgs, [string]$Service, [string]$FailureH
         -NoNewWindow -PassThru -RedirectStandardOutput "build_$Service.log" `
         -RedirectStandardError "build_$Service.err.log"
     
+    # Cache the process handle immediately; otherwise, ExitCode returns $null after process termination.
+    $null = $process.Handle
+    
     $spinChars = @('|', '/', '-', '\')
     $spinIndex = 0
     

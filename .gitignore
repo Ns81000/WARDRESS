@@ -11,6 +11,7 @@ __pycache__/
 *.egg-info/
 dist/
 WARDRESS_AUDIT_REPORT_2026-07-21.md
+project_structure.txt
 build/
 Audit
 react-bits-main
