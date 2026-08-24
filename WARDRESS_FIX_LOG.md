@@ -37,7 +37,7 @@ Source of truth for *how it's being fixed*: this file.
 | 27 | Frontend Data-Honesty & Third-Party Leakage | Complete | 2026-08-24 | fix(phase27) |
 | 28 | Frontend Accessibility | Complete | 2026-08-24 | fix(phase28) |
 | 29 | Ops/Scripts Robustness (Medium) | Complete | 2026-08-24 | fix(phase29) |
-| 30 | Test-Quality Mechanical Fixes | In progress (partial — see notes) | 2026-08-24 | fix(phase30) |
+| 30 | Test-Quality Mechanical Fixes | Complete | 2026-08-24 | fix(phase30) + fix(phase30b) |
 | 31 | Test-Quality New Coverage (webhook + agent loop) | Not started | | |
 | 32 | Test-Quality Post-Fix Rewrite | Not started | | |
 | 33 | Docs Sweep A (ops/remediation) | Not started | | |
@@ -1379,18 +1379,16 @@ silently. Both findings' fix entries follow.
 - **Scratch hygiene**: all probes lived under `%TEMP%\opencode\p29*` and were deleted after use. Repo tree contains intended changes plus the long-dispositioned items (`scripts/lib.ps1` user-intentional unstaged edit — preserved via surgical staging, NOT in this commit; untracked audit/recon files; the user's `.gitignore` line).
 
 
-## Phase 30 Notes (partial scope record)
+## Phase 30 Notes (partial scope record — remainder completed 2026-08-24, see entry below)
 
 Phase 30's cluster is two findings: "Tautological and vacuous assertions sit on
 safety-critical surfaces" and "Non-hermetic unit test makes live external DNS
-queries". Both are fixed this session (entries below). The tracker stays
+queries". Both are fixed this session (entries below). The tracker stayed
 "In progress (partial)" for one reason only: the audit-era lead recorded in this
 log during Phase 12 (the vacuous-pass failure mode observed live then —
 assert-on-stub-called guards, noted as a candidate for the Phase 30 mechanical
 sweep) has NOT been swept. That lead was a candidate assignment, not filed
 finding scope; all three assertion sites of the actual finding are repaired.
-The remainder is recorded here explicitly rather than silently dropped or
-silently merged into Phase 32's charter.
 
 **Explicit remainder (for the next session finishing Phase 30)**: sweep the
 backend suite for assert-on-stub-called guards of the Phase-12-lead class
@@ -1399,6 +1397,12 @@ unrelated stub/mock assertion carries the pass). Method: in each
 monkeypatch-based test module, find assertions that reference a stub/mock
 rather than an effect on production state; verify each would fail if the
 production call it names were removed; rewrite those that would not.
+
+**RESOLUTION (2026-08-24)**: the sweep was executed and is recorded as the fix
+entry "[Sweep] Assert-on-stub-called guard sweep (Phase 30 recorded remainder)"
+below. Outcome: one vacuous upper-bound counter rewritten; all other sites
+verified falsifiable by analysis plus mutation spot-proofs. Phase 30 is now
+Complete.
 
 ---
 
@@ -1462,3 +1466,26 @@ production call it names were removed; rewrite those that would not.
 - **Environment event**: the disposable wardress-test-pg container had exited (host sleep — the pattern Phase 28 recorded); restarted via docker start before the regression runs per db_harness's documented operator contract. Unrelated to any phase change (none touch test infrastructure).
 - **Iteration record (Rule 8)**: one round produced new information — the first img-onerror rewrite failed its own run against the real renderer because entity-escaped text legitimately contains the substring "onerror"; root-caused to a mechanism misunderstanding (escaping vs stripping) and fixed by asserting the escape marker. Recorded in the finding entry.
 - **Scratch hygiene**: probes lived in %TEMP%\opencode\p30 (fusion determinism injection, parse_html falsifiability runner, UI falsifiability matrix, hermeticity pytest plugin) and were deleted after use. Repo tree contains intended changes plus the long-dispositioned items (scripts/lib.ps1 user-intentional unstaged edit, untracked audit/recon files, the user's .gitignore line).
+
+### [Sweep] Assert-on-stub-called guard sweep (Phase 30 recorded remainder)
+
+*(Header deviates from the §3 template deliberately: this is not a filed audit finding — it is the explicitly recorded Phase 30 remainder, the Phase-12-lead class ("a test can keep passing after the behavior it names stops executing"), swept to completion so Phase 30 could be flipped to Complete.)*
+
+- **Original severity**: N/A (lead-class sweep; candidate assignment recorded during Phase 12's failing-before proof and in this log's New Leads section)
+- **Phase**: 30 — Test-Quality Mechanical Fixes (recorded remainder)
+- **Files changed**: `backend/tests/test_phase20_semantics_drift.py` (`test_encode_budget_is_bounded_on_huge_pages` gains a lower-bound assertion + docstring note)
+- **Re-verification (Step 1)**: the lead's live incident shape was re-derived from the Phase 12 entry: removing a monkeypatch left `test_escalation_benign_does_not_upgrade` GREEN while its subject (the escalation path) had gone completely dead — an assert-not-called-shaped expectation trivially satisfied by a dead path. That specific test no longer exists in that shape (Phase 12 reworked both escalation tests onto a deterministic mid-band scenario through the real gate), so the sweep asked whether ANY other test carries its pass on a stub-referencing assertion without a production-state anchor.
+- **Method (as recorded in the phase-notes remainder)**: complete inventory first — every monkeypatch-based backend test module enumerated via grep; every assertion referencing a stub/mock/counter/fake/spy collected (full consumer list of conftest's `stub_all_enqueues`, fixture-local fakes such as `fetch_calls`/`sent_tasks`/`pull_canary`/`captured`/`Counting`, spy lists in test_phase16, scripted-model event assertions in test_agent_prompt_injection). Each site then classified: (a) stub-call-IS-the-subject tests, where the stub-referencing assertion names the tested behavior itself; (b) corroborating negative guards paired with positive production-state assertions; (c) unanchored cases where death of the named production call would leave the test green.
+- **Findings**:
+  - *Class (a) sites* — `test_phase16_outbound_fetch.py` validate/limiter spies, `test_phase26_remediation_hooks.py` resweep `sent == [stuck_id]`, `test_phase5_remediation.py::test_confirm_queues_and_enqueues`: falsifiable by construction. Mutation-proof executed live: neutralizing `enqueue_remediation(execution.id)` in `routers/remediation.py`'s confirm path made BOTH `test_confirm_queues_and_enqueues` (assert at :202) AND `TestConfirmRace::test_concurrent_confirms_single_winner_single_enqueue_single_audit` (assert at :180) FAIL — production file restored byte-identical afterwards.
+  - *Class (b) sites* — every `fetch_calls == []` / `sent_tasks == []` / `stub_enqueue[...]` count / `stub_all_enqueues["scan"] == []` / `must_not_run` guard across test_scan_tasks, test_scheduler, test_sites, test_agent, test_agent_prompt_injection, test_end_to_end_flagging, test_phase18, test_remediation_claim_race, test_main: each individually verified to carry a positive production anchor in the same test body (return-value contracts like `"baseline-already-ready"`/`"baseline-row-missing"`/`"scan-row-missing"`, DB row states, response codes/status bodies, dispatcher stats computed over real DB state, pending-action rows, muted_until/acknowledged_at). Mutation spot-proofs on two representatives: killing `services.rebaseline_site`'s enqueue failed `test_agent.py::test_confirm_executes_frozen_args` exactly at its "executor should have enqueued" assert; disabling `_capture_baseline`'s already-ready guard failed `test_scan_tasks.py::test_capture_already_done_is_idempotent` at its return-value assert (`'ready' != 'baseline-already-ready'`) — i.e., the paired anchors bite even where a negative guard also exists. All mutated files restored byte-identical (`git checkout --`; post-sweep `git diff --stat` shows only the long-dispositioned `.gitignore`/`scripts/lib.ps1` items).
+  - *The Phase-12 incident shape recurs nowhere*: structurally, every negative guard has a positive twin in its module pinning the same production chain end-to-end (e.g., `test_due_site_gets_scan_enqueued` vs `test_not_due_site_untouched`; `test_confirm_executes_frozen_args` vs `test_cancel_does_not_execute`; the flagged-verdict e2e suite vs the benign-noise test). The Phase-12-era escalation tests were unique in lacking a positive twin — closed by Phase 12 itself.
+  - *Class (c) — ONE offender found and rewritten*: `test_encode_budget_is_bounded_on_huge_pages` asserted only `counting.calls <= 2 * _MAX_CHUNKS_PER_SIDE`; a chunker/embedder that died entirely (0 encodes) satisfies an upper bound vacuously. Rewritten to also require `counting.calls >= 2` (positive evidence the sampled windows actually embedded). Falsifiability proof performed formally: with the counter's increment removed (dead-embedder simulation), the OLD form PASSES while the NEW form FAILS at the floor assert; restored, the module passes 29/29.
+- **Edge cases considered (Step 3, condensed)**: N/A categories — test-only change, no production surface moved; concurrency/retry/RBAC/unicode/boundary all N/A. The sweep deliberately did NOT add suite-wide machinery (e.g., an autouse dead-stub detector): one rewritten instance does not yet justify it, matching the DNS-guard precedent recorded by the companion Phase 30 entry.
+- **Fix design considered (Step 4)**: (A) rewrite the single offender with a floor bound — chosen (minimal, preserves the test's cost-ceiling intent). (B) Rewrite corroborating negative guards into fail-if-called wrappers — rejected: their paired positive anchors were mutation-proven sufficient; wrapping would duplicate coverage already carried by the positive twins and churn nine healthy modules for zero falsifiability gain.
+- **Tests added/modified (Step 6)**: one test strengthened (the rewrite IS the deliverable); three temporary mutations of production code used purely as verification instruments, all reverted byte-identical before commit (verified via git diff).
+- **Full regression result (Step 7)**: Backend `.venv\Scripts\python.exe -m pytest -q --tb=short` → **907 passed, 0 failed, 1 warning** (~816 s; warning = the pre-existing apprise/imghdr DeprecationWarning recorded since Phase 0). Frontend: `pnpm test` → **12 files / 82 passed**; `pnpm type-check` (tsc -b --noEmit) → exit 0; `pnpm exec oxlint src` → 0 errors / 12 warnings (= recorded baseline exactly). Backend `uv run --frozen ruff check .` → All checks passed!; `ruff format --check .` → 146 files formatted. No dependency changes → supply-chain gates stand green from Phase 9.
+- **Interactions with prior fixes**: none mechanical — one test-file edit; the mutated-and-restored production files are bit-identical to the state their own suites pin.
+- **Residual risk / follow-ups**: (1) The dual-bound counting technique (assert both floor and ceiling on a call counter) is now applied twice in the suite (the DNS zero-query rationale + this floor); a third instance would justify shared machinery per the companion entry's recorded threshold. (2) New leads observed: none.
+- **Commit**: fix(phase30b)
+

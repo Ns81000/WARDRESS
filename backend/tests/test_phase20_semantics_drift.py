@@ -289,7 +289,9 @@ def test_all_windows_degraded_degrades_to_none() -> None:
 
 def test_encode_budget_is_bounded_on_huge_pages() -> None:
     """Cost bound: a 100k-char page pair performs at most
-    2 x MAX_CHUNKS_PER_SIDE embedder calls, regardless of page size."""
+    2 x MAX_CHUNKS_PER_SIDE embedder calls, regardless of page size —
+    and at least one per side, so a dead chunker/embedder cannot pass
+    vacuously (positive evidence the sampled windows really embedded)."""
 
     class Counting:
         def __init__(self):
@@ -304,6 +306,7 @@ def test_encode_budget_is_bounded_on_huge_pages() -> None:
     body = _repeated("CORPTEXT", 100000)
     _run_layer(f"<html><body>{body}</body></html>", f"<html><body>{body}!</body></html>")
     assert counting.calls <= 2 * _MAX_CHUNKS_PER_SIDE
+    assert counting.calls >= 2
 
 
 # --- hole 3: non-English defacement vocabulary --------------------------------------
