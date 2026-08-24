@@ -374,6 +374,16 @@ function MetadataEvidence({ e }: { e: Record<string, unknown> }) {
   const headers = (e.headers ?? {}) as Record<string, unknown>
   const robots = (e.robots_txt ?? {}) as Record<string, unknown>
   const removed = (headers.security_headers_removed ?? []) as string[]
+  const weakened = (headers.security_headers_weakened ?? []) as {
+    header: string
+    baseline: string
+    current: string
+  }[]
+  const strengthened = (headers.security_headers_strengthened ?? []) as {
+    header: string
+    baseline: string
+    current: string
+  }[]
   const changed = (headers.security_headers_changed ?? []) as {
     header: string
     baseline: string
@@ -416,7 +426,12 @@ function MetadataEvidence({ e }: { e: Record<string, unknown> }) {
       <Section title="Security headers">
         {headers.note ? (
           <p className="text-body-sm text-mute">{String(headers.note)}</p>
-        ) : removed.length + changed.length + added.length === 0 ? (
+        ) : removed.length +
+              weakened.length +
+              strengthened.length +
+              changed.length +
+              added.length ===
+          0 ? (
           <p className="text-body-sm text-mute">No security-header changes.</p>
         ) : (
           <div className="space-y-2">
@@ -428,9 +443,23 @@ function MetadataEvidence({ e }: { e: Record<string, unknown> }) {
                 ))}
               </div>
             )}
+            {weakened.map((c) => (
+              <div key={c.header} className="space-y-1">
+                <p className="text-caption text-accent-red">{c.header} weakened</p>
+                <Mono className="block">− {c.baseline}</Mono>
+                <Mono className="block">+ {c.current}</Mono>
+              </div>
+            ))}
             {changed.map((c) => (
               <div key={c.header} className="space-y-1">
                 <p className="text-caption text-accent-orange">{c.header} changed</p>
+                <Mono className="block">− {c.baseline}</Mono>
+                <Mono className="block">+ {c.current}</Mono>
+              </div>
+            ))}
+            {strengthened.map((c) => (
+              <div key={c.header} className="space-y-1">
+                <p className="text-caption text-mute">{c.header} strengthened</p>
                 <Mono className="block">− {c.baseline}</Mono>
                 <Mono className="block">+ {c.current}</Mono>
               </div>

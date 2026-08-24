@@ -1,16 +1,21 @@
-"""Layer 4 — visual diff: SSIM + perceptual hashes (§5).
+"""Layer 4 — visual diff: SSIM + perceptual hashes + chroma shift (§5).
 
-Full-page screenshots are compared three ways:
+Full-page screenshots are compared four ways:
 - SSIM (scikit-image structural_similarity) on downscaled grayscale —
   data_range passed explicitly per the skimage docs' floating-point
   warning (docs-cache/skimage-metrics.html).
 - pHash + dHash (imagehash) — robust to compression/minor rendering
   noise; hamming distance normalized by hash bits.
+- a cheap RGB chroma-shift term (per-channel mean/standard-deviation
+  deltas over the compared region, behind a render-noise deadband) so a
+  hue-only defacement — recolored banners and overlays that preserve
+  luminance almost exactly — can no longer read as "pixels identical".
 
 Full-page captures of the same site can legitimately differ in height
 (a new blog post pushes the footer down), so SSIM compares the shared
 top region at a common width/height; the raw dimensions go into
 evidence, and the perceptual hashes (whole-image) still see the tails.
+The chroma term covers the same shared region.
 
 An unreadable/absent screenshot on either side is a capture problem,
 not a measurement: the layer reports a degraded result (score None,
@@ -18,6 +23,13 @@ not a measurement: the layer reports a degraded result (score None,
 of silently reading it as "pixels identical" — that conflation once let
 a broken capture pipeline disable the product's only pixel ground truth
 while scans completed looking clean.
+
+Operating point: a pure hue-only recolor lands around 0.15-0.20 — an
+honest "the pixels changed" reading that flips the verdict to changed,
+while staying below what the fused model would flag on this channel
+alone. That is deliberate: legitimate brand refreshes are pixel-wise
+indistinguishable in kind from hostile recolors, so corroboration from
+the content layers (or the rule floors) is what separates them.
 """
 
 import io
@@ -35,19 +47,27 @@ COMPARE_WIDTH = 683  # half of the 1366px capture viewport
 MAX_COMPARE_HEIGHT = 4096
 HASH_SIZE = 16  # 16x16 -> 256-bit pHash/dHash: finer than the default 8
 
+# Chroma-shift deadband (0..255 per-channel units): repeated renders of
+# identical content differ by ~1 unit of anti-aliasing/encoder noise;
+# anything under this is silence, not signal.
+_CHROMA_DEADBAND_255 = 2.0
+# A maximal chroma-only change contributes at most this much to the score
+# on its own — visible, never single-handedly flag-worthy.
+_W_CHROMA = 0.30
+
 # Pillow refuses decompression-bomb images by default (Image.MAX_IMAGE_PIXELS);
 # our own screenshots are trusted, so lift the ceiling a little rather than
 # disabling the guard entirely.
 Image.MAX_IMAGE_PIXELS = 512 * 1024 * 1024 // 4
 
 
-def _load_grayscale(png: bytes) -> Image.Image | None:
+def _load_rgb(png: bytes) -> Image.Image | None:
     if not png:
         return None
     try:
         img = Image.open(io.BytesIO(png))
         img.load()
-        return img.convert("L")
+        return img.convert("RGB")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         return None
 
@@ -92,8 +112,8 @@ def layer4_visual_diff(
     current: PageData,
     suppress_bboxes: list[tuple[float, float, float, float]] | None = None,
 ) -> dict:
-    b_img = _load_grayscale(baseline.screenshot)
-    c_img = _load_grayscale(current.screenshot)
+    b_img = _load_rgb(baseline.screenshot)
+    c_img = _load_rgb(current.screenshot)
 
     if b_img is None or c_img is None:
         return degraded_result(
@@ -103,45 +123,65 @@ def layer4_visual_diff(
         )
 
     # Suppressed regions are masked identically on both sides BEFORE any
-    # comparison — SSIM and the perceptual hashes both see the mask. The
-    # baseline capture is the coordinate reference (it's what the user
-    # drew the region on).
+    # comparison — SSIM, the perceptual hashes and the chroma term all see
+    # the mask. The baseline capture is the coordinate reference (it's what
+    # the user drew the region on).
     suppress_bboxes = suppress_bboxes or []
     if suppress_bboxes:
         reference = b_img
         b_img = _mask_regions(b_img, suppress_bboxes, reference)
         c_img = _mask_regions(c_img, suppress_bboxes, reference)
 
-    w, h = _common_size(b_img, c_img)
-    b_small = b_img.resize((w, max(8, round(b_img.height * (w / b_img.width)))))
-    c_small = c_img.resize((w, max(8, round(c_img.height * (w / c_img.width)))))
+    # Grayscale views drive SSIM and the perceptual hashes exactly as
+    # before; the RGB views feed only the chroma-shift term.
+    b_gray = b_img.convert("L")
+    c_gray = c_img.convert("L")
+
+    w, h = _common_size(b_gray, c_gray)
+    b_small = b_gray.resize((w, max(8, round(b_gray.height * (w / b_gray.width)))))
+    c_small = c_gray.resize((w, max(8, round(c_gray.height * (w / c_gray.width)))))
     # Crop both to the shared top region (h = the shorter scaled height,
     # bounded): a page that merely grew taller compares its unchanged top,
     # while the whole-image perceptual hashes still see the full pages.
     b_arr = np.asarray(b_small, dtype=np.float64)[:h, :]
     c_arr = np.asarray(c_small, dtype=np.float64)[:h, :]
 
+    b_rgb = np.asarray(
+        b_img.resize((w, max(8, round(b_img.height * (w / b_img.width))))), dtype=np.float64
+    )[:h, :, :]
+    c_rgb = np.asarray(
+        c_img.resize((w, max(8, round(c_img.height * (w / c_img.width))))), dtype=np.float64
+    )[:h, :, :]
+    chroma_mean_delta = float(np.max(np.abs(b_rgb.mean(axis=(0, 1)) - c_rgb.mean(axis=(0, 1)))))
+    chroma_std_delta = float(np.max(np.abs(b_rgb.std(axis=(0, 1)) - c_rgb.std(axis=(0, 1)))))
+
     # data_range explicit: grayscale bytes span 0-255 (skimage docs warn
     # the float estimate would be wrong).
     ssim = float(structural_similarity(b_arr, c_arr, data_range=255.0))
 
     phash_b, phash_c = (
-        imagehash.phash(b_img, hash_size=HASH_SIZE),
-        imagehash.phash(c_img, hash_size=HASH_SIZE),
+        imagehash.phash(b_gray, hash_size=HASH_SIZE),
+        imagehash.phash(c_gray, hash_size=HASH_SIZE),
     )
     dhash_b, dhash_c = (
-        imagehash.dhash(b_img, hash_size=HASH_SIZE),
-        imagehash.dhash(c_img, hash_size=HASH_SIZE),
+        imagehash.dhash(b_gray, hash_size=HASH_SIZE),
+        imagehash.dhash(c_gray, hash_size=HASH_SIZE),
     )
     bits = HASH_SIZE * HASH_SIZE
     phash_dist = (phash_b - phash_c) / bits
     dhash_dist = (dhash_b - dhash_c) / bits
 
     # SSIM 1.0 -> identical. Dissimilarity maps to score; perceptual-hash
-    # distance corroborates (weights favor SSIM, which sees layout).
+    # distance corroborates (weights favor SSIM, which sees layout). The
+    # chroma term adds hue-only evidence the luminance channel cannot see,
+    # deadbanded so render noise stays silent.
     ssim_score = max(0.0, min(1.0, 1.0 - ssim))
     hash_score = max(0.0, min(1.0, (phash_dist + dhash_dist)))  # each <= 0.5 realistically
-    score = 0.7 * ssim_score + 0.3 * hash_score
+    worst_chroma_delta = max(chroma_mean_delta, chroma_std_delta)
+    chroma_score = min(
+        1.0, max(0.0, (worst_chroma_delta - _CHROMA_DEADBAND_255)) / (255.0 - _CHROMA_DEADBAND_255)
+    )
+    score = min(1.0, 0.7 * ssim_score + 0.3 * hash_score + _W_CHROMA * chroma_score)
 
     evidence = {
         "ssim": round(ssim, 4),
@@ -150,6 +190,8 @@ def layer4_visual_diff(
         "hash_bits": bits,
         "phash_distance_norm": round(phash_dist, 4),
         "dhash_distance_norm": round(dhash_dist, 4),
+        "chroma_mean_delta_255": round(chroma_mean_delta, 2),
+        "chroma_std_delta_255": round(chroma_std_delta, 2),
         "baseline_size": [b_img.width, b_img.height],
         "current_size": [c_img.width, c_img.height],
         "compared_size": [w, h],

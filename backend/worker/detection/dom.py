@@ -11,7 +11,11 @@ only embedded <style> text can be resolved here.
 
 Layer 3 diffs the *sets* of external references: <script src>, <a href>,
 plus stylesheet/iframe/form targets — new external domains appearing on
-a page are a classic injection signal.
+a page are a classic injection signal. References are normalized the way
+browsers resolve them (WHATWG URL rules for special schemes): a backslash
+maps to a slash inside the authority/path machinery, so an injected
+``/\\evil.com/x.js`` attributes to evil.com — the host a visitor actually
+reaches — instead of vanishing into a same-origin path segment.
 
 Both parse with lxml's HTMLParser, which recovers from arbitrarily broken
 markup without raising (verified against docs-cache/lxml-parsing.html:
@@ -481,7 +485,7 @@ def _norm_ref(base_url: str, ref: str) -> str | None:
     if lower.startswith(("javascript:", "data:", "mailto:", "tel:", "about:")):
         return None
     try:
-        absolute = urljoin(base_url or "", ref)
+        absolute = urljoin(base_url or "", _whatwg_special_normalize(ref))
         parsed = urlparse(absolute)
     except ValueError:
         return None
@@ -489,6 +493,30 @@ def _norm_ref(base_url: str, ref: str) -> str | None:
         return None
     # Drop fragments; keep query (defacers love ?redirect= additions).
     return absolute.split("#", 1)[0]
+
+
+# WHATWG URL parsing ("special" schemes http/https) treats a backslash
+# exactly like a slash inside the authority/path machinery — including
+# consuming ANY run of slashes/backslashes after the scheme colon as the
+# authority delimiter — so `/\evil.com/x.js` navigates to host evil.com in
+# every browser. RFC 3986 tools (urljoin/urlparse) keep those backslashes as
+# ordinary path characters, which attributed such references to the page's
+# own (trusted, known) host. Query and fragment payloads are NOT remapped:
+# a backslash there is data, not a separator.
+_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")
+_SLASH_RUN_RE = re.compile(r"^[/\\]+")
+
+
+def _whatwg_special_normalize(ref: str) -> str:
+    head, sep_frag, frag = ref.partition("#")
+    head_q, sep_q, query = head.partition("?")
+    m = _SCHEME_RE.match(head_q)
+    if m and m.group(1).lower() in ("http", "https"):
+        rest = _SLASH_RUN_RE.sub("", head_q[m.end() :]).replace("\\", "/")
+        normalized = f"{m.group(1)}://{rest}"
+    else:
+        normalized = head_q.replace("\\", "/")
+    return f"{normalized}{sep_q}{query}{sep_frag}{frag}"
 
 
 def _collect_refs(page: PageData) -> dict[str, set[str]]:
