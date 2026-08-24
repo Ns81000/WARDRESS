@@ -17,7 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.engine import AgentEvent, run_turn
@@ -45,7 +45,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 
-_MAX_CONVERSATIONS = 50
+_MAX_CONVERSATIONS = 50  # bounds the listing AND creation (per user)
 
 
 async def _own_conversation(
@@ -77,6 +77,23 @@ async def list_conversations(user: CurrentUser, db: DB) -> list[AgentConversatio
     "/conversations", response_model=AgentConversationOut, status_code=status.HTTP_201_CREATED
 )
 async def create_conversation(user: CurrentUser, db: DB) -> AgentConversationOut:
+    # Per-user creation cap: without it, rows 51+ accumulate invisibly (the
+    # listing shows only the newest _MAX_CONVERSATIONS) as unbounded storage
+    # bloat. Reject rather than prune-oldest — silently destroying chat
+    # history would contradict the product's confirm-before-delete
+    # convention everywhere else. The count check is not race-proof: two
+    # simultaneous creates at the boundary can overshoot by the number of
+    # racers, bounded by the per-IP rate limiter and harmless at this scale.
+    total = await db.scalar(
+        select(func.count())
+        .select_from(AgentConversation)
+        .where(AgentConversation.user_id == user.id)
+    )
+    if total is not None and total >= _MAX_CONVERSATIONS:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Conversation limit reached ({_MAX_CONVERSATIONS}) — delete older conversations first",
+        )
     conversation = AgentConversation(user_id=user.id, surface=AgentSurface.web)
     db.add(conversation)
     await db.commit()

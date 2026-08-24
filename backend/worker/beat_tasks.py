@@ -13,6 +13,12 @@ exactly the same rules as the API's scan-now endpoint:
 
 The dispatcher advances `next_scan_at` *before* enqueueing, so even a
 lost enqueue can only delay a site by one interval, never duplicate it.
+Each due site is claimed atomically first (conditional UPDATE whose
+rowcount is the arbiter), so overlapping ticks — a tick slower than its
+60 s period, or a misconfigured second Beat — skip sites another tick
+already owns instead of racing duplicate scans into the one-in-flight-
+per-site index. Any error while processing one site is contained to
+that site; the tick continues with the rest of its list.
 Completed scans reschedule themselves adaptively in scan_tasks; the
 dispatcher's advance is the safety net for scans that never complete.
 
@@ -27,7 +33,7 @@ import shutil
 import uuid as uuid_mod
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.models import Baseline, BaselineStatus, Scan, ScanStatus, ScanVerdict, Site
 from app.scanning import clamp_interval, is_stale
@@ -102,13 +108,20 @@ def _utcnow() -> datetime:
 
 
 async def _dispatch_due_scans() -> dict:
-    """Returns counters for observability/tests."""
+    """Returns counters for observability/tests.
+
+    Each site is single-owner claimed via a conditional UPDATE on
+    next_scan_at (compare-and-set against the value this tick saw), then
+    processed inside per-site error isolation: a failure rolls back that
+    site and the tick continues with the rest of its list.
+    """
     stats = {
         "due": 0,
         "enqueued": 0,
         "skipped_inflight": 0,
         "skipped_no_baseline": 0,
         "recovered_stale": 0,
+        "lost_claim": 0,
     }
     async with task_session() as db:
         now = _utcnow()
@@ -127,53 +140,85 @@ async def _dispatch_due_scans() -> dict:
         ).all()
         stats["due"] = len(due_sites)
 
-        for site in due_sites:
-            interval = clamp_interval(site.current_interval_minutes or site.scan_interval_minutes)
-            # Advance the schedule first: a crash below can only delay
-            # this site by one interval, never tight-loop or duplicate it.
-            site.next_scan_at = now + timedelta(minutes=interval)
+        # Plain data, captured before any write: a per-site rollback below
+        # expires ORM instances (even under expire_on_commit=False), so the
+        # loop must never touch `site` attributes again after a failure.
+        plan = [
+            (
+                site.id,
+                clamp_interval(site.current_interval_minutes or site.scan_interval_minutes),
+                site.next_scan_at,
+            )
+            for site in due_sites
+        ]
+
+        for site_id, interval, seen_next_scan_at in plan:
+            # Claim the site atomically: the rowcount arbitrates between
+            # overlapping ticks (Postgres re-evaluates the predicate when
+            # the lock wait ends). A loser skips a site another tick has
+            # already advanced instead of racing it into the scans insert.
+            claim = await db.execute(
+                update(Site)
+                .where(Site.id == site_id, Site.next_scan_at == seen_next_scan_at)
+                .values(next_scan_at=now + timedelta(minutes=interval))
+            )
+            if claim.rowcount == 0:
+                stats["lost_claim"] += 1
+                continue
             await db.commit()
 
-            baseline = await db.scalar(
-                select(Baseline).where(
-                    Baseline.site_id == site.id,
-                    Baseline.is_current.is_(True),
-                    Baseline.status == BaselineStatus.ready,
+            try:
+                baseline = await db.scalar(
+                    select(Baseline).where(
+                        Baseline.site_id == site_id,
+                        Baseline.is_current.is_(True),
+                        Baseline.status == BaselineStatus.ready,
+                    )
                 )
-            )
-            if baseline is None:
-                stats["skipped_no_baseline"] += 1
-                logger.info("Auto-scan skipped for %s: no ready baseline", site.id)
-                continue
-
-            in_flight = await db.scalar(
-                select(Scan).where(
-                    Scan.site_id == site.id,
-                    Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
-                )
-            )
-            if in_flight is not None:
-                if is_stale(in_flight.created_at, in_flight.started_at):
-                    in_flight.status = ScanStatus.failed
-                    in_flight.verdict = ScanVerdict.error
-                    in_flight.error = "Scan never completed — superseded by a scheduled scan"
-                    in_flight.finished_at = now
-                    stats["recovered_stale"] += 1
-                else:
-                    # Same semantics as the API's 409: never pile up.
-                    stats["skipped_inflight"] += 1
+                if baseline is None:
+                    stats["skipped_no_baseline"] += 1
+                    logger.info("Auto-scan skipped for %s: no ready baseline", site_id)
                     continue
 
-            scan = Scan(site_id=site.id, baseline_id=baseline.id, status=ScanStatus.pending)
-            db.add(scan)
-            await db.commit()
-            try:
-                celery_app.send_task("wardress.run_scan", args=[str(scan.id)])
-                stats["enqueued"] += 1
+                in_flight = await db.scalar(
+                    select(Scan).where(
+                        Scan.site_id == site_id,
+                        Scan.status.in_([ScanStatus.pending, ScanStatus.running]),
+                    )
+                )
+                superseded = False
+                if in_flight is not None:
+                    if is_stale(in_flight.created_at, in_flight.started_at):
+                        in_flight.status = ScanStatus.failed
+                        in_flight.verdict = ScanVerdict.error
+                        in_flight.error = "Scan never completed — superseded by a scheduled scan"
+                        in_flight.finished_at = now
+                        superseded = True
+                    else:
+                        # Same semantics as the API's 409: never pile up.
+                        stats["skipped_inflight"] += 1
+                        continue
+
+                scan = Scan(site_id=site_id, baseline_id=baseline.id, status=ScanStatus.pending)
+                db.add(scan)
+                await db.commit()
+                if superseded:
+                    stats["recovered_stale"] += 1
+                try:
+                    celery_app.send_task("wardress.run_scan", args=[str(scan.id)])
+                    stats["enqueued"] += 1
+                except Exception:
+                    # Redis hiccup: the pending row will be recovered as stale
+                    # by the next due tick (or the API) — log and continue.
+                    logger.exception("Could not enqueue scheduled scan %s", scan.id)
             except Exception:
-                # Redis hiccup: the pending row will be recovered as stale
-                # by the next due tick (or the API) — log and continue.
-                logger.exception("Could not enqueue scheduled scan %s", scan.id)
+                # One broken site must not abort the tick's remaining work —
+                # an aborted tick silently starves every later site in its
+                # list. Roll back this site (its schedule was already claimed
+                # above, so it retries next interval, never tight-loops) and
+                # move on.
+                await db.rollback()
+                logger.exception("Scan dispatch skipped site %s after an error", site_id)
     return stats
 
 

@@ -8,6 +8,10 @@ The master-prompt safety rules are absolute here:
   (the default) parks its firing in the dashboard confirm queue as
   `pending_confirm`; nothing is POSTed until an operator approves. Auto-
   execute is an explicit, per-hook opt-in and is labeled as such.
+- **A persistent incident cannot flap a hook forever.** Auto firings are
+  cooldown-bounded (AUTO_FIRE_COOLDOWN_MINUTES): while the window is
+  hot, new auto firings land in the confirm queue instead of POSTing
+  unattended at the tightened scan cadence.
 - **A broken hook never affects scanning (rule 6).** Creating the
 execution rows is best-effort inside the scan task; the POST itself
 runs in a *separate* Celery task, never in the scan body. Any failure
@@ -26,9 +30,10 @@ is Fernet-encrypted at rest (URLs routinely embed tokens).
 
 import logging
 import uuid
+from datetime import timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -39,6 +44,7 @@ from app.models import (
     RemediationHook,
     Scan,
     Site,
+    utcnow,
 )
 from app.ssrf import SSRFBlockedError
 from app.ssrf_transport import SSRFPinningTransport
@@ -46,6 +52,18 @@ from app.ssrf_transport import SSRFPinningTransport
 logger = logging.getLogger(__name__)
 
 WEBHOOK_TIMEOUT_S = 20.0
+
+# A persistent incident re-flags every scan, and adaptive cadence tightens to
+# base/4 (floored at MIN_INTERVAL_MINUTES = 5) — so without a brake an
+# auto-execute hook fires its destructive webhook up to ~12 times per hour
+# for as long as the incident lasts (a restart/rollback loop that can itself
+# prevent recovery). This cooldown caps the flap: within the window after a
+# hook has actually gone out — any outcome counts; hammering a receiver that
+# is down is the same harm — a new AUTO firing is downgraded to the confirm
+# queue instead of executing unattended. Manual-confirm hooks are never
+# affected: their rows always park for a human anyway. Dismissed rows don't
+# count either: the operator explicitly rejected that firing.
+AUTO_FIRE_COOLDOWN_MINUTES = 30
 
 
 def build_remediation_payload(site: Site, scan: Scan, hook: RemediationHook) -> dict:
@@ -71,8 +89,11 @@ async def create_executions_for_flagged_scan(db: AsyncSession, scan: Scan) -> li
     """For a flagged scan, create one RemediationExecution per active hook
     whose trigger_threshold is met. Returns the ids of executions that are
     ready to fire immediately (auto-execute hooks); manual-confirm hooks
-    are left in the confirm queue. Idempotent under acks_late redelivery
-    via the unique (hook_id, scan_id) index. Never raises."""
+    are left in the confirm queue. An auto firing within
+    AUTO_FIRE_COOLDOWN_MINUTES of the hook's last outbound attempt lands
+    in the confirm queue too — visible, human-gated, never silently
+    dropped. Idempotent under acks_late redelivery via the unique
+    (hook_id, scan_id) index. Never raises."""
     ready: list[uuid.UUID] = []
     try:
         hooks = (
@@ -98,22 +119,45 @@ async def create_executions_for_flagged_scan(db: AsyncSession, scan: Scan) -> li
                     ready.append(existing.id)
                 continue
             auto = not hook.requires_manual_confirm
+            cooled = False
+            if auto:
+                last_attempt_at = await db.scalar(
+                    select(func.max(RemediationExecution.created_at)).where(
+                        RemediationExecution.hook_id == hook.id,
+                        RemediationExecution.status.in_(
+                            [
+                                RemediationExecutionStatus.queued,
+                                RemediationExecutionStatus.succeeded,
+                                RemediationExecutionStatus.failed,
+                            ]
+                        ),
+                    )
+                )
+                cooled = last_attempt_at is not None and last_attempt_at > utcnow() - timedelta(
+                    minutes=AUTO_FIRE_COOLDOWN_MINUTES
+                )
+            status = (
+                RemediationExecutionStatus.pending_confirm
+                if (cooled or not auto)
+                else RemediationExecutionStatus.queued
+            )
             execution = RemediationExecution(
                 hook_id=hook.id,
                 site_id=scan.site_id,
                 scan_id=scan.id,
-                status=(
-                    RemediationExecutionStatus.queued
-                    if auto
-                    else RemediationExecutionStatus.pending_confirm
-                ),
+                status=status,
                 hook_name=hook.name,
                 action_type=hook.action_type.value,
                 risk_score=scan.risk_score,
+                detail=(
+                    f"auto-fire held by the {AUTO_FIRE_COOLDOWN_MINUTES}-min cooldown"
+                    if cooled
+                    else None
+                ),
             )
             db.add(execution)
             await db.flush()
-            if auto:
+            if status is RemediationExecutionStatus.queued:
                 ready.append(execution.id)
         await db.commit()
     except Exception:
