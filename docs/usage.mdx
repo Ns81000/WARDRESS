@@ -12,7 +12,7 @@ Access the Wardress dashboard by navigating to `http://localhost:8321` (or your 
   <img src="/screenshots/login.png" alt="Authentication Screen" />
 </Frame>
 
-Log in using the email and password generated during the installation process. The portal enforces session durations and strict server-side rate limits to prevent brute-force attacks.
+Log in using the email and password generated during the installation process. The portal enforces session durations, server-side rate limits, and a per-account lockout with escalating delays after repeated failures — failed attempts are recorded in the audit trail — to prevent brute-force attacks.
 
 ## Main Dashboard (Sites)
 

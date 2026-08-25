@@ -28,7 +28,7 @@ A new external domain in a `<script>`, `<iframe>`, or `<form action>` is treated
 
 ```mermaid
 flowchart LR
-    HTML["Suppressed<br/>HTML"]:::in --> EX["Collect 5 ref kinds<br/>a · link · script · img · form"]:::node
+    HTML["Suppressed<br/>HTML"]:::in --> EX["Collect 5 ref kinds<br/>a · link · script · iframe · form"]:::node
     EX --> NM["Normalize · resolve<br/>drop js: data: mailto:"]:::node
     NM --> DM(["Hostname set"]):::node
     DM --> SD{"Set difference<br/>vs baseline"}:::pick

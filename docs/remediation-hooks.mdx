@@ -37,9 +37,18 @@ Because automated infrastructure changes are highly destructive (and a false pos
 
 ## Auto-Execute (Opt-In)
 
-If you are absolutely confident in your suppression rules and wish to achieve zero-minute response times, an Admin can edit the hook and disable `requires_manual_confirm`. 
+If you are absolutely confident in your suppression rules and wish to achieve zero-minute response times, an Admin can enable auto-execute for a hook.
 
-When this is disabled, flagged scans skip the `pending_confirm` state entirely and immediately enter the `queued` state for execution.
+The dashboard's **Add hook** dialog exposes this choice at creation time. There is no edit form in the dashboard — after a hook exists, the panel offers only Enable/Disable and Delete. To change `requires_manual_confirm` (or any other field) on an existing hook, call the REST endpoint directly as an Admin:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer <admin-session-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"requires_manual_confirm": false}' \
+  http://localhost:8321/api/sites/<site_id>/remediation-hooks/<hook_id>
+```
+
+When `requires_manual_confirm` is disabled, flagged scans skip the `pending_confirm` state entirely and immediately enter the `queued` state for execution. As an additional brake, an auto-executing hook that fired recently is held in the confirmation queue instead of firing again until its cooldown expires.
 
 <Caution>
   Only disable `requires_manual_confirm` if you have thoroughly tested your baseline and suppression rules. Auto-executing a rollback on a false positive will cause an unnecessary outage.

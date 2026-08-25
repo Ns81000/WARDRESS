@@ -36,11 +36,13 @@ The backend is built with **FastAPI** and managed via **uv**. The frontend is bu
 
 ### Backend Development
 
-Run migrations and execute the unit-test suite. The test suite uses an in-memory SQLite database via `aiosqlite`, so no Postgres instance is required.
+Run migrations and execute the unit-test suite against a disposable PostgreSQL instance — the suite applies the real Alembic migrations (`alembic upgrade head`), so migration-only constraints (partial unique indexes, VARCHAR widths) are enforced exactly as in production:
 
 ```bash
 cd backend
 uv sync
+# One-time: start a throwaway test database (any reachable PostgreSQL 16 works)
+docker run -d --name wardress-test-pg -e POSTGRES_USER=wardress -e POSTGRES_PASSWORD=wardress -p 127.0.0.1:5433:5432 postgres:16-alpine
 uv run pytest
 ```
 
@@ -52,6 +54,6 @@ Install dependencies, run component-level tests, check types, and run the linter
 cd frontend
 pnpm install
 pnpm test
-pnpm exec tsc --noEmit
+pnpm type-check
 pnpm exec oxlint src
 ```

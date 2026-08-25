@@ -48,7 +48,7 @@ Source of truth for *how it's being fixed*: this file.
 | 38 | Low Sweep — Frontend UX/A11y | Complete | 2026-08-25 | fix(phase38) |
 | 39 | Low Sweep — Ops/Scripts & Config | Complete | 2026-08-25 | fix(phase39) |
 | 40 | Low Sweep — CI & Test-Quality | Complete | 2026-08-25 | fix(phase40) |
-| 41 | Low Sweep — Final Docs | Not started | | |
+| 41 | Low Sweep — Final Docs | Complete | 2026-08-25 | fix(phase41) |
 | 42 | Compressed Re-Audit | Not started | | |
 | 43 | Final Docs/README Sync | Not started | | |
 | 44 | Closing Report | Not started | | |
@@ -2467,3 +2467,176 @@ coverage and flip Phase 32's row to Complete. No standalone Phase-32 session is 
 - **Environment notes**: the disposable `wardress-test-pg` container was found exited (host-sleep pattern recorded since Phase 28) and restarted before testing; the harness migrated itself to the new head on first connection. Live OSV verification hit the real api.osv.dev once from this machine (no advisories for 2.13.0, exit 0).
 - **Regression result (exact final formatted tree)**: Backend `.venv\Scripts\python.exe -m pytest -q --tb=short` → **1046 passed, 0 failed, 1 warning** (~921 s; warning = the pre-existing apprise/imghdr DeprecationWarning recorded since Phase 0; 1030 prior + 16 new). Frontend: `pnpm test` → **18 files / 113 passed**; `pnpm type-check` (`tsc -b --noEmit`) → exit 0; `pnpm exec oxlint src` → **0 errors / 12 warnings** (= recorded baseline exactly). Backend `ruff check .` → All checks passed!; `ruff format --check .` → 156 files formatted. No dependency changes → supply-chain gates stand green from Phase 9.
 - **Scratch hygiene**: probes lived in `%TEMP%\opencode\p40` and were deleted; repo tree contains only the intended changes listed across this phase's entries plus this log.
+
+### [FIXED] Docs instruct admins to "edit the hook and disable requires_manual_confirm" — no edit UI exists
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `docs/remediation-hooks.mdx` (Auto-Execute section rewritten: creation-time choice in the Add-hook dialog, explicit no-edit-form statement, REST PATCH recipe, cooldown brake sentence)
+- **Re-verification (Step 1)**: confirmed intact on current code by read + grep. The doc still instructed "an Admin can edit the hook and disable `requires_manual_confirm`" verbatim; `remediation-hooks-panel.tsx` mutations remain exactly create (`createRemediationHook`, which DOES carry `requires_manual_confirm: !autoExecute` at creation), toggle `is_active` via `updateRemediationHook`, and delete — no dialog edits name/URL/threshold/manual-confirm post-creation. The PATCH endpoint exists and works (`PATCH /api/sites/{site_id}/remediation-hooks/{hook_id}`, routers/remediation.py:155, admin-only). Not stale.
+- **Root cause (Step 2)**: aspirational copy written against an edit affordance that was never built. The audit's own impact analysis holds unchanged: a docs-driven admin hits a dead end at exactly the step the docs warn requires care, encouraging ad-hoc curl against a destructive-action setting with no guidance.
+- **Edge cases enumerated (Step 3)**:
+  - *What IS true and now stated*: auto-execute is selectable at CREATION time (the panel's autoExecute toggle feeds `requires_manual_confirm` on POST) — the old text implied editing was the only path; the dashboard offers Enable/Disable + Delete only after creation; flipping the flag later requires the admin-only REST PATCH.
+  - *Recipe correctness*: the curl example uses the real route shape (:155), bearer-token auth (SessionAuthContext semantics per Phase 35's logout work), JSON body field name matching the schema (`requires_manual_confirm`).
+  - *Adjacent truth added*: one sentence noting Phase 37's auto-fire cooldown (recently-fired hooks are held in the confirm queue rather than re-firing) — same surface being repaired, disclosed here per the Phase 27/28 fold-in precedent.
+  - *Alternative direction rejected*: building an edit dialog is the finding's other offered remedy but is a feature addition (Rule 2); this phase is the docs sweep, so the doc-side remedy is taken.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only.
+  - *Interaction with prior fixes (Rule 11)*: Phases 26/35's server-side hook validators and Phase 37's cooldown are the behaviors the new copy describes; both re-read fresh this session rather than cited from log entries.
+  - *Fix-failure mode*: worst case imprecise prose; bounded by deriving every clause from freshly-read panel/router code.
+- **Fix design considered (Step 4)**: (A) amend the doc to describe the API-only path AND the creation-time choice — **chosen** (the audit's alternative direction verbatim, extended to mention what the panel genuinely does offer). (B) Add an edit dialog to the panel reusing create-form fields against PATCH — rejected for this phase (feature-class change; recorded as residual so Phase 42 weighs it knowingly).
+- **Tests added/modified (Step 6)**: `tests/test_phase41_docs_sync.py::test_remediation_docs_do_not_claim_an_edit_ui` — defective phrase absent; "no edit form in the dashboard", the PATCH route anchor, `requires_manual_confirm`, and the Add-hook creation-time anchor present. **FAILED pre-fix** formally (stash run below).
+- **Full regression result (Step 7)**: joint for the phase — see the session-notes block below.
+- **Interactions with prior fixes**: Phase 33 corrected :27-29 (Telegram claim) in this same file and explicitly reserved :40 for Phase 41 — that hand-off is fulfilled here without touching its passages.
+- **Residual risk / follow-ups**: if operators report wanting a UI edit form, it is a deliberate frontend feature (dialog mirroring create fields against PATCH) — recorded, not silent. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### [FIXED] The documented frontend type-check command compiles zero files and vacuously succeeds
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `README.md:421` and `docs/security-and-dev.mdx:55` (`pnpm exec tsc --noEmit` → `pnpm type-check` in both Frontend Development blocks)
+- **Re-verification (Step 1)**: confirmed verbatim pre-edit in both files; `frontend/tsconfig.json` remains solution-style (`"files": []` + references), and `frontend/package.json` declares `"type-check": "tsc -b --noEmit"` (:9). The audit's mechanism (plain `tsc --noEmit` parses zero files via the root config; `--listFiles` prints nothing) stands as filed; not stale.
+- **Root cause (Step 2)**: docs authored against an imagined single-tsconfig layout before the repo adopted project references; the vacuous command exits 0 regardless of type errors, teaching developers they checked when they didn't.
+- **Edge cases enumerated (Step 3)**:
+  - *Which spelling*: `pnpm type-check` chosen over the equivalent raw `pnpm exec tsc -b --noEmit` — it is the script CI-equivalent builds already rely on, matches every fix-log regression record since Phase 0, and cannot drift from package.json unnoticed (the pin below asserts both the doc string and the script definition).
+  - *Cross-file consistency*: README and security-and-dev.mdx carried identical commands before; identical replacements after.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only.
+  - *Interaction with prior fixes (Rule 11)*: none mechanical; Phase 14's Step-3 reservation list named "`tsc --noEmit` :413 (Phase 41)" — fulfilled (line drifted to :421 through later README edits).
+  - *Fix-failure mode*: worst case imprecise prose; bounded by asserting the exact package.json script alongside the doc strings.
+- **Fix design considered (Step 4)**: (A) change both docs to `pnpm type-check` — **chosen** (the audit's primary suggested direction). (B) Change root tsconfig to include files so the old command works — rejected: alters build tooling far beyond a docs sweep and diverges from the Vite scaffold convention. (C) Document both spellings — rejected: two spellings invite future drift.
+- **Tests added/modified (Step 6)**: `test_readme_type_check_command_compiles_files` — defective command absent from BOTH files, `pnpm type-check` present in both, and the package.json script pinned equal to `tsc -b --noEmit`. **FAILED pre-fix** formally.
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: none mechanical — no earlier phase touched these two blocks (Phase 1 rewrote README's BACKEND development section only; git log verified).
+- **Residual risk / follow-ups**: none. New leads observed: none beyond the fold-in recorded under its own entry below.
+- **Commit**: fix(phase41)
+
+### [FIXED — same-surface fold-in, disclosed] Backend Development section still taught the retired SQLite harness
+
+*(Not a numbered audit finding: discovered during Finding B's edit of the same file. `docs/security-and-dev.mdx:39` claimed the suite "uses an in-memory SQLite database via `aiosqlite`, so no Postgres instance is required" — false since Phase 1 moved the harness to alembic-migrated Postgres, and directly contradicted by README's rewritten Backend Development section. Folded in under the Phase 27/28/34 same-surface precedent (same file, same developer-workflow block, sibling section of the passage being repaired) rather than left one screen above a corrected command teaching the opposite setup.)*
+
+- **Original severity**: N/A (fold-in)
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `docs/security-and-dev.mdx` (Backend Development paragraph + code block synced to the Postgres harness reality)
+- **Re-verification (Step 1)**: the stale claim confirmed verbatim pre-edit while conftest/db_harness require `postgresql+asyncpg://…` (name-guarded, fails fast ~2 s without Postgres — Phase 1's verified contract).
+- **Root cause / design**: Phase 1 updated README + CI but missed this mirrored dev-docs section; the sync copies the concise shape of README:404-413 (disposable postgres:16-alpine container line + migration-enforced-constraints rationale).
+- **Tests added/modified (Step 6)**: `test_security_and_dev_backend_section_matches_the_postgres_harness` — "in-memory SQLite"/"aiosqlite" absent; Alembic-migrations and PostgreSQL-instance anchors present. **FAILED pre-fix** formally.
+- **Regression / interactions / residual**: joint for the phase; no earlier phase edited this file (git log verified); none.
+- **Commit**: fix(phase41)
+
+### [FIXED] RBAC tables grant viewers API-key management, but key creation is analyst+ (viewer POST returns 403)
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `README.md` (RBAC table row split into two rows), `docs/configuration.mdx` (same split, icon-table variant)
+- **Re-verification (Step 1)**: confirmed on current code: `apikeys.create_api_key` requires `SessionAuthContext` **and** `AnalystUser` (routers/apikeys.py:39-45) while list (:29) and revoke (:63) need only `SessionAuthContext`; both tables still marked "Manage personal API keys" ✓|✓|✓ (configuration variant adds "(own keys, interactive session only)"). Phase 1's live probe (viewer create → 403) stands. Not stale.
+- **Root cause (Step 2)**: the tables conflated revoke-only capability with full management under one row; the router's deliberate least-privilege split (any role may neutralize their own leaked keys; minting new scripting credentials needs analyst+) predates the tables and was never reflected.
+- **Edge cases enumerated (Step 3)**:
+  - *Split semantics chosen*: "List or revoke your own API keys" → all three roles; "Create new API keys (own keys, interactive session only)" → Admin+Analyst. This is the audit's first suggested direction ("split the row") — lowering the create gate was rejected outright: it would weaken a documented credential boundary to match stale copy (the inverse of the finding's intent, same reasoning as Phase 25's hooks-tool raise).
+  - *Interactive-session qualifier placement*: kept attached to the CREATE row (the operation SessionAuthContext most protects); list/revoke are equally interactive-gated but the qualifier on the create row carries the security-relevant statement without bloating every row.
+  - *Table-format parity*: markdown ✓ table (README) and Icon-component table (configuration.mdx) each keep their native idiom; viewer cell becomes — in both.
+  - *No other rows affected*: adjacent rows re-checked against Phase 1's RBAC sweep (reads all roles; site mutations analyst+; settings/webhooks/users admin-only) — all accurate, untouched.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only; zero code/guard changes.
+  - *Interaction with prior fixes (Rule 11)*: Phase 14's Step-3 reservation ("RBAC table :360 … Phase 41") fulfilled; apikeys.py itself untouched by any fix phase (git log verified) — the docs were the defect.
+  - *Fix-failure mode*: wrong direction (granting viewer create in copy) would contradict the live 403 — the pin counts granted cells so such a drift fails loudly.
+- **Fix design considered (Step 4)**: (A) split the row — **chosen**. (B) Lower `create_api_key` to CurrentUser — rejected with cause above. (C) Footnote explaining the exception — rejected: footnotes rot; the split row states the boundary inline where the checkmark would have lied.
+- **Tests added/modified (Step 6)**: `test_rbac_tables_split_key_creation_from_key_management` — for EACH file: exactly one "Create new API keys" row exists carrying exactly TWO granted cells (✓/check-icon count), and "Manage personal API keys" is gone. Code-fact guard lives in the same module implicitly via the create-gate reading recorded here; **FAILED pre-fix** formally (0 create rows on the stashed tree).
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: none mechanical — Phase 1 verified the underlying RBAC behavior live; no phase modified the router or either table until now.
+- **Residual risk / follow-ups**: none. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### [FIXED] Semantics doc claims MiniLM embeds the "full" visible text — page taught the pre-fix single-window mechanism wholesale
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `docs/layers/8-semantics.mdx` (drift section §3 fully rewritten to the multi-window model incl. a drift-anchor table; lexicon sections gain the non-Latin coverage facts; Evidence-recorded list completed)
+- **Re-verification (Step 1)**: the filed mismatch reproduced verbatim pre-edit ("embeds the **full** baseline visible text and the full current visible text"; linear `(0.85 - sim)/0.85` formula) — but the staleness runs DEEPER than filing: Phase 20 replaced the entire mechanism the page describes. Fresh reads of `worker/detection/semantics.py` established the facts the new copy must carry: `_EMBED_CHUNK_CHARS=600` windows, `_MAX_CHUNKS_PER_SIDE=24`, `_chunks()` spreading evenly across the whole text (sampling beyond ~14k chars), `_direction_similarity` best-match pairing + length-weighted mean, symmetric min of the two directions, `_DRIFT_ANCHORS` piecewise mapping ((1.0→0),(0.90→0),(0.80→0.30),(0.50→0.90),(≤0→1.0)), ≤48 encodes per scan, additive evidence keys (`semantic_chunks_baseline/current`, `semantic_min_chunk_similarity`), and non-Latin lexicon entries (Arabic/Russian/Chinese aggression forms + Arabic contact-us topic). Not stale — worse than filed.
+- **Root cause (Step 2)**: standard docs-sweep disease compounded by ordering: the page was written once against the original implementation and never tracked through Phase 20's rewrite (the behavioral finding behind this doc item was fixed by Phase 20; §4.0.5 scheduled the wording here). Every number in the old drift section — the 5,000-char implication, the 0.85 knee, the linear slope — described code that no longer exists.
+- **Edge cases enumerated (Step 3)**:
+  - *Claim-by-claim verification of the NEW copy* against source read this session: window size/count/spread (:100-101,:163-176), best-match pairing rationale (:179-211), symmetric-min direction handling (:266-275), anchor table transcribed from `_DRIFT_ANCHORS` (:111-117), benign/injection/rewrite bands from the module's measured-band comments (:103-110), encode budget 2×24 (:93-99), degradation Tip unchanged (still true — `embed_text` None contract preserved by Phase 20).
+  - *Mermaid diagram*: the existing flow (visible text → MiniLM embeddings → cosine → max) stays structurally accurate at its abstraction level; window mechanics are prose-level detail — deliberately not redrawn.
+  - *Lexicon examples retained*: the English weights quoted in the doc match `_AGGRESSION_LEXICON` today; additions state coverage without duplicating the full table.
+  - *Number-pinning policy*: anchors appear as a table keyed to the code's constants; pins assert absence of defective claims + presence of truthful anchors + the "48 embed calls" figure, not full sentence shapes (Phases 33/34 convention).
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only.
+  - *Interaction with prior fixes (Rule 11)*: Phase 20's residual #4 explicitly reserved this wording for the scheduled sweeps ("owned by the scheduled Phase 34/41 sweeps") — fulfilled here; Phase 22's dual-view signature matching does not affect this layer page (layer-5 concern); dataset/model regeneration hand-off (New Leads, executes at Phase 42 start) changes emissions, NOT these mechanics — no wording conflict created.
+  - *Fix-failure mode*: worst case imprecise prose; bounded by transcribing every figure from freshly-read source rather than from log entries.
+- **Fix design considered (Step 4)**: (A) correct the doc to state the real mechanism — **chosen** (the audit's minimum ask, extended to the whole stale section because half-truths about a replaced mechanism mislead worse than the one filed sentence). (B) Revert semantics.py so the doc becomes true — rejected outright: reinstates executed blindness. (C) Delete the drift explanation — rejected: discards operator-useful mechanics.
+- **Tests added/modified (Step 6)**: `test_semantics_doc_describes_multi_window_drift_not_full_text_embedding` — "full** baseline visible text" and the old linear formula absent; multi-window/best-match/symmetric-min/48-encodes anchors present. **FAILED pre-fix** formally.
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: Phase 20 (mechanism described), Phase 22 (shared splitter untouched semantically), Phase 36 (unrelated layer). No earlier phase edited this file (git log verified).
+- **Residual risk / follow-ups**: the regeneration obligation executing at Phase 42's start will re-measure layer-8 emissions but not these mechanics — wording expected stable. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### [FIXED] Layer-6 header diff is documented as scoring "weakening"/"downgrades" — resolves in the strong direction post-Phase-36; wording synced to the directional model
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs (carried-forward note honored: strong-direction resolution verified, then synced)
+- **Files changed**: `docs/layers/6-security-metadata.mdx` (header-diff prose rewritten around the five-bucket directional taxonomy; scoring formula block retained verbatim)
+- **Re-verification (Step 1)**: per the run note, the CODE direction was verified FIRST, fresh: `metadata._classify_value_change` (:107-168) classifies per header family after nonce/formatting normalization (`_NORMALIZED_NONCE`, `.lower().split()`); `_header_diff` (:211-258) routes differing values into weakened/strengthened/undirected buckets, scores ONLY removals (+0.3) and semantic regressions (+0.1) capped at 0.8, records hardening and unclassifiable changes without scoring. Conclusion: the doc's core claim ("weakening is a downgrade; appearing is improvement and recorded but not penalized") became TRUE when Phase 36 landed — but incomplete and misleading-by-omission: nothing told readers that hardening is separately recorded, nonce variance vanishes entirely, ambiguous changes are recorded unscored, and the evidence keys changed shape. detection-layers.mdx:64's "security-header downgrades" phrase also became true — left untouched after verification (it names exactly what now scores).
+- **Root cause (Step 2)**: the conditional in the audit's fix direction ("when fixing Finding 4.9 … the doc becomes true; otherwise reword") resolved on the first branch; the remaining defect was staleness-by-partial-truth — copy describing the pre-36 direction-blind scorer sits under a heading readers use to interpret evidence buckets that no longer exist (`security_headers_changed` narrowed to undirected-only; two new buckets added).
+- **Edge cases enumerated (Step 3)**:
+  - *Every clause of the new prose traced to source read this session*: nonce placeholder collapse (:46,:87), case/formatting normalization (:87,:94-98,:141-146), per-family comparators (HSTS/CSP/XFO/XCTO/referrer/permissions :112-167), bucket routing (:235-247), score formula byte-equal to :251, removals-strongest framing consistent with +0.3-vs-+0.1 weights.
+  - *Formula block retained verbatim* — it survived Phase 36 unchanged; rewriting it would be churn.
+  - *TLS/robots sections re-checked*: untouched by Phase 36, still accurate (tables match `_tls_diff`/`_robots_diff` read this session) — deliberately not edited.
+  - *Frontend rendering note*: finding-card.tsx renders the new buckets (Phase 36 companion change); the doc's bucket names match those keys exactly, so an operator can cross-read UI and docs.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only.
+  - *Interaction with prior fixes (Rule 11)*: Phase 36's entry predicted exactly this resolution ("the Phase 41 item resolves in the strong direction, wording sync still owned there") — executed as recorded. Phase 24's degraded-probe Note in this file re-verified accurate, untouched.
+  - *Fix-failure mode*: worst case imprecise prose; bounded by the pin requiring the three bucket-key names + the exact score formula.
+- **Fix design considered (Step 4)**: (A) Keep the (now-true) core claim and extend it with the directional taxonomy — **chosen**. (B) Minimal find/replace leaving the old sentence bare — rejected: bare "weakening is a downgrade" invites readers to expect any-change scoring, the precise misconception Phase 36 eliminated. (C) Revert metadata.py — rejected outright.
+- **Tests added/modified (Step 6)**: `test_layer6_doc_describes_the_directional_header_diff` — blanket "disappearing or weakening** is a downgrade" absent; `security_headers_weakened`/`_strengthened`/`_changed` anchors present; score formula line pinned equal to source. **FAILED pre-fix** formally.
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: Phase 36 (the behavior described); Phase 34's detection-layers.mdx pins unaffected (its assertions target other claims; the :64 phrase verified true this session).
+- **Residual risk / follow-ups**: future tracked-header additions classify undirected (safe default per Phase 36's residual) — the doc describes the six-family comparator set generically enough to stay true. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### [FIXED] Usage doc claims login rate limits exist "to prevent brute-force attacks" — resolves TRUE post-Phase-17; wording synced to name the enforced controls
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs (carried-forward note honored: closer-to-true disposition executed)
+- **Files changed**: `docs/usage.mdx:15` (login sentence rewritten: rate limits + per-account lockout with escalating delays + failure auditing)
+- **Re-verification (Step 1)**: the audit's conditional fix direction — "Soften the claim … **or add the per-account controls of Finding 1.2's fix direction and keep the claim**" — resolved on the second branch when Phase 17 shipped. Verified fresh on current code: dedicated per-IP login limiter wired first thing in the handler (`enforce_login_rate_limit(request)`, auth.py:142; ratelimit.py:124-130; default 30/min, config.py:86); persisted per-account counter with escalating temporary lockout (`failed_login_attempts` atomic increment, `_LOCKOUT_THRESHOLD=5`, 60 s doubling capped at 900 s, extend-only lock UPDATE, correct-password-denied mid-lockout, reset on success — auth.py:49-51,96-118,160-186); every failed attempt audited (`auth.login_failed` rows with reason/attempts/lockout flags, :119,:150). "Prevent brute-force attacks" is now a fair description of enforced controls, not an overclaim.
+- **Root cause (Step 2)**: at audit time the sentence attributed brute-force prevention to rate limits alone, which blunt flooding but permit ~300 guesses/min/account with zero forensic trace. Phase 17 closed the substance gap; the residual defect was that the sentence still credited only rate limiting — naming the wrong mechanism even when the outcome became true.
+- **Edge cases enumerated (Step 3)**:
+  - *Clause-by-clause truth of the NEW sentence*: "session durations" (access/refresh TTLs + absolute ceiling, enforced in deps/auth — verified across Phases 1/17); "server-side rate limits" (three limiters, general + per-user + dedicated login); "per-account lockout with escalating delays after repeated failures" (exact Phase 17 semantics); "failed attempts are recorded in the audit trail" (auth.login_failed rows, admin-visible).
+  - *No numbers pinned in prose*: thresholds/durations are module constants deliberately outside compose forwarding (Phase 17's recorded decision); the sentence stays drift-resistant by naming mechanisms, not values.
+  - *Em-dash clause scoping*: the audit-trail parenthetical attaches to the lockout clause (failures are audited) without implying every rate-limit event is audited (429s are not) — word order checked for that reading.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — prose only.
+  - *Interaction with prior fixes (Rule 11)*: Phase 17's residual #4 explicitly recorded "doc wording belongs to Phase 41" — fulfilled; its lockout tests re-ran green inside the regression, confirming the described behavior is the enforced one.
+  - *Fix-failure mode*: worst case imprecise prose; bounded by the pin requiring the old bare claim absent plus lockout/audit anchors present, with the code-side behavior independently green in test_phase17_auth_audit.py.
+- **Fix design considered (Step 4)**: (A) Keep the brute-force claim and name ALL enforced mechanisms — **chosen** (the audit's second branch, satisfied honestly). (B) Soften to "blunt request floods" — rejected: would now UNDERSTATE enforced controls, recreating the mismatch in the opposite direction. (C) Detail thresholds in docs — rejected: constants are code-level by deliberate decision; docs naming them would rot on retune.
+- **Tests added/modified (Step 6)**: `test_usage_doc_brute_force_claim_names_the_enforced_controls` — old bare sentence absent; "per-account lockout" and "audit trail" anchors present. **FAILED pre-fix** formally.
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: Phase 16 (limiter idiom), Phase 17 (the controls themselves), Phase 35 (logout guard — unrelated to this sentence). No earlier phase edited usage.mdx (git log verified).
+- **Residual risk / follow-ups**: none. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### [FIXED] Link-audit diagram contradicts its own table and the code: lists `img` among collected reference kinds and omits `iframe`
+
+- **Original severity**: Low
+- **Phase**: 41 — Low Sweep — Final Docs
+- **Files changed**: `docs/layers/3-link-audit.mdx:31` (mermaid node label `img` → `iframe`)
+- **Re-verification (Step 1)**: confirmed verbatim pre-edit: node "Collect 5 ref kinds a · link · script · img · form" vs the same file's accurate table (:17-23) and vs `dom.py::_collect_refs` (:522-557) collecting exactly {script_src, a_href, link_href, iframe_src, form_action} — `<img>` never read. Phase 36's backslash normalization changed ref CONTENTS, not collected kinds. Not stale.
+- **Root cause (Step 2)**: hand-drawn diagram drift; someone transcribed the intuitive five tags instead of the implemented ones, and nothing cross-checked diagrams against code.
+- **Edge cases enumerated (Step 3)**:
+  - *Label chosen*: the audit's exact direction ("a · link · script · iframe · form") applied verbatim — set-equal to the code's kinds regardless of display order.
+  - *Prose/table agreement*: :15's "img is not among them" note and the weighted table were already correct — untouched; the diagram was the sole contradictory surface (grep).
+  - *Downstream consumers*: none parse the mermaid label (illustrative render only); no behavioral surface.
+  - *Concurrent/auth/unicode/retry/backward-compat/performance*: N/A — one token inside a diagram.
+  - *Interaction with prior fixes (Rule 11)*: none — dom.py's collection set unchanged by every fix phase (verified via git log + this session's read).
+  - *Fix-failure mode*: worst case cosmetic; the pin makes re-drift fail loudly.
+- **Fix design considered (Step 4)**: (A) apply the audit's one-token correction — **chosen**. (B) Generate the label from `_collect_refs` keys at build time — rejected: docs-pipeline machinery disproportionate for a static diagram (registry-table precedent from Phase 34 covers the higher-stakes analog).
+- **Tests added/modified (Step 6)**: `test_link_audit_diagram_matches_its_own_table_and_the_code` — exactly one Collect-node line; "img" absent from it, "iframe" present. **FAILED pre-fix** formally.
+- **Full regression result (Step 7)**: joint — see the session-notes block below.
+- **Interactions with prior fixes**: none mechanical.
+- **Residual risk / follow-ups**: none. New leads observed: none.
+- **Commit**: fix(phase41)
+
+### Phase 41 session notes (transparency)
+
+- **Formal failing-before proof (phase-level record)**: `git stash push -- README.md docs/configuration.mdx docs/layers/3-link-audit.mdx docs/layers/6-security-metadata.mdx docs/layers/8-semantics.mdx docs/remediation-hooks.mdx docs/security-and-dev.mdx docs/usage.mdx` (run from the REPO ROOT per the Phase-40 pathspec lesson) → run `tests/test_phase41_docs_sync.py` against the stashed (pre-fix) tree → **exactly 8 FAILED**, every defective phrase captured verbatim in the assertion output (edit-UI claim; `pnpm exec tsc --noEmit`; "in-memory SQLite"; zero create-keys rows; "**full** baseline visible text"; "disappearing or weakening** is a downgrade"; the bare brute-force sentence; `img` in the Collect node). Stash popped cleanly; module **8/8 green** re-verified post-pop.
+- **Carried-forward dispositions executed**: Layer-6 item resolved strong-direction (code verified direction-aware FIRST, then wording synced — Phase 36's prediction fulfilled); usage.mdx claim resolved TRUE-via-Phase-17 with mechanism-naming sync. Both recorded inside their entries.
+- **Scope discipline**: one same-surface fold-in (security-and-dev.mdx SQLite claim) made WITH disclosure under its own entry — same file being edited, sibling developer-workflow block, contradicted README since Phase 1. All other adjacent passages re-checked and deliberately untouched: remediation-hooks.mdx lifecycle sentences (accurate post-33), 6-security-metadata TLS/robots sections (accurate), 8-semantics mermaid (structurally accurate at its abstraction level), configuration.mdx non-RBAC sections (spot-checked against Phase 1's RBAC sweep and Phase 39's env documentation — accurate). Phase 43 owns any further full-pass findings.
+- **Fusion regeneration obligation**: explicitly NOT touched — it executes at the START of the Phase 42 session as its own commit, per the recorded disposition; this phase's semantics-doc wording describes mechanics, not emission profiles, so the obligation and the docs do not conflict.
+- **Regression result (exact final formatted tree)**: Backend `.venv\Scripts\python.exe -m pytest -q --tb=short` → **1054 passed, 0 failed, 1 warning** (~913 s; warning = the pre-existing apprise/imghdr DeprecationWarning recorded since Phase 0; 1046 prior + 8 new; includes the DNS64-hermetic migration test passing and `wardress-test-pg` verified up beforehand). Frontend: `pnpm test` → **18 files / 113 passed** (no frontend files touched this phase); `pnpm type-check` (`tsc -b --noEmit`) → exit 0; `pnpm exec oxlint src` → **0 errors / 12 warnings** (= recorded baseline exactly). Backend `uv run --frozen ruff check .` → All checks passed!; `ruff format --check .` → 157 files formatted (new test file included). No dependency changes → supply-chain gates stand green from Phase 9.
+- **Scratch hygiene**: no scratch files created; repo tree contains only the eight intended doc edits + the new test file + this log.
+

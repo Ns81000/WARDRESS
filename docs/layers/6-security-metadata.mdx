@@ -61,7 +61,7 @@ The key distinction the layer draws is between a *legitimate renewal* (same CA a
 - `Referrer-Policy`
 - `Permissions-Policy`
 
-Headers **disappearing or weakening** is a downgrade; headers **appearing** is an improvement and is recorded but not penalized.
+Header value changes are compared **directionally**, not by raw inequality. Before comparing, per-response noise is normalized away — CSP nonces collapse to a `'nonce-'` placeholder and case/whitespace/formatting differences are ignored — so a nonce-varying CSP reads as *unchanged* rather than re-scoring on every scan. Each remaining value change is then classified semantically for its header family (HSTS flag/max-age strength, CSP directive/token subsets, XFO ordering, referrer-policy ordering, permissions-policy breadth): true regressions land under `security_headers_weakened` and score, hardening lands under `security_headers_strengthened` and is recorded but never penalized, and a real value change whose direction cannot be determined semantically lands under `security_headers_changed`, recorded honestly without scoring either way. Headers **disappearing entirely** remain the strongest signal.
 
 ```python
 score = min(0.8, 0.3 * len(removed) + 0.1 * len(weakened))

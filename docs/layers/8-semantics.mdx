@@ -41,7 +41,7 @@ flowchart LR
 
 ### 1. Aggression lexicon (new text)
 
-A graded lexicon scores threatening language on the new text — for example `no one is safe` (0.5), `you can't stop us` (0.5), `death to` (0.6), `pay the price` (0.4), `traitors` (0.3). The total weight saturates through an exponential:
+A graded lexicon scores threatening language on the new text — for example `no one is safe` (0.5), `you can't stop us` (0.5), `death to` (0.6), `pay the price` (0.4), `traitors` (0.3). The lexicon also covers common non-Latin defacement-campaign phrasings (Arabic, Russian, and Chinese forms such as تم اختراق "(has) been hacked", сайт взломан "site hacked", 被黑 "got hacked"), which a purely English lexicon would score zero. The total weight saturates through an exponential:
 
 ```python
 aggression_score = 1 - math.exp(-1.2 * aggression_weight)
@@ -49,21 +49,26 @@ aggression_score = 1 - math.exp(-1.2 * aggression_weight)
 
 ### 2. Topic keywords (new text)
 
-Four categories of defacement-adjacent vocabulary are matched: `breach_bragging` (breached, compromised, infiltrated), `credential_theft` (database dumped, leaked credentials), `defacement_meta` (index.html replaced, mirrored on zone), and `contact_defacer` (contact us on telegram, `t.me/...`). The score scales with the number of categories hit:
+Four categories of defacement-adjacent vocabulary are matched: `breach_bragging` (breached, compromised, infiltrated), `credential_theft` (database dumped, leaked credentials), `defacement_meta` (index.html replaced, mirrored on zone), and `contact_defacer` (contact us on telegram, `t.me/...`, plus its Arabic equivalent). The score scales with the number of categories hit:
 
 ```python
 topic_score = min(0.7, 0.35 * len(topic_hits))
 ```
 
-### 3. Semantic drift (MiniLM-L6-v2)
+### 3. Semantic drift (MiniLM-L6-v2, multi-window)
 
-Wardress loads `sentence-transformers/all-MiniLM-L6-v2` (CPU). It embeds the **full** baseline visible text and the full current visible text into 384-dimensional vectors and computes their cosine similarity. The drift score rises linearly as similarity falls below `0.85`:
+Wardress loads `sentence-transformers/all-MiniLM-L6-v2` (CPU). Rather than embedding each side once, both sides' visible texts are split into windows (~600 characters each, up to 24 per side) **spread across the whole text** — on pages beyond roughly 14,000 characters the same number of windows is distributed evenly instead of reading every character, so no region is ever invisible. Every window is matched against its *best-matching* window on the other side (so pure positional shifts don't read as drift); each direction's score is the length-weighted mean of those best matches, and the final similarity is the **lower of the two directions** — appended or rewritten content drops the current side, deleted content drops the baseline side, while shared content keeps both high. Total cost is bounded at 48 embed calls per scan no matter the page size.
 
-```python
-drift_score = max(0.0, min(1.0, (0.85 - semantic_similarity) / 0.85))
-```
+The drift mapping is calibrated piecewise-linear interpolation over measured similarity bands, not a single linear slope:
 
-A cosine of `1.0` is identical meaning; meaning-level rewrites typically drop well below `0.8`.
+| Similarity | Drift |
+| :--- | :---: |
+| ≥ 0.90 | 0.00 |
+| 0.80 | 0.30 |
+| 0.50 | 0.90 |
+| ≤ 0.00 | 1.00 |
+
+Benign dynamic churn measures cosine ≥ ~0.93 even after single-sentence edits (silent); partial injections and SEO spam land in the graded 0.75–0.90 band; meaning-level rewrites fall below ~0.6 (near-maximal drift). A similarity of exactly `1.0` maps to exactly `0.0`.
 
 <Tip>
   The drift score is computed only when both sides have non-empty visible text. If the MiniLM model cannot be loaded (a fresh container without the baked model and no network), `embed_text` returns `None`, similarity is unavailable, and drift contributes `0.0` — the scan still runs on the other two signals and the remaining layers. The model failing must never kill a scan.
@@ -77,4 +82,4 @@ score = max(aggression_score, topic_score, drift_score)
 
 ## Evidence recorded
 
-Aggression hits with weights, the aggression weight sum, topic hits per category, the rounded semantic similarity (or `null` when unavailable), the drift score, new-text character count, and the escalation status.
+Aggression hits with weights, the aggression weight sum, topic hits per category, the rounded semantic similarity (or `null` when unavailable), the drift score, the per-side window counts used for the comparison, the worst single-window similarity (`semantic_min_chunk_similarity`), new-text character count, and the escalation status.

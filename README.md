@@ -365,7 +365,8 @@ Wardress implements strict role enforcement across all endpoints.
 | Read sites, scan records, alerts, system health, and PDF reports | ✓ | ✓ | ✓ |
 | Add/modify sites, execute manual scans, rebaseline pages, and add suppression rules | ✓ | ✓ | — |
 | Acknowledge alerts, handle manual remediation confirmation queues | ✓ | ✓ | — |
-| Manage personal API keys | ✓ | ✓ | ✓ |
+| List or revoke your own API keys | ✓ | ✓ | ✓ |
+| Create new API keys (own keys, interactive session only) | ✓ | ✓ | — |
 | Configure system settings, SMTP properties, and AI API integrations | ✓ | — | — |
 | Create or modify remediation webhooks | ✓ | — | — |
 | Perform user management operations and inspect system audit logs | ✓ | — | — |
@@ -418,7 +419,7 @@ Install dependencies, run component-level tests, check types, and run the linter
 cd frontend
 pnpm install
 pnpm test
-pnpm exec tsc --noEmit
+pnpm type-check
 pnpm exec oxlint src
 ```
 
