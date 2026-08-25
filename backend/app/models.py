@@ -362,6 +362,11 @@ class Alert(Base):
         back_populates="alert", cascade="all, delete-orphan"
     )
 
+    # Declared here so ORM metadata matches the migrated schema — this
+    # index is created by migration g1h2i3j4k5l6; leaving it undeclared
+    # made `alembic check` report a spurious "removed index" drift item.
+    __table_args__ = (Index("ix_alerts_created_at", "created_at"),)
+
 
 class AlertDelivery(Base):
     """One delivery attempt of one alert to one channel. Failures are
@@ -499,6 +504,9 @@ class Scan(Base):
             postgresql_where=text("status IN ('pending', 'running')"),
             sqlite_where=text("status IN ('pending', 'running')"),
         ),
+        # Created by migration g1h2i3j4k5l6; declared here so ORM
+        # metadata matches the migrated schema (alembic check drift).
+        Index("ix_scans_finished_at", "finished_at"),
     )
 
 
@@ -659,6 +667,9 @@ class RemediationExecution(Base):
 
     __table_args__ = (
         Index("uq_remediation_executions_hook_scan", "hook_id", "scan_id", unique=True),
+        # Created by migration g1h2i3j4k5l6; declared here so ORM
+        # metadata matches the migrated schema (alembic check drift).
+        Index("ix_remediation_executions_scan_id", "scan_id"),
     )
 
 

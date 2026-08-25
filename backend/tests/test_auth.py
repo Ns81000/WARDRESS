@@ -364,58 +364,62 @@ async def test_absolute_session_lifetime_caps_successor_expiry(
     from app.models import ensure_utc
 
     # Override max_session_ttl to 2 days for this test (default is 30).
+    # Set/cleanup inside try/finally: a mid-test failure must not leak
+    # MAX_SESSION_TTL into every later test in the process (the per-test
+    # client fixture rebuilds Settings from whatever env is still set).
     get_settings.cache_clear()
     os.environ["MAX_SESSION_TTL"] = str(2 * 24 * 60 * 60)
     get_settings.cache_clear()
-
-    login = await client.post(
-        "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
-    )
-    cookie = _refresh_cookie(login)
-
-    # Age the token's session_started_at to 2 days - 10 minutes ago.
-    async with db_factory() as db:
-        token = await db.scalar(select(RefreshToken).where(RefreshToken.user_id == admin_user.id))
-        original_start = datetime.now(UTC) - timedelta(days=2, minutes=-10)
-        token.session_started_at = original_start
-        await db.commit()
-
-    # The successor's expiry is capped at session_started_at + max_session_ttl
-    # = 10 minutes from now (well under the usual 7-day refresh TTL).
-    client.cookies.set("wardress_refresh", cookie, path="/api/auth")
-    refresh = await client.post("/api/auth/refresh")
-    assert refresh.status_code == 200
-
-    async with db_factory() as db:
-        successor = await db.scalar(
-            select(RefreshToken)
-            .where(RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None))
-            .order_by(RefreshToken.created_at.desc())
+    try:
+        login = await client.post(
+            "/api/auth/login", json={"email": admin_user.email, "password": TEST_PASSWORD}
         )
-        # SQLite returns naive datetimes; normalize both for comparison.
-        assert ensure_utc(successor.session_started_at) == ensure_utc(original_start)
-        # The successor expires ~10 minutes from now (not 7 days).
-        ceiling = original_start + timedelta(days=2)
-        assert abs((ensure_utc(successor.expires_at) - ceiling).total_seconds()) < 5
+        cookie = _refresh_cookie(login)
 
-    # If we age the session past the absolute ceiling, the next refresh 401s.
-    async with db_factory() as db:
-        token = await db.scalar(
-            select(RefreshToken).where(
-                RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None)
+        # Age the token's session_started_at to 2 days - 10 minutes ago.
+        async with db_factory() as db:
+            token = await db.scalar(
+                select(RefreshToken).where(RefreshToken.user_id == admin_user.id)
             )
-        )
-        token.session_started_at = datetime.now(UTC) - timedelta(days=2, seconds=10)
-        await db.commit()
+            original_start = datetime.now(UTC) - timedelta(days=2, minutes=-10)
+            token.session_started_at = original_start
+            await db.commit()
 
-    client.cookies.set("wardress_refresh", _refresh_cookie(refresh), path="/api/auth")
-    expired = await client.post("/api/auth/refresh")
-    assert expired.status_code == 401
-    assert "session expired" in expired.json()["detail"].lower()
+        # The successor's expiry is capped at session_started_at + max_session_ttl
+        # = 10 minutes from now (well under the usual 7-day refresh TTL).
+        client.cookies.set("wardress_refresh", cookie, path="/api/auth")
+        refresh = await client.post("/api/auth/refresh")
+        assert refresh.status_code == 200
 
-    # Cleanup.
-    os.environ.pop("MAX_SESSION_TTL", None)
-    get_settings.cache_clear()
+        async with db_factory() as db:
+            successor = await db.scalar(
+                select(RefreshToken)
+                .where(RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None))
+                .order_by(RefreshToken.created_at.desc())
+            )
+            # SQLite returns naive datetimes; normalize both for comparison.
+            assert ensure_utc(successor.session_started_at) == ensure_utc(original_start)
+            # The successor expires ~10 minutes from now (not 7 days).
+            ceiling = original_start + timedelta(days=2)
+            assert abs((ensure_utc(successor.expires_at) - ceiling).total_seconds()) < 5
+
+        # If we age the session past the absolute ceiling, the next refresh 401s.
+        async with db_factory() as db:
+            token = await db.scalar(
+                select(RefreshToken).where(
+                    RefreshToken.user_id == admin_user.id, RefreshToken.revoked_at.is_(None)
+                )
+            )
+            token.session_started_at = datetime.now(UTC) - timedelta(days=2, seconds=10)
+            await db.commit()
+
+        client.cookies.set("wardress_refresh", _refresh_cookie(refresh), path="/api/auth")
+        expired = await client.post("/api/auth/refresh")
+        assert expired.status_code == 401
+        assert "session expired" in expired.json()["detail"].lower()
+    finally:
+        os.environ.pop("MAX_SESSION_TTL", None)
+        get_settings.cache_clear()
 
 
 async def test_logout_cookie_deleted_with_mirrored_attributes(
