@@ -105,6 +105,8 @@ ignore = ["S101"]  # allow asserts in tests
 # Phase 29's ops-scripts sandbox shells out to pwsh/powershell driving the
 # fake docker shim — argv lists built entirely from trusted, literal values.
 "tests/test_phase29_ops_robustness.py" = ["S603"]
+# Phase 39 reuses the same sandbox methodology for the ops/config sweep.
+"tests/test_phase39_ops_config.py" = ["S603"]
 # Dataset builder seeds random.Random for synthetic-content variety only —
 # no security surface consumes these values.
 "tools/*" = ["S311"]

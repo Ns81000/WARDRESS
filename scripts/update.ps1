@@ -33,8 +33,12 @@ $EnvFile = Join-Path $RepoRoot ".env"
 # Shared helpers (Fail/Step/Invoke-*, dynamic image discovery, retries).
 . (Join-Path $PSScriptRoot "lib.ps1")
 
-# Set total steps for progress tracking
-Set-TotalSteps 11
+$BuildLogDir = Join-Path $RepoRoot ".build-logs"
+
+# Set total steps for progress tracking. Corrected inside step 1 once the
+# two conditional steps (source pull, telegram-bot recreate) have been
+# probed, so the displayed budget matches what will actually run.
+Set-TotalSteps 12
 
 # --- 1. Preconditions ----------------------------------------------------
 
@@ -59,6 +63,25 @@ Set-Location $RepoRoot
 if (-not (Test-Path $EnvFile)) {
     Fail ".env not found - run scripts\install.ps1 first."
 }
+
+# Progress budget: probe both conditional steps NOW (read-only; the engine
+# probes above already guaranteed the CLI responds) so Update-TotalSteps can
+# match the steps that will actually execute. The source-pull predicate
+# mirrors section 2's conditions exactly; the bot query mirrors section 5's.
+$willPullSource = $false
+if (-not $NoGitPull) {
+    $isGitRepoEarly = (Test-Path (Join-Path $RepoRoot ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)
+    if ($isGitRepoEarly -and (Invoke-Quiet { git remote get-url origin })) { $willPullSource = $true }
+}
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$botRunningEarly = docker compose --profile telegram ps --status running -q telegram-bot 2>$null
+$botQueryOkEarly = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
+$totalSteps = 12
+if ($willPullSource) { $totalSteps++ }
+if ($botQueryOkEarly -and $botRunningEarly) { $totalSteps++ }
+Update-TotalSteps $totalSteps
 
 Write-Progress-Done "Prerequisites verified"
 
@@ -120,13 +143,13 @@ Step "Pre-pulling base images (with retry on network errors)"
 Warm-Images $baseImages
 
 Step "Rebuilding app image"
-Build-Service @("--pull") "app" "Rebuilding the app image failed"
+$null = Build-Service @("--pull") "app" "Rebuilding the app image failed" $BuildLogDir
 
 Step "Rebuilding worker image"
-Build-Service @("--pull") "worker" "Rebuilding the worker image failed"
+$null = Build-Service @("--pull") "worker" "Rebuilding the worker image failed" $BuildLogDir
 
 Step "Rebuilding beat scheduler image"
-Build-Service @() "beat" "Rebuilding the beat image failed"
+$null = Build-Service @() "beat" "Rebuilding the beat image failed" $BuildLogDir
 
 # --- 4. Migrate ----------------------------------------------------------
 

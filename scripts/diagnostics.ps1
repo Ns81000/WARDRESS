@@ -5,6 +5,10 @@
 
 [CmdletBinding()]
 param(
+    # Where to write the bundle. Defaults OUTSIDE the repository (the user's
+    # Documents folder) so support bundles never litter the source tree or
+    # risk an accidental commit - the bundle can contain raw service logs,
+    # which do not belong in git.
     [string]$OutputPath
 )
 
@@ -18,7 +22,54 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 . (Join-Path $PSScriptRoot "lib.ps1")
 
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $RepoRoot "diagnostics_$timestamp.txt"
+    $documentsDir = [Environment]::GetFolderPath("MyDocuments")
+    if ([string]::IsNullOrEmpty($documentsDir)) { $documentsDir = $env:TEMP }
+    $OutputPath = Join-Path $documentsDir "wardress-diagnostics_$timestamp.txt"
+}
+
+function Get-SecretScrubbers {
+    # Build the redaction rules applied to every line of the bundle before
+    # it is written: the deployment's own configured secret values (parsed
+    # from .env - never printed anywhere else in this script) plus common
+    # third-party token shapes that service traces sometimes echo. The
+    # script's own .env section already reveals only existence/placeholder/
+    # line-count; this closes the same share-safety gap for the LOG and
+    # docker-info sections, so the "share this file" instruction holds for
+    # the whole bundle.
+    $scrubbers = @()
+    $secretKeys = @(
+        "JWT_SECRET",
+        "CREDENTIALS_ENCRYPTION_KEY",
+        "POSTGRES_PASSWORD",
+        "ADMIN_PASSWORD",
+        "TELEGRAM_BOT_TOKEN",
+        "DATABASE_URL"
+    )
+    if (Test-Path (Join-Path $RepoRoot ".env")) {
+        foreach ($line in (Get-Content (Join-Path $RepoRoot ".env"))) {
+            if ($line -match "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$") {
+                $name = $Matches[1].ToUpperInvariant()
+                $value = $Matches[2].Trim()
+                if (($secretKeys -contains $name) -and $value.Length -ge 8 -and $value -notlike "*CHANGE_ME*") {
+                    $scrubbers += ,@([regex]::Escape($value), "<redacted>")
+                }
+            }
+        }
+    }
+    # Generic token shapes (provider API keys etc.) that may appear in logs
+    # even though Wardress itself never prints them.
+    $scrubbers += ,@("sk-[A-Za-z0-9_-]{8,}", "<redacted>")
+    $scrubbers += ,@("xox[baprs]-[A-Za-z0-9-]{8,}", "<redacted>")
+    $scrubbers += ,@("gh[pousr]_[A-Za-z0-9]{20,}", "<redacted>")
+    $scrubbers += ,@("AKIA[0-9A-Z]{16}", "<redacted>")
+    return , $scrubbers
+}
+
+function Protect-Line([string]$Text, [object[]]$Scrubbers) {
+    foreach ($rule in $Scrubbers) {
+        $Text = $Text -replace $rule[0], $rule[1]
+    }
+    return $Text
 }
 
 function Write-Section([string]$Title) {
@@ -302,10 +353,15 @@ $output += ""
 
 # --- Write Output --------------------------------------------------------
 
+# Redact secret material from every collected line before it lands on disk,
+# so the bundle is safe to share as instructed below (see Get-SecretScrubbers).
+$scrubbers = Get-SecretScrubbers
+$output = foreach ($line in $output) { Protect-Line $line $scrubbers }
+
 $output | Out-File -FilePath $OutputPath -Encoding UTF8
 
 Write-Host ""
 Write-Host "Diagnostics collected successfully" -ForegroundColor Green
 Write-Host "Output saved to: $OutputPath" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Share this file when requesting support." -ForegroundColor Yellow
+Write-Host "Secret-bearing values are redacted; share this file when requesting support." -ForegroundColor Yellow

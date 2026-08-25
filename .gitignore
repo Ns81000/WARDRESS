@@ -18,7 +18,13 @@ react-bits-main
 .agents
 .claude
 presentation
-build_app.err.log
+# Build-log litter from failed image builds (scripts/lib.ps1 keeps them in
+# .build-logs/; the root-level patterns are defense-in-depth for older checkouts).
+.build-logs/
+build_*.log
+build_*.err.log
+# Support bundles (diagnostics.ps1 defaults outside the repo; belt-and-braces).
+diagnostics_*.txt
 EXample
 Build
 AI_CODE_AUDIT_FINDINGS.md

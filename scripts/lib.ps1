@@ -31,6 +31,16 @@ function Set-TotalSteps([int]$Total) {
     $script:CurrentStep = 0
 }
 
+function Update-TotalSteps([int]$Total) {
+    # Re-budget the progress display WITHOUT resetting CurrentStep. Used once
+    # conditional steps become predictable (e.g. an optional service recreate
+    # detected during preflight) so the displayed total matches the steps that
+    # will actually run - percentages reach exactly 100% instead of overflowing
+    # past it or stalling below it. Set-TotalSteps stays script-top-only
+    # because it resets the counter.
+    $script:TotalSteps = $Total
+}
+
 function Write-Progress-Inline([string]$Message, [string]$Color = "Gray") {
     Write-Host "    $Message" -ForegroundColor $Color -NoNewline
     Write-Host "`r" -NoNewline
@@ -313,17 +323,41 @@ function Warm-Images([string[]]$Images) {
     }
 }
 
-function Build-Service([string[]]$BuildArgs, [string]$Service, [string]$FailureHint) {
+function Build-Service([string[]]$BuildArgs, [string]$Service, [string]$FailureHint, [string]$LogDirectory) {
+    # Build logs go to a dedicated directory (never the repo root): on
+    # failure both files are KEPT there for diagnosis; on success they are
+    # removed again. $LogDirectory is passed by each entry-point script
+    # (anchored at its own $RepoRoot), so the paths never depend on whatever
+    # directory the user happened to invoke from.
+    if ([string]::IsNullOrEmpty($LogDirectory)) {
+        Fail "Internal error: Build-Service requires -LogDirectory (no repo-root log litter, by design)."
+    }
+    if (-not (Test-Path $LogDirectory)) {
+        try {
+            New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+        }
+        catch {
+            # A read-only checkout must still build: fall back to a per-user
+            # temp dir so the logs always have somewhere to land. If even
+            # that fails, let the throw surface - failing loud beats a
+            # silent unredirected build.
+            $LogDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "wardress-build-logs"
+            New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+        }
+    }
+    $stdoutLog = Join-Path $LogDirectory "build_$Service.log"
+    $stderrLog = Join-Path $LogDirectory "build_$Service.err.log"
+
     Write-Host "    Building $Service..." -ForegroundColor Cyan
-    
+
     # Stream build output with progress indicators
     $buildCmd = "docker"
     $fullArgs = @("compose", "build") + $BuildArgs + @($Service)
-    
+
     $startTime = Get-Date
     $process = Start-Process -FilePath $buildCmd -ArgumentList $fullArgs `
-        -NoNewWindow -PassThru -RedirectStandardOutput "build_$Service.log" `
-        -RedirectStandardError "build_$Service.err.log"
+        -NoNewWindow -PassThru -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog
     
     # Cache the process handle immediately; otherwise, ExitCode returns $null after process termination.
     $null = $process.Handle
@@ -344,22 +378,26 @@ function Build-Service([string[]]$BuildArgs, [string]$Service, [string]$FailureH
     
     if ($process.ExitCode -eq 0) {
         Write-Host "    Built $Service successfully ($elapsed`s)" -ForegroundColor Green
-        Remove-Item "build_$Service.log" -ErrorAction SilentlyContinue
-        Remove-Item "build_$Service.err.log" -ErrorAction SilentlyContinue
+        Remove-Item $stdoutLog -ErrorAction SilentlyContinue
+        Remove-Item $stderrLog -ErrorAction SilentlyContinue
+        # Best-effort: drop the log directory too when this run left it
+        # empty (a non-empty directory simply errors and stays).
+        Remove-Item $LogDirectory -ErrorAction SilentlyContinue
         return $true
     } else {
         Write-Host "    Build failed for $Service" -ForegroundColor Red
-        
-        # Show error details
-        if (Test-Path "build_$Service.err.log") {
-            $errorContent = Get-Content "build_$Service.err.log" -Raw
+
+        # Show error details (docker writes build errors to stderr).
+        if (Test-Path $stderrLog) {
+            $errorContent = Get-Content $stderrLog -Raw
             if ($errorContent) {
                 Write-Host ""
                 Write-Host "Build error output:" -ForegroundColor Red
                 Write-Host $errorContent -ForegroundColor Yellow
             }
         }
-        
-        Fail ("$FailureHint. Build took $elapsed`s. Check build_$Service.log for details.")
+
+        Fail ("$FailureHint. Build took $elapsed`s. Check build_$Service.err.log " +
+            "(full stdout: build_$Service.log) in $LogDirectory for details.")
     }
 }

@@ -5,7 +5,11 @@ The catalog (``https://models.dev/catalog.json``) is reference data — no
 secrets. It is refreshed on backend startup and on a Celery-beat schedule
 (worker/beat_tasks.py). A normalized offline snapshot is bundled in the repo
 (``app/data/models_dev_catalog.json``) so a network-less install still has a
-catalog; a successful live fetch opportunistically rewrites that snapshot.
+catalog; that bundled file is a static first-boot seed and is never rewritten
+at runtime — a successful live fetch lands in the database, which retains the
+catalog between syncs. (Rewriting the tracked source-tree file from a running
+process used to leave checkout-based installs with a perpetually dirty git
+tree.)
 
 One parser (:func:`normalize_catalog`) turns the raw models.dev payload into
 the compact records we store; the bundled snapshot is already in that compact
@@ -124,7 +128,9 @@ def normalize_catalog(raw: dict) -> dict:
 
 def load_snapshot() -> dict | None:
     """The bundled compact snapshot ({providers, models}), or None if missing
-    / unreadable. Never raises — a broken snapshot must not block startup."""
+    / unreadable. Never raises — a broken snapshot must not block startup.
+    The bundled file is a static first-boot seed: it is read here and never
+    written at runtime (see the module docstring)."""
     try:
         with _SNAPSHOT_PATH.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -133,18 +139,6 @@ def load_snapshot() -> dict | None:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Bundled model catalog snapshot unavailable: %s", exc)
     return None
-
-
-def _write_snapshot(compact: dict) -> None:
-    """Opportunistically refresh the bundled snapshot after a live fetch.
-    Best-effort — a read-only filesystem must not fail the sync."""
-    try:
-        _SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"generated_at": datetime.now(UTC).isoformat(), **compact}
-        with _SNAPSHOT_PATH.open("w", encoding="utf-8") as fh:
-            json.dump(payload, fh, separators=(",", ":"), sort_keys=True)
-    except OSError as exc:
-        logger.info("Could not refresh bundled catalog snapshot: %s", exc)
 
 
 async def fetch_live_catalog(client: httpx.AsyncClient | None = None) -> dict | None:
@@ -213,14 +207,14 @@ async def upsert_catalog(db: AsyncSession, compact: dict) -> tuple[int, int]:
 
 
 async def sync_catalog(db: AsyncSession, *, allow_snapshot_fallback: bool = True) -> dict:
-    """Refresh the catalog: try live models.dev first (and refresh the bundled
-    snapshot on success); fall back to the bundled snapshot only if the tables
-    are still empty. Returns a small status dict for logs/observability. Never
+    """Refresh the catalog: try live models.dev first (the database retains
+    the live catalog between syncs; the bundled snapshot file is never
+    rewritten); fall back to the bundled snapshot only if the tables are
+    still empty. Returns a small status dict for logs/observability. Never
     raises — a catalog refresh failure must never break startup or a scan."""
     live = await fetch_live_catalog()
     if live is not None:
         providers, models = await upsert_catalog(db, live)
-        _write_snapshot(live)
         logger.info("Model catalog synced from models.dev: %d models", models)
         return {"source": "live", "providers": providers, "models": models}
 

@@ -54,12 +54,14 @@ $Project = "wardress"   # docker-compose.yml `name:` - volumes are $Project_<vol
 # Shared helpers (Fail/Step/Invoke-*, dynamic image discovery).
 . (Join-Path $PSScriptRoot "lib.ps1")
 
-# Set total steps for progress tracking (conditional on backup)
-if ($SkipBackup) {
-    Set-TotalSteps 4
-} else {
-    Set-TotalSteps 8
-}
+# Set total steps for progress tracking. The budget is per-path so the
+# display reaches exactly 100% on every run: the standard backup path
+# executes 7 Steps and -SkipBackup executes 3; -PruneBaseImages adds one
+# more either way.
+$totalSteps = 7
+if ($SkipBackup) { $totalSteps = 3 }
+if ($PruneBaseImages) { $totalSteps++ }
+Set-TotalSteps $totalSteps
 
 # --- 1. Preconditions ----------------------------------------------------
 

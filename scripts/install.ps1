@@ -37,6 +37,14 @@ $IconFile = Join-Path $RepoRoot "assets\brand\wardress.ico"
 # Shared helpers (Fail/Step/Invoke-*, dynamic image discovery, retries).
 . (Join-Path $PSScriptRoot "lib.ps1")
 
+# Everything below addresses the repo by absolute paths, but docker compose
+# and the build-log directory resolve against the working directory - pin it
+# to the repo root up front so behavior never depends on where the user
+# invoked from.
+Set-Location $RepoRoot
+
+$BuildLogDir = Join-Path $RepoRoot ".build-logs"
+
 # Set total steps for progress tracking
 Set-TotalSteps 16
 
@@ -68,9 +76,11 @@ function New-RandomSecret([int]$Length = 43) {
 }
 
 # Build helper: install builds cache-friendly (no --pull; base images are
-# pre-warmed separately). Shared retry/hint logic lives in lib.ps1.
+# pre-warmed separately). Shared retry/hint logic lives in lib.ps1. The
+# return value is consumed (success/failure is communicated by the helper
+# itself); capturing it keeps the transcript free of stray "True" lines.
 function Build-InstallService([string]$Service, [string]$FailureHint) {
-    Build-Service @() $Service $FailureHint
+    $null = Build-Service @() $Service $FailureHint $BuildLogDir
 }
 
 # --- 1. Docker Desktop checks -------------------------------------------
@@ -101,6 +111,18 @@ if (-not $composeProbe) {
     Fail ("The 'docker compose' plugin is unavailable. Update Docker Desktop " +
         "to a current version: https://www.docker.com/products/docker-desktop/")
 }
+
+# Progress budget: the optional telegram-bot recreate at the bottom of this
+# script only fires when a previous install left the bot running; detect that
+# now (the engine probes above already guaranteed the CLI responds) so the
+# displayed step total matches what will actually execute. Before any stack
+# exists this query fails harmlessly and no extra step is budgeted.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$botRunningEarly = docker compose --profile telegram ps --status running -q telegram-bot 2>$null
+$botQueryOkEarly = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
+if ($botQueryOkEarly -and $botRunningEarly) { Update-TotalSteps 17 }
 
 Write-Progress-Done "Docker engine is running"
 
@@ -153,7 +175,7 @@ if (-not (Test-CompilationErrors $RepoRoot)) {
     Fail "TypeScript compilation errors detected. Fix them before building Docker images."
 }
 
-Write-Progress-Done "Docker engine is running"
+Write-Progress-Done "Pre-flight TypeScript validation complete"
 
 # --- 2. Generate .env (first run only) ----------------------------------
 
