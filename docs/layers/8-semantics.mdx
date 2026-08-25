@@ -70,6 +70,10 @@ The drift mapping is calibrated piecewise-linear interpolation over measured sim
 
 Benign dynamic churn measures cosine ≥ ~0.93 even after single-sentence edits (silent); partial injections and SEO spam land in the graded 0.75–0.90 band; meaning-level rewrites fall below ~0.6 (near-maximal drift). A similarity of exactly `1.0` maps to exactly `0.0`.
 
+<Warning>
+  **Tiny pages amplify drift.** Drift is proportional to how much of the page changed, so on a very small page (a ~40-word brochure or holding page) even a one-line tagline rewrite can be a large *share* of the text and clear the flag threshold — while the same edit on a normal-sized page stays quiet. If you monitor pages that small, raise the site's flag threshold (or add a suppression rule for the volatile region) rather than expecting silence at defaults.
+</Warning>
+
 <Tip>
   The drift score is computed only when both sides have non-empty visible text. If the MiniLM model cannot be loaded (a fresh container without the baked model and no network), `embed_text` returns `None`, similarity is unavailable, and drift contributes `0.0` — the scan still runs on the other two signals and the remaining layers. The model failing must never kill a scan.
 </Tip>

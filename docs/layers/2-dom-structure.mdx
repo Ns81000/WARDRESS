@@ -61,7 +61,15 @@ The layer walks the tree once and extracts a statistics bundle for each side: to
     A single new sensitive element yields ≈ 0.50; two yields ≈ 0.75; three ≈ 0.88.
   </Accordion>
   <Accordion title="Hidden-element detection" icon="eye-slash">
-    An element counts as hidden if it carries the `hidden` attribute, or its inline `style` contains `display:none` / `display: none` / `visibility:hidden` / `visibility: hidden` (whitespace-insensitive). Defacers use hidden containers to stage injected content or overlay the original page.
+    Hiding is detected **independently of technique**. An element counts as hidden when a decisive hiding property resolves against it, drawn from three sources folded in cascade order — matching rules from the page's own `<style>` blocks (class/id/tag selectors, last declaration wins), then the element's inline `style` (which overrides sheet rules):
+
+    - the `hidden` attribute;
+    - `display: none` or `visibility: hidden`/`collapse`;
+    - `opacity: 0` or `font-size: 0`;
+    - `position: absolute|fixed` with any negative offset (offscreen placement);
+    - `text-indent` ≤ −100px or a `translate()` component ≤ −500px.
+
+    This catches the idiomatic `.spam { display: none }` stylesheet class as readily as an inline style. Deliberate exclusions keep false positives out: `@media`/`@supports`/`@keyframes` blocks are skipped whole (print/responsive styles can never manufacture hidden counts), non-rendering tags (`script`, `style`, `meta`, …) never count, and `input[type=hidden]` (CSRF tokens) is excluded.
   </Accordion>
 </AccordionGroup>
 
@@ -75,7 +83,7 @@ Maximum tree-depth delta is recorded in evidence for context but does not direct
 
 ## Evidence recorded
 
-The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. When suppression content rules applied, a `suppression_applied` summary is attached.
+The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. Hidden elements carry a per-side attribution block (`hidden_detection`): how much stylesheet text was resolved, and which source hid each counted element (`hidden-attribute`, `inline-style`, or the deciding rule's selector subject). When suppression content rules applied, a `suppression_applied` summary is attached.
 
 ## False-positive suppression
 

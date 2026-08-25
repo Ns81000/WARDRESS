@@ -35,7 +35,7 @@ Thin, restyled wrappers over Radix primitives, each mapped onto the Wardress des
 A radial gauge built on **Recharts** `RadialBarChart` (a 225°→−45° arc), not a hand-built SVG. It renders the fused risk as a percentage with a tone driven by `riskTone(risk, threshold)`:
 
 - `risk >= threshold` → red (`#ff2047`) — flagged.
-- `risk >= 0.15` → orange (`#ff801f`) — the scheduler's material-change band.
+- `risk >= 0.15` → orange (`#ff801f`) — a fixed display band marking elevated-risk readings (distinct from the scheduler's material-change bar, which sits higher).
 - otherwise → green (`#11ff99`) — clean.
 
 The track is a hairline white; the value arc is the accent color at a thin stroke.

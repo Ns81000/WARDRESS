@@ -16,12 +16,13 @@ Every scan drives the target page through nine specialized layers, each designed
 flowchart LR
     F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
     L1 --> G{Identical?}
-    G -->|Yes| GATE[Skip 2 · 3 · 4 · 5 · 8]
-    G -->|No| CONTENT[Run 2 · 3 · 4 · 5 · 8]
+    G -->|Yes| GATE[Skip 2 · 3 · 5 · 8]
+    G -->|No| CONTENT[Run 2 · 3 · 5 · 8]
     GATE --> ALWAYS
     CONTENT --> ALWAYS
     subgraph ALWAYS [Always run · independent of the gate]
       direction TB
+      L4[4 · Visual Diff]
       L6[6 · Security Metadata]
       L7[7 · Cloaking]
     end
@@ -57,12 +58,12 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 | Layer | Stable key | Input scope | Core heuristic |
 | :--- | :--- | :--- | :--- |
 | [1 · Content Hash](/layers/1-content-hash) | `layer1_hash` | Original HTML | SHA-256 over conservatively normalized HTML. Binary `0.0`/`1.0`. |
-| [2 · DOM Structure](/layers/2-dom-structure) | `layer2_dom_structure` | Suppressed HTML | lxml tag-tree diff: churn, plus new `<script>`/`<iframe>`/hidden elements. |
-| [3 · Link Audit](/layers/3-link-audit) | `layer3_link_audit` | Suppressed HTML | Set-diff of `script`/`a`/`link`/`iframe`/`form` references; new external domains dominate. |
-| [4 · Visual Diff](/layers/4-visual-diff) | `layer4_visual_diff` | Screenshots | SSIM (0.7) + pHash/dHash (0.3) on masked grayscale captures. |
-| [5 · Signatures](/layers/5-signatures) | `layer5_signatures` | New visible text | Weighted defacement phrases, profanity bursts, Unicode script flips. |
+| [2 · DOM Structure](/layers/2-dom-structure) | `layer2_dom_structure` | Suppressed HTML | lxml tag-tree diff: churn, plus new `<script>`/`<iframe>` and hidden elements — hiding is resolved through inline styles *and* the page's own stylesheets. |
+| [3 · Link Audit](/layers/3-link-audit) | `layer3_link_audit` | Suppressed HTML | Set-diff of `script`/`a`/`link`/`iframe`/`form` references (browser-faithful URL normalization); new external domains dominate. |
+| [4 · Visual Diff](/layers/4-visual-diff) | `layer4_visual_diff` | Screenshots | SSIM (0.7) + pHash/dHash (0.3) on masked grayscale captures, plus a chroma-shift term so hue-only changes register. |
+| [5 · Signatures](/layers/5-signatures) | `layer5_signatures` | New visible text | Weighted defacement phrases (matched raw and leet-decoded), profanity bursts, Unicode script flips or foreign-script inflow. |
 | [6 · Security Metadata](/layers/6-security-metadata) | `layer6_security_metadata` | TLS + headers + robots | Cert issuer/subject shifts, security-header downgrades, robots.txt changes. |
-| [7 · Cloaking](/layers/7-cloaking) | `layer7_cloaking` | UA-rotated raw fetches | Jaccard divergence between Googlebot/mobile and the desktop reference. |
+| [7 · Cloaking](/layers/7-cloaking) | `layer7_cloaking` | UA-rotated raw fetches | Jaccard divergence between Googlebot/mobile and the desktop reference, graded with a churn grace so dynamic bits stay silent. |
 | [8 · Semantics](/layers/8-semantics) | `layer8_semantics` | Suppressed text | MiniLM cosine drift, aggression lexicon, defacement topic keywords. |
 | [9 · Risk Fusion](/layers/9-risk-fusion) | `layer9_fusion` | Layers 1–8 | Non-negative-fitted logistic regression + rule-based minimum-risk floors → one `0.0–1.0` ranking score. |
 

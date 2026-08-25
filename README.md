@@ -206,10 +206,10 @@ To preserve system resources and prevent false alarms from dynamic rendering var
 | Layer | Stable Key | Input Scope | Core Detection Heuristics |
 | :--- | :--- | :--- | :--- |
 | **1. Content Hash** | `layer1_hash` | Original HTML | SHA-256 over conservatively normalized HTML. Binary `0.0`/`1.0` result. |
-| **2. DOM Structure** | `layer2_dom_structure` | Suppressed HTML | Inspects structural tree depth, element counts, script tags, iframe insertions, and style attributes that force element hiding. |
-| **3. Link Audit** | `layer3_link_audit` | Suppressed HTML | Audits newly introduced external hyperlinks, stylesheets, script references, and HTML form target domains. |
-| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | SSIM (`scikit-image`, weighted 0.7) plus pHash + dHash (`imagehash`, weighted 0.3) on downscaled, bbox-masked grayscale captures. |
-| **5. Signatures** | `layer5_signatures` | New visible text | Scans newly added visible text for defacement keywords ("hacked by", "owned by"), profanity frequency, and dominant Unicode script changes (e.g. Latin to Cyrillic/Arabic). |
+| **2. DOM Structure** | `layer2_dom_structure` | Suppressed HTML | Inspects structural tree depth, element counts, script tags, iframe insertions, and elements hidden by any technique — inline styles, stylesheet classes resolved from the page's own `<style>` blocks, `opacity`/`font-size` zeroing, or offscreen positioning. |
+| **3. Link Audit** | `layer3_link_audit` | Suppressed HTML | Audits newly introduced external hyperlinks, stylesheets, script references, iframe sources, and HTML form target domains (references normalized browser-faithfully before attribution). |
+| **4. Visual Diff** | `layer4_visual_diff` | Screenshot | SSIM (`scikit-image`, weighted 0.7) plus pHash + dHash (`imagehash`, weighted 0.3) on downscaled, bbox-masked grayscale captures, plus a chroma-shift term so hue-only recolors register. |
+| **5. Signatures** | `layer5_signatures` | New visible text | Scans newly added visible text for defacement keywords ("hacked by", "owned by" — including common leetspeak spellings), profanity frequency, and Unicode script changes (a dominant-script flip or a substantial inflow of a previously-absent script such as Cyrillic/Arabic). |
 | **6. Security Metadata** | `layer6_security_metadata` | Network headers | Audits TLS certificate validity, fingerprints (distinguishes CA reissues from subject shifts), security header policies (HSTS, CSP, CORS), and `robots.txt` changes. |
 | **7. Cloaking** | `layer7_cloaking` | HTTP variant fetches | Rotates the User-Agent (Googlebot, Mobile Safari, Desktop Chrome) and compares raw HTML content similarities to identify content cloaked specifically for search engines. |
 | **8. Text Semantics** | `layer8_semantics` | Suppressed text | Computes the sentence embeddings of visible text using a local **MiniLM-L6-v2** neural network, measuring semantic cosine distance from the baseline. |
@@ -260,7 +260,7 @@ Consolidated interface to configure SMTP channels, Telegram bot credentials, AI 
 ![Settings Configuration](docs/screenshots/settings.png)
 
 ### 11. Diagnostic System Health
-Real-time health statistics charting Celery queue depth, worker heartbeats, and average scan execution throughput.
+Real-time health statistics charting Celery queue depth, worker heartbeats, average scan duration, and degraded-capture counts.
 ![Health Indicators](docs/screenshots/health.png)
 
 ---

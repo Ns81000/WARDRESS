@@ -94,7 +94,7 @@ RBAC is enforced per endpoint via dependency factories, so a `403` (valid creden
     | Method | Path | Role |
     | :--- | :--- | :--- |
     | GET/POST/PATCH/DELETE | `/api/users[/{id}]` | admin |
-    | GET/POST/DELETE | `/api/api-keys[/{id}]` | session (own keys) |
+    | GET/POST/DELETE | `/api/api-keys[/{id}]` | session (own keys) · POST analyst+ |
     | GET | `/api/audit-log` (paged) | admin |
     | GET/PUT/POST | `/api/settings/{smtp,telegram}` (+ `/test`) | admin |
     | GET/POST/PATCH/DELETE | `/api/settings/ai/providers[/{id}]` | admin |

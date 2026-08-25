@@ -48,7 +48,7 @@ flowchart LR
     lxml walks the tree and collects `src`/`href`/`action` for the five tag kinds into sets.
   </Step>
   <Step title="Normalization">
-    Each reference is resolved against the page's `final_url` with `urljoin`, then normalized. References that are not comparable links are dropped: fragments (`#...`), and `javascript:`, `data:`, `mailto:`, `tel:`, `about:` schemes. Only `http`, `https`, and scheme-relative refs survive. Fragments are stripped from the tail; **query strings are kept** (defacers love appending `?redirect=`).
+    Each reference is normalized **browser-faithfully** before resolution: for `http`/`https` references, backslashes are treated as slashes (including any run of slashes/backslashes immediately after the scheme colon), exactly as browsers parse URLs — so a hijacked reference like `/\evil.com/x.js` attributes to `evil.com`, not to the page's own host. The result is then resolved against the page's `final_url` with `urljoin`. References that are not comparable links are dropped: fragments (`#...`), and `javascript:`, `data:`, `mailto:`, `tel:`, `about:` schemes. Only `http`, `https`, and scheme-relative refs survive. Fragments are stripped from the tail; **query strings are kept** (defacers love appending `?redirect=`).
   </Step>
   <Step title="Known-domain set">
     The baseline's domains across all reference kinds, plus the page's own host, form the `known_domains` set. Any added reference whose hostname is not in that set is a *new external domain*.

@@ -57,3 +57,9 @@ When `requires_manual_confirm` is disabled, flagged scans skip the `pending_conf
 ## Security
 
 Webhook URLs routinely contain embedded secrets (like API tokens in query parameters: `?token=abc1234`). For this reason, all webhook URLs are **Fernet-encrypted** at rest in the PostgreSQL database.
+
+Hook URLs also go through the same outbound-fetch discipline as every other URL Wardress fetches:
+
+- **Save-time validation.** A hook's URL must be an `http(s)` URL that an HTTP client can actually construct a request for (a malformed port or control characters are rejected with a validation error), and its host must pass the SSRF address gate: loopback, private (RFC1918), link-local, and cloud-metadata targets are refused by default.
+- **Internal receivers are opt-in.** If your receiver genuinely lives on the internal network, set `allow_private_networks: true` on the hook (an admin-only field on create/update; also surfaced in the hook response). This mirrors the per-site flag for monitored targets.
+- **Pinned fires.** When a hook fires, the worker resolves the host once and pins the connection to the resolved address through the same transport used for site probes — so DNS cannot silently change between validation and delivery — and honors the hook's stored opt-in.

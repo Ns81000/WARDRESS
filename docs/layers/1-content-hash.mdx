@@ -90,7 +90,7 @@ flowchart LR
 </AccordionGroup>
 
 <Warning>
-  **Baseline artifact missing.** If the baseline's stored HTML artifact is unavailable (a moved volume or lost file) but its stored digest survives, Layer 1 can still hash-compare. In that case the content-comparing layers (2, 3, 5, 8) are skipped with the reason *"baseline HTML artifact unavailable — content comparison impossible"* rather than false-flagging everything against an empty baseline. Layer 4 still runs because it compares screenshots, not HTML.
+  **Baseline artifact missing.** If the baseline's stored HTML artifact is unavailable (a moved volume or lost file) but its stored digest survives, Layer 1 can still hash-compare. In that case the content-comparing layers (2, 3, 5, 8) are marked **degraded** with the reason *"baseline HTML artifact unavailable — content comparison impossible"* rather than false-flagging everything against an empty baseline — a degraded channel reads as *unknown* to fusion, not as measured zero. Layer 4 still runs because it compares screenshots, not HTML.
 </Warning>
 
 ## Evasion resistance
