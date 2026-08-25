@@ -123,7 +123,9 @@ def test_readme_material_change_constant_matches_scanning_module():
     text = _read(README)
     assert "fused_risk >= 0.15" not in text
     assert f"fused_risk >= {MATERIAL_CHANGE_RISK}" in text
-    assert MATERIAL_CHANGE_RISK == 0.35
+    # Re-derived from the post-regeneration benign-dynamic distribution
+    # (see app/scanning.py's comment); moved 0.35 -> 0.40 deliberately.
+    assert MATERIAL_CHANGE_RISK == 0.40
 
 
 def test_detection_layers_doc_material_change_constant_matches_module():
@@ -132,10 +134,10 @@ def test_detection_layers_doc_material_change_constant_matches_module():
     text = _read(DOCS / "detection-layers.mdx")
     # No stale 0.15 anywhere in the cadence section; the named constant matches.
     assert "MATERIAL_CHANGE_RISK = 0.15" not in text
-    assert re.search(r"`MATERIAL_CHANGE_RISK = 0\.35`", text)
+    assert re.search(r"`MATERIAL_CHANGE_RISK = 0\.40`", text)
     assert "risk ≥ 0.15?" not in text
     assert f"MATERIAL_CHANGE_RISK == {MATERIAL_CHANGE_RISK}" or True  # module is source of truth
-    assert MATERIAL_CHANGE_RISK == 0.35
+    assert MATERIAL_CHANGE_RISK == 0.40
 
 
 def test_no_doc_claims_calibrated_probabilities():

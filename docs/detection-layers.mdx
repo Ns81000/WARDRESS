@@ -76,7 +76,7 @@ Wardress scales monitoring frequency by the fused risk score, so real changes ar
 
 ```mermaid
 flowchart LR
-    SCAN[Scan completes] --> Q{risk ≥ 0.35?}
+    SCAN[Scan completes] --> Q{risk ≥ 0.40?}
     Q -->|Material change| T["Tighten → base ÷ 4"]
     Q -->|Clean| R["Relax → current × 1.5"]
     T --> C[Clamp 5 min – 24 h]
@@ -87,7 +87,7 @@ flowchart LR
     class T hot;
 ```
 
-- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.35` — deliberately below the default flag threshold (so real change is watched before it becomes alarming), aligned with the LLM escalation floor, and above the fused risk that pure dynamic-content noise produces under the deployed fusion model (measured on held-out benign scenarios: ~0.22–0.27).
+- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.40` — deliberately below the default flag threshold (so real change is watched before it becomes alarming), aligned with the LLM escalation floor, and above the fused risk that pure dynamic-content noise produces under the deployed fusion model (measured on held-out benign scenarios after the post-emission-fix regeneration: ~0.14–0.37).
 - **Tighten:** a detected change sets the next interval to `base ÷ 4`.
 - **Relax:** each subsequent clean scan multiplies the interval by `1.5`, walking back up to the site's configured base.
 - **Clamp:** every interval is bounded to `[5 minutes, 24 hours]`.

@@ -377,7 +377,7 @@ async def test_identical_visible_text_zero_drift_control(
     assert row is None
     async with db_factory() as db:
         s = await db.get(Scan, scan.id)
-        assert s.risk_score < ESCALATION_LOW  # measured 0.2236
+        assert s.risk_score < ESCALATION_LOW  # measured 0.3000 — Phase-24's uncertainty ceiling
 
 
 async def test_non_latin_rewrite_flags_via_script_flip_while_embeddings_degrade(
@@ -400,15 +400,17 @@ async def test_non_latin_rewrite_flags_via_script_flip_while_embeddings_degrade(
 # --- named-expectation pins for honest residuals + band edges ----------------------
 
 
-async def test_known_domain_lone_script_changed_and_escalation_eligible(
+async def test_known_domain_lone_script_changed_without_second_opinion(
     db_factory, monkeypatch, enqueued, tmp_path
 ):
     """Audit Finding 4.2's row 'One injected <script>, already-known
-    domain': pinned post-fix behavior — sub-threshold ('changed') but
-    inside the escalation band, so the semantic second opinion is
-    eligible. The LLM transport runs FULLY UNMOCKED against an empty AI
-    config: escalate_scan must degrade to 'not configured' and record it
-    in layer 8's persisted evidence without touching the verdict."""
+    domain'. Under the pre-regeneration refit this fused to 0.4174 and
+    rode the escalation band; the post-emission-fix regeneration
+    (Phases 20-23+36 changed layer emissions; the refit learned that
+    known-domain additions collide heavily with benign vendor-script
+    additions) lands it at ~0.30 — BELOW the band. The honest post-
+    regeneration disposition: 'changed', scored, recorded, NO second
+    opinion spent (escalation is never consulted), no alert."""
     known = '<script src="https://cdn.example-site.com/lib.js"></script>'
     tracker = "<script src='https://cdn.example-site.com/tracker.js'></script>"
     base_html = BASELINE_HTML.replace("</body>", f"{known}</body>")
@@ -416,11 +418,51 @@ async def test_known_domain_lone_script_changed_and_escalation_eligible(
     cur = base_html.replace("</body>", f"{tracker}</body>")
     monkeypatch.setattr(scan_tasks, "fetch_page", _fetch_of(cur))
 
-    assert await scan_tasks._run_scan(scan.id) == "changed"  # measured 0.4174
+    async def must_not_run(db, **kwargs):
+        pytest.fail("escalation consulted for a below-band known-domain change")
+
+    monkeypatch.setattr(scan_tasks, "escalate_scan", must_not_run)
+
+    assert await scan_tasks._run_scan(scan.id) == "changed"  # measured 0.3000
+    async with db_factory() as db:
+        s = await db.get(Scan, scan.id)
+        assert s.risk_score < ESCALATION_LOW  # below the band by design now
+        assert s.risk_score < 0.5
+    l8 = await _finding(db_factory, scan.id, "layer8_semantics")
+    assert l8.evidence["escalation"]["status"] == (
+        "not evaluated (outside ambiguous band or not configured)"
+    )
+    assert await _alert(db_factory, scan.id) is None
+    assert enqueued == []
+
+
+async def test_new_form_action_domain_changed_and_escalation_eligible(
+    db_factory, monkeypatch, enqueued, tmp_path
+):
+    """A credential-harvesting form-action swap to a brand-new domain is
+    the canonical ambiguous-but-real case: the new-sensitive-infrastructure
+    rule floor arms (fusion._RULE_FLOORS), the model lands mid-band, and
+    the verdict stays 'changed' below the default flag threshold. The LLM
+    transport runs FULLY UNMOCKED against an empty AI config: the REAL
+    should_escalate gate must consult escalation, and escalate_scan must
+    degrade to 'not configured' and record it in layer 8's persisted
+    evidence without touching the verdict. (Replaces the pre-regeneration
+    vehicle — a known-domain script at 0.4174 — which the regenerated
+    artifacts moved below the band; see the companion test above.)"""
+    _, _, scan = await _seed_ready_site(db_factory, tmp_path)
+    cur = BASELINE_HTML.replace(
+        "</body>", '<form action="https://collect.example.net/submit"></form></body>'
+    )
+    monkeypatch.setattr(scan_tasks, "fetch_page", _fetch_of(cur))
+
+    assert await scan_tasks._run_scan(scan.id) == "changed"  # measured 0.4791
     async with db_factory() as db:
         s = await db.get(Scan, scan.id)
         assert ESCALATION_LOW <= s.risk_score < ESCALATION_HIGH  # escalation-eligible
         assert s.risk_score < 0.5
+    l9 = await _finding(db_factory, scan.id, "layer9_fusion")
+    applied = [f["rule"] for f in l9.evidence["rule_floor"]["applied"]]
+    assert applied == ["new_sensitive_infrastructure"]
     l8 = await _finding(db_factory, scan.id, "layer8_semantics")
     assert l8.evidence["escalation"]["status"] == "not configured"
     assert await _alert(db_factory, scan.id) is None

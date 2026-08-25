@@ -26,8 +26,15 @@ logger = logging.getLogger(__name__)
 
 # The ambiguous middle band of fused risk. Below it the local layers are
 # confident enough in "benign"; above it they are confident enough in
-# "defacement" for the threshold logic to act alone.
-ESCALATION_LOW = 0.35
+# "defacement" for the threshold logic to act alone. The floor is
+# re-derived from the post-regeneration artifacts (Phases 20-23+36
+# changed layer emissions): held-out benign-dynamic content now fuses up
+# to ~0.37, so 0.35 admitted benign rows into the band; 0.40 restores an
+# attack-only band AND puts it exactly at the rule-floor value for
+# new-domain script/iframe/form-action evidence (fusion._RULE_FLOORS) —
+# a floor-armed ambiguous vector is precisely the class that earns a
+# second opinion, as Phase 7 designed.
+ESCALATION_LOW = 0.40
 ESCALATION_HIGH = 0.75
 
 # Only a confident defacement classification may upgrade the verdict.

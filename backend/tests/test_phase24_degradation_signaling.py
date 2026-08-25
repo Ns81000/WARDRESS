@@ -223,8 +223,11 @@ def test_gate_skips_are_proofs_with_full_confidence() -> None:
     fusion = results["layer9_fusion"]
     assert fusion["evidence"].get("unmeasured", []) == []
     assert fusion["evidence"]["confidence_mass"] == pytest.approx(1.0)
-    # Historical quiet-rescan reading under full evidence.
-    assert fusion["score"] == pytest.approx(0.0927, abs=0.003)
+    # Historical quiet-rescan reading under full evidence. Re-pinned after
+    # the post-emission-fix dataset/model regeneration: the refit moved the
+    # intercept from -2.2810 to -6.2470, so the all-zero-evidence vector now
+    # fuses to sigmoid(-6.247) ~= 0.0019 (was sigmoid(-2.281) ~= 0.0927).
+    assert fusion["score"] == pytest.approx(0.0019, abs=0.003)
 
 
 def test_lost_screenshot_distinguishable_from_identical_pixels() -> None:

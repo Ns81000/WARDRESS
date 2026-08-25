@@ -41,12 +41,16 @@ RELAX_FACTOR = 1.5  # each clean scan -> current*1.5 (capped at base)
 # llm_escalation.ESCALATION_LOW): "the local layers want a second opinion"
 # is the same bar as "worth watching more closely". It must sit ABOVE the
 # fused risk that pure dynamic-content noise produces under the deployed
-# fusion model — measured on held-out benign scenarios: rotating ads,
-# timestamps/counters, cache-busting refs and A/B variants all fuse to
-# ~0.22-0.23 (hash flip + near-zero content scores), editorial churn to
-# ~0.27 — so those pages still relax back to base cadence instead of
-# being "adaptive" into permanently tightened scanning.
-MATERIAL_CHANGE_RISK = 0.35
+# fusion model — re-measured on held-out benign scenarios after the
+# post-emission-fix dataset/model regeneration (Phases 20-23+36 changed
+# layer emissions; the regenerated artifacts moved the benign-dynamic
+# distribution up): rotating ads, timestamps/counters and cache-busting
+# refs fuse to ~0.14-0.15, A/B variants to ~0.36, editorial churn to
+# ~0.37 — so those pages still relax back to base cadence instead of
+# being "adaptive" into permanently tightened scanning. (Heavy legitimate
+# restructuring — site redesigns, vendor script additions — legitimately
+# crosses this bar; something big DID happen.)
+MATERIAL_CHANGE_RISK = 0.40
 
 
 def clamp_interval(minutes: int) -> int:

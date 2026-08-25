@@ -84,33 +84,33 @@
   },
   "leakage_evidence": {
    "unique_input_fingerprints": true,
-   "cross_split_exact_feature_duplicates": 257,
+   "cross_split_exact_feature_duplicates": 252,
    "cross_split_exact_feature_duplicate_examples": [
     [
      "cloaking_heavy-0000",
-     "cloaking_heavy-0011"
+     "cloaking_heavy-0001"
     ],
     [
      "cloaking_heavy-0000",
-     "cloaking_heavy-0012"
+     "cloaking_heavy-0002"
     ],
     [
-     "combined_subthreshold-0001",
-     "combined_subthreshold-0004"
+     "cloaking_heavy-0000",
+     "cloaking_heavy-0003"
     ],
     [
-     "combined_subthreshold-0001",
-     "combined_subthreshold-0009"
+     "cloaking_heavy-0000",
+     "cloaking_heavy-0004"
     ],
     [
-     "form_action_swap-0000",
-     "form_action_swap-0001"
+     "cloaking_heavy-0000",
+     "cloaking_heavy-0005"
     ]
    ],
    "nearest_cross_split_linf_distance": 0.0,
    "nearest_cross_split_pair": [
     "cloaking_heavy-0000",
-    "cloaking_heavy-0011"
+    "cloaking_heavy-0001"
    ],
    "languages_by_label": {
     "0": [
@@ -180,7 +180,7 @@
     0.0,
     0.0,
     0.0,
-    0.9897,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -208,7 +208,7 @@
     0.0,
     0.0,
     0.0,
-    0.987,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -236,7 +236,7 @@
     0.0,
     0.0,
     0.0,
-    0.9649,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -264,7 +264,7 @@
     0.0,
     0.0,
     0.0,
-    0.989,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -292,7 +292,7 @@
     0.0,
     0.0,
     0.0,
-    0.9843,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -320,7 +320,7 @@
     0.0,
     0.0,
     0.0,
-    0.9904,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -348,7 +348,7 @@
     0.0,
     0.0,
     0.0,
-    0.9706,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -376,7 +376,7 @@
     0.0,
     0.0,
     0.0,
-    0.9895,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -404,7 +404,7 @@
     0.0,
     0.0,
     0.0,
-    0.9835,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -432,7 +432,7 @@
     0.0,
     0.0,
     0.0,
-    0.9885,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -516,7 +516,7 @@
     0.0,
     0.0,
     0.0,
-    0.9874,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -544,7 +544,7 @@
     0.0,
     0.0,
     0.0,
-    0.0263,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -573,7 +573,7 @@
     0.0,
     0.0,
     0.0,
-    0.0033,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -602,7 +602,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.584,
     0.0
    ],
    "layers_skipped": [
@@ -631,7 +631,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.968,
     0.0
    ],
    "layers_skipped": [
@@ -660,7 +660,7 @@
     0.0,
     0.0,
     0.0,
-    0.5977,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -689,7 +689,7 @@
     0.0,
     0.0,
     0.0,
-    0.29,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -718,7 +718,7 @@
     0.0,
     0.0,
     0.0,
-    0.1282,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -747,7 +747,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.0833,
     0.0
    ],
    "layers_skipped": [
@@ -776,7 +776,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.9432,
     0.0
    ],
    "layers_skipped": [
@@ -805,7 +805,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.5,
     0.0
    ],
    "layers_skipped": [
@@ -834,7 +834,7 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -863,7 +863,7 @@
     0.0,
     0.0,
     0.0,
-    0.2402,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -892,7 +892,7 @@
     0.0,
     0.0,
     0.0,
-    0.2,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -921,7 +921,7 @@
     0.0,
     0.0,
     0.0,
-    0.5144,
+    1.0,
     0.0
    ],
    "layers_skipped": [
@@ -947,7 +947,7 @@
     1.0,
     0.0462,
     0.04,
-    0.0155,
+    0.0297,
     0.0,
     0.0,
     0.0,
@@ -1000,7 +1000,7 @@
     0.0,
     0.0,
     0.0,
-    0.0334,
+    0.0534,
     0.0,
     0.0,
     0.0,
@@ -1084,7 +1084,7 @@
     1.0,
     0.5034,
     0.2702,
-    0.0335,
+    0.0506,
     0.0,
     0.0,
     0.0,
@@ -1115,7 +1115,7 @@
     1.0,
     0.0,
     0.0,
-    0.0
+    0.1103
    ],
    "layers_skipped": [],
    "params": {
@@ -1166,7 +1166,7 @@
     1.0,
     0.5034,
     0.2702,
-    0.0145,
+    0.0236,
     0.0,
     0.0,
     0.0,
@@ -1219,11 +1219,11 @@
     1.0,
     0.0203,
     0.0,
-    0.022,
+    0.0462,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1222
    ],
    "layers_skipped": [],
    "params": {
@@ -1274,7 +1274,7 @@
     1.0,
     0.5034,
     0.2702,
-    0.0279,
+    0.0439,
     0.0,
     0.0,
     0.0,
@@ -1333,7 +1333,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1481
    ],
    "layers_skipped": [],
    "params": {
@@ -1355,7 +1355,7 @@
     0.0,
     0.0,
     0.0,
-    0.0316,
+    0.0518,
     0.0,
     0.0,
     0.0,
@@ -1466,7 +1466,7 @@
     1.0,
     0.0218,
     0.0,
-    0.0,
+    0.0168,
     0.25,
     0.0,
     0.0,
@@ -1773,7 +1773,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6776
    ],
    "layers_skipped": [],
    "params": {
@@ -1799,7 +1799,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.5461
    ],
    "layers_skipped": [],
    "params": {
@@ -1825,7 +1825,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.8009
    ],
    "layers_skipped": [],
    "params": {
@@ -1853,7 +1853,7 @@
     0.7,
     0.0,
     0.0,
-    0.0
+    0.9261
    ],
    "layers_skipped": [],
    "params": {
@@ -1879,7 +1879,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1573
    ],
    "layers_skipped": [],
    "params": {
@@ -1905,7 +1905,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.4888
    ],
    "layers_skipped": [],
    "params": {
@@ -1933,7 +1933,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0285
    ],
    "layers_skipped": [],
    "params": {
@@ -1989,7 +1989,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.3223
    ],
    "layers_skipped": [],
    "params": {
@@ -2017,7 +2017,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.4102
    ],
    "layers_skipped": [],
    "params": {
@@ -2043,7 +2043,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6719
    ],
    "layers_skipped": [],
    "params": {
@@ -2070,7 +2070,7 @@
     0.7,
     0.0,
     0.0,
-    0.0
+    0.9086
    ],
    "layers_skipped": [],
    "params": {
@@ -2097,7 +2097,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0969
    ],
    "layers_skipped": [],
    "params": {
@@ -2123,7 +2123,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6783
    ],
    "layers_skipped": [],
    "params": {
@@ -2151,7 +2151,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6192
    ],
    "layers_skipped": [],
    "params": {
@@ -2206,7 +2206,7 @@
     0.0,
     0.0,
     0.0,
-    0.0118
+    0.4515
    ],
    "layers_skipped": [],
    "params": {
@@ -2234,7 +2234,7 @@
     0.7,
     0.0,
     0.0,
-    0.0
+    0.854
    ],
    "layers_skipped": [],
    "params": {
@@ -2260,7 +2260,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0899
    ],
    "layers_skipped": [],
    "params": {
@@ -2288,7 +2288,7 @@
     0.7,
     0.0,
     0.0,
-    0.0
+    0.2381
    ],
    "layers_skipped": [],
    "params": {
@@ -2308,13 +2308,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4706,
+    1.0,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.5638
    ],
    "layers_skipped": [],
    "params": {
@@ -2332,13 +2332,13 @@
    "split": "val",
    "features": [
     1.0,
-    0.3388,
+    0.9998,
     0.2702,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2633
    ],
    "layers_skipped": [],
    "params": {
@@ -2356,13 +2356,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4,
+    1.0,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.4668
    ],
    "layers_skipped": [],
    "params": {
@@ -2380,13 +2380,13 @@
    "split": "test",
    "features": [
     1.0,
-    0.2494,
+    0.9963,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.4002
    ],
    "layers_skipped": [],
    "params": {
@@ -2404,13 +2404,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.2714,
+    0.9982,
     0.2702,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2056
    ],
    "layers_skipped": [],
    "params": {
@@ -2428,13 +2428,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.2301,
+    0.9926,
     0.2702,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0532
    ],
    "layers_skipped": [],
    "params": {
@@ -2452,13 +2452,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4895,
+    1.0,
     0.3,
     0.0,
     0.7,
     0.0,
     0.0,
-    0.0
+    0.3635
    ],
    "layers_skipped": [],
    "params": {
@@ -2476,13 +2476,13 @@
    "split": "test",
    "features": [
     1.0,
-    0.4421,
+    1.0,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.448
    ],
    "layers_skipped": [],
    "params": {
@@ -2500,13 +2500,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4771,
+    1.0,
     0.32,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6837
    ],
    "layers_skipped": [],
    "params": {
@@ -2524,13 +2524,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.3448,
+    0.9998,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.288
    ],
    "layers_skipped": [],
    "params": {
@@ -2548,13 +2548,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4584,
+    1.0,
     0.34,
     0.0,
     0.7,
     0.0,
     0.0,
-    0.0
+    0.4635
    ],
    "layers_skipped": [],
    "params": {
@@ -2572,13 +2572,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.2429,
+    0.9963,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2328
    ],
    "layers_skipped": [],
    "params": {
@@ -2596,7 +2596,7 @@
    "split": "train",
    "features": [
     1.0,
-    0.144,
+    0.9392,
     0.2702,
     0.0,
     0.0,
@@ -2620,13 +2620,13 @@
    "split": "val",
    "features": [
     1.0,
-    0.3259,
+    0.9995,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2636
    ],
    "layers_skipped": [],
    "params": {
@@ -2644,7 +2644,7 @@
    "split": "train",
    "features": [
     1.0,
-    0.2118,
+    0.985,
     0.4674,
     0.0,
     0.0,
@@ -2668,13 +2668,13 @@
    "split": "train",
    "features": [
     1.0,
-    0.4615,
+    1.0,
     0.4674,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.3685
    ],
    "layers_skipped": [],
    "params": {
@@ -3017,8 +3017,8 @@
     0.7534,
     0.2702,
     0.0,
-    0.55,
-    0.2,
+    1.0,
+    0.1,
     0.0,
     0.0
    ],
@@ -3048,9 +3048,9 @@
     0.7033,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
-    0.0297
+    0.919
    ],
    "layers_skipped": [],
    "params": {
@@ -3073,23 +3073,23 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
-    0.32,
+    0.7534,
+    0.2702,
     0.0,
     1.0,
-    0.2,
+    0.1,
     0.0,
-    0.2134
+    0.3023
    ],
    "layers_skipped": [],
    "params": {
     "headline": "PWNED   BY — Soldex Section",
-    "padding_hidden_divs": 16,
+    "padding_hidden_divs": 2,
     "extras": [
      "csp_tightened"
     ]
    },
-   "input_sha256": "3b10094980346af4f4d394c674a68c9d0999ee6f8d0a416d1418203bd94bebf8"
+   "input_sha256": "d8e8461da1df35296a5b4a546eda458c7aec26a0c1e96cd83ab14be37d46787c"
   },
   {
    "id": "laundering_padded-0003",
@@ -3103,10 +3103,10 @@
     1.0,
     0.4,
     0.0,
-    0.7,
-    0.2,
+    1.0,
+    0.1,
     0.0,
-    0.0
+    0.9231
    ],
    "layers_skipped": [],
    "params": {
@@ -3133,9 +3133,9 @@
     0.4,
     0.0,
     1.0,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.9169
    ],
    "layers_skipped": [],
    "params": {
@@ -3163,9 +3163,9 @@
     0.8794,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.4652
    ],
    "layers_skipped": [],
    "params": {
@@ -3223,7 +3223,7 @@
     1.0,
     0.0,
     0.0,
-    0.0
+    0.7481
    ],
    "layers_skipped": [],
    "params": {
@@ -3246,7 +3246,7 @@
     0.8794,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
     0.0
    ],
@@ -3276,9 +3276,9 @@
     0.8794,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.2306
    ],
    "layers_skipped": [],
    "params": {
@@ -3306,7 +3306,7 @@
     0.7033,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
     0.0
    ],
@@ -3331,21 +3331,23 @@
    "split": "train",
    "features": [
     1.0,
-    0.7534,
+    0.9392,
     0.2702,
     0.0,
     1.0,
+    0.1,
     0.0,
-    0.0,
-    0.3023
+    0.3812
    ],
    "layers_skipped": [],
    "params": {
     "headline": "PWNED  BY — Velcore",
-    "padding_hidden_divs": 2,
-    "extras": []
+    "padding_hidden_divs": 4,
+    "extras": [
+     "csp_tightened"
+    ]
    },
-   "input_sha256": "bc4868eb37a3f64a7068958d75401b5d4b501607061bed16c262f6d05c39b383"
+   "input_sha256": "a10cda57f41ccb50a297d53c497a2ef8da3331de97e369c2b0344eef826da800"
   },
   {
    "id": "laundering_padded-0012",
@@ -3359,8 +3361,8 @@
     0.9392,
     0.2702,
     0.0,
-    0.0,
-    0.2,
+    1.0,
+    0.1,
     0.0,
     0.0
    ],
@@ -3386,22 +3388,22 @@
    "features": [
     1.0,
     1.0,
-    0.4,
+    0.32,
     0.0,
     1.0,
-    0.2,
+    0.1,
     0.0,
-    0.3023
+    0.5832
    ],
    "layers_skipped": [],
    "params": {
     "headline": "DEFACED BY — Brelun",
-    "padding_hidden_divs": 60,
+    "padding_hidden_divs": 16,
     "extras": [
      "csp_tightened"
     ]
    },
-   "input_sha256": "22613404934b5b35b79a2b226d22afdd8add54d2511e34542f7adbed1baf19ce"
+   "input_sha256": "c9df94699d3cfd7fd3246a04e10c508ef8c16125430982f8f4c2e8c57c47e256"
   },
   {
    "id": "laundering_padded-0014",
@@ -3412,21 +3414,21 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
-    0.4,
+    0.7534,
+    0.2702,
     0.0,
     1.0,
     0.0,
     0.0,
-    0.2134
+    0.3023
    ],
    "layers_skipped": [],
    "params": {
     "headline": "DEFACED   BY — Tarline Team",
-    "padding_hidden_divs": 32,
+    "padding_hidden_divs": 2,
     "extras": []
    },
-   "input_sha256": "58cf65e0d242731601f6e684c59afca3722ebe1828edbe06064f31ba8f4f7ca3"
+   "input_sha256": "5b76bbdcaa1d91964525966d89e2393ad251923bf4af4d46af06f546cc15b277"
   },
   {
    "id": "laundering_padded-0015",
@@ -3443,7 +3445,7 @@
     1.0,
     0.0,
     0.0,
-    0.0758
+    0.0575
    ],
    "layers_skipped": [],
    "params": {
@@ -3466,9 +3468,9 @@
     0.2702,
     0.0,
     1.0,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.0044
    ],
    "layers_skipped": [],
    "params": {
@@ -3495,7 +3497,7 @@
     1.0,
     0.0,
     0.0,
-    0.3812
+    0.5224
    ],
    "layers_skipped": [],
    "params": {
@@ -3503,7 +3505,7 @@
     "padding_hidden_divs": 16,
     "extras": []
    },
-   "input_sha256": "1c1058fb1a10bd680de26405944ae6684aa175df058b5406ab19bd43f272c161"
+   "input_sha256": "fe627e1a2e17e87fd23608c9b14313e9021ee295c7692bdcc01e20b6001e8275"
   },
   {
    "id": "laundering_padded-0018",
@@ -3518,7 +3520,7 @@
     0.7033,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
     0.0
    ],
@@ -3543,23 +3545,21 @@
    "split": "train",
    "features": [
     1.0,
-    0.9392,
+    0.7534,
     0.2702,
     0.0,
     1.0,
-    0.2,
     0.0,
-    0.3812
+    0.0,
+    0.5132
    ],
    "layers_skipped": [],
    "params": {
     "headline": "PWNED   BY — Kelpeak Crew",
-    "padding_hidden_divs": 4,
-    "extras": [
-     "csp_tightened"
-    ]
+    "padding_hidden_divs": 2,
+    "extras": []
    },
-   "input_sha256": "49ce3d7a70d6c28c247442e61335148f023fa55e639daac6333e69ea0089529a"
+   "input_sha256": "87c03cdadf69b97c812d66da77daeb40ff9989ed8867ea424846fab81bb2ddc3"
   },
   {
    "id": "laundering_padded-0020",
@@ -3574,7 +3574,7 @@
     0.7033,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
     0.0
    ],
@@ -3605,7 +3605,7 @@
     1.0,
     0.0,
     0.0,
-    0.0
+    0.3135
    ],
    "layers_skipped": [],
    "params": {
@@ -3655,9 +3655,9 @@
     0.8794,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.3069
    ],
    "layers_skipped": [],
    "params": {
@@ -3685,9 +3685,9 @@
     0.8794,
     0.0,
     0.7,
-    0.2,
+    0.1,
     0.0,
-    0.0
+    0.922
    ],
    "layers_skipped": [],
    "params": {
@@ -3714,10 +3714,10 @@
     1.0,
     0.32,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
-    0.0
+    0.4575
    ],
    "layers_skipped": [],
    "params": {
@@ -3741,18 +3741,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6186,
+    0.6587,
     1.0,
     0.0,
-    0.6644,
-    0.35
+    0.9583,
+    0.794
    ],
    "layers_skipped": [],
    "params": {
     "headline": "CYBERCREW VP QZ OWNED — Nyxline Cell",
     "screamer": true
    },
-   "input_sha256": "625999e9d6264c5a3fc9628244ca364ad92616dc08cea32b7851042066cdd1cf"
+   "input_sha256": "4a7c3ad5ecc10aa7084fec6dc2268bfb9e6a89f0102a80c21c13f5ac2bee0168"
   },
   {
    "id": "multi_vector_screamer-0001",
@@ -3763,20 +3763,20 @@
    "split": "val",
    "features": [
     1.0,
-    1.0,
+    0.9991,
     0.8794,
-    0.6181,
+    0.6555,
     1.0,
     0.0,
-    0.5573,
-    0.6171
+    0.9648,
+    0.6802
    ],
    "layers_skipped": [],
    "params": {
     "headline": "OWNED  BY — Orlun Cell",
     "screamer": true
    },
-   "input_sha256": "bb34b278c5141294afab8c940f7a60bd07b71b46787c6873fd4fc39def6e8602"
+   "input_sha256": "f98904da9cd5a16236c037f146bff06668f63ec93581976e8c46d6c9b61d86f8"
   },
   {
    "id": "multi_vector_screamer-0002",
@@ -3787,20 +3787,20 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
+    0.9999,
     0.8794,
-    0.6334,
+    0.6717,
     1.0,
     0.0,
-    0.5833,
-    0.35
+    0.9757,
+    0.4156
    ],
    "layers_skipped": [],
    "params": {
     "headline": "PWNED   BY — Quovant",
     "screamer": true
    },
-   "input_sha256": "d6853ddbcf94984a66925b7004fa6e408eed2b41694b57c33ccc9544bf22a2b3"
+   "input_sha256": "95486254fcf8c387bedace713ca125c58e8c569303b76aaa62f4329a32580b4b"
   },
   {
    "id": "multi_vector_screamer-0003",
@@ -3813,18 +3813,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6068,
+    0.6465,
     1.0,
     0.0,
-    0.3784,
-    0.4512
+    0.6083,
+    0.8388
    ],
    "layers_skipped": [],
    "params": {
     "headline": "OWNED   BY — Zenpeak Army",
     "screamer": true
    },
-   "input_sha256": "f3a92886da2968bfa0f19053dd509b6c86d27df2cc41e4afcdc875c5514e0a67"
+   "input_sha256": "50cfff7f2c0779b61e819671c2081af6e6c316ab5f24b4eff78389ac4b23e115"
   },
   {
    "id": "multi_vector_screamer-0004",
@@ -3835,20 +3835,20 @@
    "split": "train",
    "features": [
     1.0,
-    0.9991,
+    0.9999,
     0.8794,
-    0.5808,
+    0.6201,
     1.0,
     0.0,
-    0.7462,
-    0.35
+    1.0,
+    0.4538
    ],
    "layers_skipped": [],
    "params": {
     "headline": "OWNED  BY — Brevia",
     "screamer": true
    },
-   "input_sha256": "7de22d50625de238bf74a93a112aaf46057bd23c90a7029108e8be50fc13cdb5"
+   "input_sha256": "386875b0b07c736e6b743b751bf83fcadbd848622d2e102fe44fabe53d434be5"
   },
   {
    "id": "multi_vector_screamer-0005",
@@ -3861,18 +3861,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6132,
+    0.6518,
     1.0,
     0.0,
-    0.6591,
-    0.4512
+    1.0,
+    0.5683
    ],
    "layers_skipped": [],
    "params": {
     "headline": "OWNED   BY — Dratrix Crew",
     "screamer": true
    },
-   "input_sha256": "175511328a09712a3eca2917c69503c535d1b414d55be82fca20a456dd2f39a7"
+   "input_sha256": "5c7879c38ce5c7e69cf0faa3b607fb113773d9e4c9b82e96c57a604e0f82c8e2"
   },
   {
    "id": "multi_vector_screamer-0006",
@@ -3883,20 +3883,20 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
+    0.9999,
     0.8794,
-    0.6303,
+    0.6705,
     1.0,
     0.0,
-    0.6207,
-    0.4512
+    0.8665,
+    0.9017
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACKED   BY — Tarpeak Cell",
     "screamer": true
    },
-   "input_sha256": "5c38cdfb2250a8676cf7d6ba2a676ff1a3dc41c3cc03848ffffd23f26f6caa6c"
+   "input_sha256": "74fae18ccb6aa18d2df07c326aa811cc317bbdf4dce440f674929ebff4e1c271"
   },
   {
    "id": "multi_vector_screamer-0007",
@@ -3907,20 +3907,20 @@
    "split": "test",
    "features": [
     1.0,
-    0.9999,
+    1.0,
     0.8794,
-    0.6124,
+    0.6517,
     1.0,
     0.0,
-    0.5,
-    0.35
+    0.2765,
+    0.8242
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACK3D — Halvia Crew",
     "screamer": true
    },
-   "input_sha256": "c30ed0bd9ebacb64f08b6819815149aea18fc65c1e7699b873e8623435e4c065"
+   "input_sha256": "1181c0aea0a2ca986311ef64d12bb6a08e78ef21ec38dd7f67822551a9d17b68"
   },
   {
    "id": "multi_vector_screamer-0008",
@@ -3931,20 +3931,20 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
+    0.9998,
     0.8794,
-    0.5851,
+    0.6234,
     1.0,
     0.0,
-    0.7076,
-    0.5683
+    0.9485,
+    0.6171
    ],
    "layers_skipped": [],
    "params": {
     "headline": "DEFACED  BY — Targate Crew",
     "screamer": true
    },
-   "input_sha256": "e45f2b98607b948ed4faba671b1f210820562f66fc878d07a2ad264c0bee33c6"
+   "input_sha256": "59066b48c4acf4f9673eeb7337865f05c33b0629153b6ccef5e366ad9543ff42"
   },
   {
    "id": "multi_vector_screamer-0009",
@@ -3957,18 +3957,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6237,
+    0.663,
     1.0,
     0.0,
-    0.6329,
-    0.5683
+    0.9103,
+    0.8021
    ],
    "layers_skipped": [],
    "params": {
     "headline": "OWNED  BY — Halvia Section",
     "screamer": true
    },
-   "input_sha256": "3d96215982eff716fee39ed14951c096bc712315653ca8386304345b30506574"
+   "input_sha256": "54dc8a1a422c81f2861cf58c9286b0c53d3595c86c81e87b4640ac6fcf1d5658"
   },
   {
    "id": "multi_vector_screamer-0010",
@@ -3981,18 +3981,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6334,
+    0.672,
     1.0,
     0.0,
-    0.6516,
-    0.5132
+    0.9879,
+    0.8206
    ],
    "layers_skipped": [],
    "params": {
     "headline": "H4CK3D — Keldex Unit",
     "screamer": true
    },
-   "input_sha256": "25df200771fa5280dbbb729e234befbf7964723204c535f19b665b0506281d78"
+   "input_sha256": "c75f0698853a48fc08333a04181498847e37a9a4e1e33e3b07e2b8537f073944"
   },
   {
    "id": "multi_vector_screamer-0011",
@@ -4005,18 +4005,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6138,
+    0.6523,
     1.0,
     0.0,
-    0.3253,
-    0.5683
+    0.5809,
+    0.8703
    ],
    "layers_skipped": [],
    "params": {
     "headline": "WAS   HERE XZ XX CREW — Kellun",
     "screamer": true
    },
-   "input_sha256": "158dd41aa00fd7d8f0438c6a138463f76e8e66ee2561ba15e65943a51d9a8446"
+   "input_sha256": "addbca25167c51669bee50dfae29105eef41c503c7c977138f11fafaf8dee4e7"
   },
   {
    "id": "multi_vector_screamer-0012",
@@ -4029,18 +4029,18 @@
     1.0,
     1.0,
     0.8794,
-    0.631,
+    0.6693,
     1.0,
     0.0,
-    0.673,
-    0.6171
+    0.9844,
+    0.7769
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACKED  BY — Nyxthos",
     "screamer": true
    },
-   "input_sha256": "eca8390a98f9eb5ac176d97d6d6010038781abeedc119d4b498f5fc2fed11c10"
+   "input_sha256": "9deba80b39c0f78c0da21b10b2288f90fb55f4642a23c919b06bb6c5aeb00fd8"
   },
   {
    "id": "multi_vector_screamer-0013",
@@ -4053,18 +4053,18 @@
     1.0,
     1.0,
     0.8794,
-    0.6435,
+    0.6811,
     1.0,
     0.0,
-    0.5857,
-    0.5683
+    0.8496,
+    0.9045
    ],
    "layers_skipped": [],
    "params": {
     "headline": "H4CK3D — Brepeak",
     "screamer": true
    },
-   "input_sha256": "bc24a9dc9784099c136057a3d765d6f3104cfdc2bd0511840c10e3719713c54d"
+   "input_sha256": "e3bddba5007274decd4afef241385dad1be393c26a0f1cecea8dc1015818ce90"
   },
   {
    "id": "multi_vector_screamer-0014",
@@ -4075,20 +4075,20 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
+    0.9998,
     0.8794,
-    0.6144,
+    0.6532,
     1.0,
     0.0,
-    0.661,
-    0.35
+    0.9513,
+    0.4013
    ],
    "layers_skipped": [],
    "params": {
     "headline": "WAS HERE KQDP  CREW — Kelgate Cell",
     "screamer": true
    },
-   "input_sha256": "c9c756a8656301ea04ec2669d3d0e9633d2a4e27e5f8ddf566e9028a344bec35"
+   "input_sha256": "20c601bb901508dce9dee0ceaf6232c9d59f6de45a8d1cc2da05ed08b1a7f215"
   },
   {
    "id": "multi_vector_screamer-0015",
@@ -4099,20 +4099,20 @@
    "split": "train",
    "features": [
     1.0,
-    0.9998,
+    1.0,
     0.8794,
-    0.6133,
+    0.6521,
     1.0,
     0.0,
-    0.4048,
-    0.5683
+    0.5714,
+    0.9117
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACK3D — Tardex",
     "screamer": true
    },
-   "input_sha256": "7bfca6d8103f606f7f081fb47833260aae42620f3ec32c92973de0b97dda78c4"
+   "input_sha256": "21ab0c231424631d9b0c9666c19a2b3710dfa2e51353377d81b95dfb2ead6fe2"
   },
   {
    "id": "multi_vector_screamer-0016",
@@ -4125,18 +4125,18 @@
     1.0,
     0.9995,
     0.8794,
-    0.5988,
+    0.6389,
     1.0,
     0.0,
-    0.6667,
-    0.3812
+    0.9548,
+    0.5132
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACKED BY — Velmark Cell",
     "screamer": true
    },
-   "input_sha256": "41e1543de0acbc95df02155152dda6548d6bd52b89f7dfdbb7db38bcf84c231e"
+   "input_sha256": "b391e481e15dd93a515dee83740bafc9b73b891f90a2c9e753f1c64d2c203bca"
   },
   {
    "id": "multi_vector_screamer-0017",
@@ -4147,12 +4147,12 @@
    "split": "train",
    "features": [
     1.0,
-    1.0,
+    0.9998,
     0.8794,
-    0.6289,
+    0.6664,
     1.0,
     0.0,
-    0.6898,
+    1.0,
     0.5683
    ],
    "layers_skipped": [],
@@ -4160,7 +4160,7 @@
     "headline": "H4CK3D — Velwave Cell",
     "screamer": true
    },
-   "input_sha256": "037286c78ba935ecb2a323391706a4b188a983f2b784a7f08e575abd3192ecb7"
+   "input_sha256": "0e7e466f2cbebf7571b8bd16bb49814d2c52ef7aabf2c7c7a611ac6f7869f516"
   },
   {
    "id": "nonnative_full_rewrite-0000",
@@ -4174,10 +4174,10 @@
     0.4,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.1882
+    0.9955
    ],
    "layers_skipped": [],
    "params": {
@@ -4200,13 +4200,13 @@
     0.0,
     0.0,
     0.0,
-    0.9991
+    0.9995
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "027f3c924daaef6c772251bd9ee54bb1bc7fab401cdb7dad714f548f36d427ee"
+   "input_sha256": "68457219d3f1400c9c0dfd08434cd0b895f15489d73a09ea946c6d2b3c907915"
   },
   {
    "id": "nonnative_full_rewrite-0002",
@@ -4223,7 +4223,7 @@
     0.7,
     0.0,
     0.0,
-    0.6347
+    0.9867
    ],
    "layers_skipped": [],
    "params": {
@@ -4243,10 +4243,10 @@
     0.3097,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.4079
+    0.9901
    ],
    "layers_skipped": [],
    "params": {
@@ -4266,10 +4266,10 @@
     0.381,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.299
+    0.9608
    ],
    "layers_skipped": [],
    "params": {
@@ -4292,13 +4292,13 @@
     0.0,
     0.0,
     0.0,
-    0.9992
+    0.9996
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "bb08a65f9aab6814bec0317efbd67d477baf5458821a00eb252ce114ad66d0f4"
+   "input_sha256": "32deb8f67c5e7212ff2c40f92599fa19956f0c82cc1fc3e452ed1e62d3223e17"
   },
   {
    "id": "nonnative_full_rewrite-0006",
@@ -4315,7 +4315,7 @@
     0.7,
     0.0,
     0.0,
-    0.4901
+    0.9608
    ],
    "layers_skipped": [],
    "params": {
@@ -4335,10 +4335,10 @@
     0.36,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.3299
+    0.9809
    ],
    "layers_skipped": [],
    "params": {
@@ -4358,10 +4358,10 @@
     0.5772,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.4793
+    0.919
    ],
    "layers_skipped": [],
    "params": {
@@ -4381,10 +4381,10 @@
     0.5053,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.078
+    0.5965
    ],
    "layers_skipped": [],
    "params": {
@@ -4407,7 +4407,7 @@
     0.7,
     0.0,
     0.0,
-    0.5708
+    0.9974
    ],
    "layers_skipped": [],
    "params": {
@@ -4427,10 +4427,10 @@
     0.4,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.2542
+    0.9022
    ],
    "layers_skipped": [],
    "params": {
@@ -4450,10 +4450,10 @@
     0.3368,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.3477
+    0.9995
    ],
    "layers_skipped": [],
    "params": {
@@ -4473,10 +4473,10 @@
     0.3937,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0777
+    0.9286
    ],
    "layers_skipped": [],
    "params": {
@@ -4499,13 +4499,13 @@
     0.7,
     0.0,
     0.0,
-    0.9927
+    0.9983
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "8f91374cf7c90ed0ba572be80ca115e953b08e3af873bfad27548ad2b6bc8a5b"
+   "input_sha256": "38cf37750b435236a787eed073ea6062450a3e6b0ae1116469317305130da676"
   },
   {
    "id": "nonnative_full_rewrite-0015",
@@ -4522,7 +4522,7 @@
     0.7,
     0.0,
     0.0,
-    0.6549
+    0.9712
    ],
    "layers_skipped": [],
    "params": {
@@ -4545,13 +4545,13 @@
     0.0,
     0.0,
     0.0,
-    0.7631
+    0.8775
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "1152f1cc7bd5e21d5d7c70b154eef6b7d30c8b8643f9f11950dadc6881ca6384"
+   "input_sha256": "3f24a190831eb9799f0130318cd135cafb98828c3d76d91b33bbee598cbb6502"
   },
   {
    "id": "nonnative_partial_inject-0001",
@@ -4568,13 +4568,13 @@
     0.0,
     0.0,
     0.0,
-    0.6171
+    0.9146
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "d10ce958e10207eae3142d3d82e99ca224ee83ee7f2cc60ce308a7b43424d818"
+   "input_sha256": "2ceec3536e57502a35e1ae01ea79f6bf99fb49ec088e5625d1d7b866c86dbbb2"
   },
   {
    "id": "nonnative_partial_inject-0002",
@@ -4588,10 +4588,10 @@
     0.0692,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0099
+    0.7329
    ],
    "layers_skipped": [],
    "params": {
@@ -4614,13 +4614,13 @@
     0.0,
     0.0,
     0.0,
-    0.5683
+    0.9531
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "9dcd626b7deba32761d25e055779347450353dcdf385011e2e72f7f4bcad0bbd"
+   "input_sha256": "fb882e2763c26c0deeab26deae1c155d7ad975d3f6913008ea4d1df486fa9046"
   },
   {
    "id": "nonnative_partial_inject-0004",
@@ -4637,13 +4637,13 @@
     0.0,
     0.0,
     0.0,
-    0.7899
+    0.5683
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "37ef59a50c977009469c83b1251f71710eea6e196727920dc33c9592b923e013"
+   "input_sha256": "a472faa1e7df77aaaf1b6d7df20c910e9f4d65740d3ce32435c97fcc0d4e035e"
   },
   {
    "id": "nonnative_partial_inject-0005",
@@ -4657,10 +4657,10 @@
     0.061,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.6604
    ],
    "layers_skipped": [],
    "params": {
@@ -4683,7 +4683,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0344
    ],
    "layers_skipped": [],
    "params": {
@@ -4703,10 +4703,10 @@
     0.0571,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.6604
    ],
    "layers_skipped": [],
    "params": {
@@ -4749,10 +4749,10 @@
     0.0692,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.6604
    ],
    "layers_skipped": [],
    "params": {
@@ -4772,10 +4772,10 @@
     0.0468,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.7329
    ],
    "layers_skipped": [],
    "params": {
@@ -4821,13 +4821,13 @@
     0.0,
     0.0,
     0.0,
-    0.6604
+    0.9367
    ],
    "layers_skipped": [],
    "params": {
     "target_script": "en"
    },
-   "input_sha256": "18aa5e9fdd372d252d93cba84ea862b2ef5b50a9af20e8ef20f4866d4203c9b4"
+   "input_sha256": "e16fa48875fc9140a07f44a2cf943955de43a1222facb77521390c9714d9226c"
   },
   {
    "id": "nonnative_partial_inject-0013",
@@ -4841,10 +4841,10 @@
     0.0621,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.6604
    ],
    "layers_skipped": [],
    "params": {
@@ -4864,10 +4864,10 @@
     0.0529,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.9608
    ],
    "layers_skipped": [],
    "params": {
@@ -4887,10 +4887,10 @@
     0.06,
     0.0,
     0.0,
+    0.7,
     0.0,
     0.0,
-    0.0,
-    0.0
+    0.9608
    ],
    "layers_skipped": [],
    "params": {
@@ -5028,7 +5028,7 @@
     0.6,
     0.0,
     0.0,
-    0.0
+    0.0751
    ],
    "layers_skipped": [],
    "params": {
@@ -5634,7 +5634,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2224
    ],
    "layers_skipped": [],
    "params": {
@@ -5657,7 +5657,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.6642
    ],
    "layers_skipped": [],
    "params": {
@@ -5680,7 +5680,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.9046
    ],
    "layers_skipped": [],
    "params": {
@@ -5703,7 +5703,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1143
    ],
    "layers_skipped": [],
    "params": {
@@ -5726,7 +5726,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2166
    ],
    "layers_skipped": [],
    "params": {
@@ -5749,7 +5749,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.3214
    ],
    "layers_skipped": [],
    "params": {
@@ -5772,7 +5772,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.8883
    ],
    "layers_skipped": [],
    "params": {
@@ -5795,7 +5795,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.3513
    ],
    "layers_skipped": [],
    "params": {
@@ -5818,7 +5818,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2643
    ],
    "layers_skipped": [],
    "params": {
@@ -5841,7 +5841,7 @@
     0.0,
     0.0,
     0.0,
-    0.3306
+    0.331
    ],
    "layers_skipped": [],
    "params": {},
@@ -5862,7 +5862,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2544
    ],
    "layers_skipped": [],
    "params": {},
@@ -5904,7 +5904,7 @@
     0.0,
     0.0,
     0.0,
-    0.4342
+    0.4191
    ],
    "layers_skipped": [],
    "params": {},
@@ -5925,7 +5925,7 @@
     0.0,
     0.0,
     0.0,
-    0.3127
+    0.2049
    ],
    "layers_skipped": [],
    "params": {},
@@ -5946,7 +5946,7 @@
     0.0,
     0.0,
     0.0,
-    0.0551
+    0.3169
    ],
    "layers_skipped": [],
    "params": {},
@@ -5967,7 +5967,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1538
    ],
    "layers_skipped": [],
    "params": {},
@@ -5988,7 +5988,7 @@
     0.0,
     0.0,
     0.0,
-    0.4156
+    0.6456
    ],
    "layers_skipped": [],
    "params": {},
@@ -6009,7 +6009,7 @@
     0.0,
     0.0,
     0.0,
-    0.3495
+    0.315
    ],
    "layers_skipped": [],
    "params": {},
@@ -6030,7 +6030,7 @@
     0.0,
     0.0,
     0.0,
-    0.0862
+    0.3471
    ],
    "layers_skipped": [],
    "params": {},
@@ -6051,7 +6051,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1486
    ],
    "layers_skipped": [],
    "params": {},
@@ -6072,7 +6072,7 @@
     0.0,
     0.0,
     0.0,
-    0.1907
+    0.6649
    ],
    "layers_skipped": [],
    "params": {},
@@ -6093,7 +6093,7 @@
     0.0,
     0.0,
     0.0,
-    0.3353
+    0.7493
    ],
    "layers_skipped": [],
    "params": {},
@@ -6114,7 +6114,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0983
    ],
    "layers_skipped": [],
    "params": {},
@@ -6132,10 +6132,10 @@
     0.0621,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
-    0.0
+    0.0758
    ],
    "layers_skipped": [],
    "params": {
@@ -6158,7 +6158,7 @@
     0.0643,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6210,10 +6210,10 @@
     0.0632,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
-    0.0232
+    0.0
    ],
    "layers_skipped": [],
    "params": {
@@ -6236,7 +6236,7 @@
     0.0735,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6262,7 +6262,7 @@
     0.0414,
     0.0,
     0.0,
-    0.0,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6287,10 +6287,10 @@
     0.061,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
-    0.0266
+    0.0
    ],
    "layers_skipped": [],
    "params": {
@@ -6313,10 +6313,10 @@
     0.0667,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
-    0.0666
+    0.01
    ],
    "layers_skipped": [],
    "params": {
@@ -6339,7 +6339,7 @@
     0.0545,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6365,7 +6365,7 @@
     0.0562,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6394,7 +6394,7 @@
     1.0,
     0.0,
     0.0,
-    0.0517
+    0.0
    ],
    "layers_skipped": [],
    "params": {
@@ -6420,7 +6420,7 @@
     1.0,
     0.0,
     0.0,
-    0.0589
+    0.0001
    ],
    "layers_skipped": [],
    "params": {
@@ -6443,7 +6443,7 @@
     0.032,
     0.0,
     0.0,
-    0.0,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6519,7 +6519,7 @@
     0.0393,
     0.0,
     0.0,
-    0.0,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6697,7 +6697,7 @@
     0.0393,
     0.0,
     0.0,
-    0.0,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6722,7 +6722,7 @@
     0.059,
     0.0,
     0.0,
-    0.55,
+    1.0,
     0.0,
     0.0,
     0.0
@@ -6751,7 +6751,7 @@
     0.25,
     0.0,
     0.0,
-    0.0
+    0.0887
    ],
    "layers_skipped": [],
    "params": {
@@ -6847,7 +6847,7 @@
     0.55,
     0.0,
     0.0,
-    0.0
+    0.0136
    ],
    "layers_skipped": [],
    "params": {
@@ -7085,13 +7085,13 @@
     1.0,
     0.0,
     0.0,
-    0.2134
+    0.343
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACK3D — Haldex"
    },
-   "input_sha256": "da82d7ad183edfc263371b2ba66b9aa96f3ef0e2324b06174bd0a414b57d7749"
+   "input_sha256": "d123befc5bb83b3ec1682eeba40a603b5e2c480b75ef90d4763cdd36b7768f74"
   },
   {
    "id": "sig_strong_banner-0003",
@@ -7108,13 +7108,13 @@
     1.0,
     0.0,
     0.0,
-    0.3023
+    0.4173
    ],
    "layers_skipped": [],
    "params": {
     "headline": "DARK ARMY  OWNED — Halvant"
    },
-   "input_sha256": "7e5225461985fc6640e205f4cfe985ad278a7b38370b76f6628ea57b56dfc728"
+   "input_sha256": "1f18f81c601f515c7653f458b5434cfad38ac372a956f004fb303cdaee105c1b"
   },
   {
    "id": "sig_strong_banner-0004",
@@ -7131,7 +7131,7 @@
     1.0,
     0.0,
     0.0,
-    0.1646
+    0.5682
    ],
    "layers_skipped": [],
    "params": {
@@ -7154,7 +7154,7 @@
     1.0,
     0.0,
     0.0,
-    0.0824
+    0.34
    ],
    "layers_skipped": [],
    "params": {
@@ -7200,13 +7200,13 @@
     1.0,
     0.0,
     0.0,
-    0.4512
+    0.2134
    ],
    "layers_skipped": [],
    "params": {
     "headline": "WAS HERE XJPHQ TEAM — Tarpeak"
    },
-   "input_sha256": "0bcb25c6a11d3f1c729413930008728c7e31b2b2f92b0cbd856a534867726e7c"
+   "input_sha256": "293975926d728daba76e6c644f3f6635fbed33b44af36e6ebf4e810ddc8a0aa5"
   },
   {
    "id": "sig_strong_banner-0008",
@@ -7246,7 +7246,7 @@
     1.0,
     0.0,
     0.0,
-    0.1048
+    0.384
    ],
    "layers_skipped": [],
    "params": {
@@ -7269,13 +7269,13 @@
     1.0,
     0.0,
     0.0,
-    0.3023
+    0.3812
    ],
    "layers_skipped": [],
    "params": {
     "headline": "PWNED  BY — Velmark"
    },
-   "input_sha256": "8fb29a933fe1e46d9d908065484c9582f8d03cf2b49a85403f9ba53f707e52e3"
+   "input_sha256": "65edfb4a31ab8f8b3d42e1d8cec5c6e8b30c2fb7f2b8f7dba55fa4c4a237e788"
   },
   {
    "id": "sig_strong_banner-0011",
@@ -7338,7 +7338,7 @@
     1.0,
     0.0,
     0.0,
-    0.0106
+    0.0
    ],
    "layers_skipped": [],
    "params": {
@@ -7384,13 +7384,13 @@
     1.0,
     0.0,
     0.0,
-    0.2134
+    0.3023
    ],
    "layers_skipped": [],
    "params": {
     "headline": "HACKED  BY — Orpeak Crew"
    },
-   "input_sha256": "bf3fbe21a5e7284cce343f3661efdfbe1292b2202745b162269d1cbd1549035b"
+   "input_sha256": "b7db487ea5456101c810e3c97c8a2e9314e3b33d6965fe23b2bd05db3b9f0ed3"
   },
   {
    "id": "visual_banner_deface-0000",
@@ -7403,7 +7403,7 @@
     0.0,
     0.0,
     0.0,
-    0.6414,
+    0.6793,
     0.0,
     0.0,
     0.0,
@@ -7431,7 +7431,7 @@
     0.0,
     0.0,
     0.0,
-    0.6197,
+    0.6602,
     0.0,
     0.0,
     0.0,
@@ -7459,7 +7459,7 @@
     0.0,
     0.0,
     0.0,
-    0.6224,
+    0.6615,
     0.0,
     0.0,
     0.0,
@@ -7487,7 +7487,7 @@
     1.0,
     0.0,
     0.0,
-    0.6367,
+    0.6743,
     0.0,
     0.0,
     0.0,
@@ -7510,7 +7510,7 @@
     1.0,
     0.0,
     0.0,
-    0.6279,
+    0.666,
     0.0,
     0.0,
     0.0,
@@ -7533,7 +7533,7 @@
     1.0,
     0.0,
     0.0,
-    0.6221,
+    0.6602,
     0.0,
     0.0,
     0.0,
@@ -7556,7 +7556,7 @@
     0.0,
     0.0,
     0.0,
-    0.6212,
+    0.6612,
     0.0,
     0.0,
     0.0,
@@ -7584,7 +7584,7 @@
     1.0,
     0.0,
     0.0,
-    0.631,
+    0.6699,
     0.0,
     0.0,
     0.0,
@@ -7607,7 +7607,7 @@
     0.0,
     0.0,
     0.0,
-    0.6105,
+    0.649,
     0.0,
     0.0,
     0.0,
@@ -7635,7 +7635,7 @@
     1.0,
     0.0,
     0.0,
-    0.6031,
+    0.6422,
     0.0,
     0.0,
     0.0,
@@ -7658,7 +7658,7 @@
     1.0,
     0.0,
     0.0,
-    0.6149,
+    0.654,
     0.0,
     0.0,
     0.0,
@@ -7681,7 +7681,7 @@
     0.0,
     0.0,
     0.0,
-    0.6024,
+    0.6416,
     0.0,
     0.0,
     0.0,
@@ -7709,7 +7709,7 @@
     1.0,
     0.0,
     0.0,
-    0.592,
+    0.6306,
     0.0,
     0.0,
     0.0,
@@ -7732,7 +7732,7 @@
     0.0,
     0.0,
     0.0,
-    0.6325,
+    0.6702,
     0.0,
     0.0,
     0.0,
@@ -7760,7 +7760,7 @@
     0.0,
     0.0,
     0.0,
-    0.6389,
+    0.6784,
     0.0,
     0.0,
     0.0,
@@ -7788,7 +7788,7 @@
     1.0,
     0.0,
     0.0,
-    0.6263,
+    0.6651,
     0.0,
     0.0,
     0.0,
@@ -7811,7 +7811,7 @@
     0.0,
     0.0,
     0.0,
-    0.6015,
+    0.6409,
     0.0,
     0.0,
     0.0,
@@ -7839,7 +7839,7 @@
     0.0,
     0.0,
     0.0,
-    0.6354,
+    0.6735,
     0.0,
     0.0,
     0.0,
@@ -7867,7 +7867,7 @@
     1.0,
     0.0158,
     0.0,
-    0.0267,
+    0.0536,
     0.0,
     0.0,
     0.0,
@@ -7890,11 +7890,11 @@
     1.0,
     0.0207,
     0.0,
-    0.0535,
+    0.0854,
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1393
    ],
    "layers_skipped": [],
    "params": {
@@ -7913,7 +7913,7 @@
     1.0,
     0.025,
     0.0,
-    0.0495,
+    0.0809,
     0.0,
     0.0,
     0.0,
@@ -7936,7 +7936,7 @@
     1.0,
     0.0211,
     0.0,
-    0.0342,
+    0.0655,
     0.0,
     0.0,
     0.0,
@@ -7959,7 +7959,7 @@
     1.0,
     0.0203,
     0.0,
-    0.04,
+    0.069,
     0.0,
     0.0,
     0.0,
@@ -7982,7 +7982,7 @@
     1.0,
     0.0255,
     0.0,
-    0.0393,
+    0.0712,
     0.0,
     0.0,
     0.0,
@@ -8005,7 +8005,7 @@
     1.0,
     0.0182,
     0.0,
-    0.0371,
+    0.069,
     0.0,
     0.0,
     0.0,
@@ -8028,7 +8028,7 @@
     1.0,
     0.0179,
     0.0,
-    0.0335,
+    0.0654,
     0.0,
     0.0,
     0.0,
@@ -8051,7 +8051,7 @@
     1.0,
     0.02,
     0.0,
-    0.0436,
+    0.075,
     0.0,
     0.0,
     0.0,
@@ -8074,7 +8074,7 @@
     1.0,
     0.0226,
     0.0,
-    0.0628,
+    0.0947,
     0.0,
     0.0,
     0.0,
@@ -8097,7 +8097,7 @@
     1.0,
     0.0171,
     0.0,
-    0.0389,
+    0.0707,
     0.0,
     0.0,
     0.0,
@@ -8120,7 +8120,7 @@
     1.0,
     0.0218,
     0.0,
-    0.0285,
+    0.0604,
     0.0,
     0.0,
     0.0,
@@ -8147,7 +8147,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.143
    ],
    "layers_skipped": [],
    "params": {},
@@ -8399,7 +8399,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0974
    ],
    "layers_skipped": [],
    "params": {},
@@ -8567,7 +8567,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2959
    ],
    "layers_skipped": [],
    "params": {},
@@ -9416,7 +9416,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9448,7 +9448,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9480,7 +9480,7 @@
     0.0,
     0.0,
     0.0,
-    0.3,
+    0.2,
     0.0,
     0.0
    ],
@@ -9542,7 +9542,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9574,7 +9574,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9606,7 +9606,7 @@
     0.0,
     0.0,
     0.0,
-    0.1,
+    0.0,
     0.0,
     0.0
    ],
@@ -9636,7 +9636,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9668,7 +9668,7 @@
     0.0,
     0.0,
     0.0,
-    0.25,
+    0.15,
     0.0,
     0.0
    ],
@@ -9729,7 +9729,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9823,7 +9823,7 @@
     0.0,
     0.0,
     0.0,
-    0.1,
+    0.0,
     0.0,
     0.0
    ],
@@ -9883,7 +9883,7 @@
     0.0,
     0.0,
     0.0,
-    0.1,
+    0.0,
     0.0,
     0.0
    ],
@@ -9913,7 +9913,7 @@
     0.0,
     0.0,
     0.0,
-    0.25,
+    0.15,
     0.0,
     0.0
    ],
@@ -9944,7 +9944,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -9976,7 +9976,7 @@
     0.0,
     0.0,
     0.0,
-    0.1,
+    0.0,
     0.0,
     0.0
    ],
@@ -10006,7 +10006,7 @@
     0.0,
     0.0,
     0.0,
-    0.1,
+    0.0,
     0.0,
     0.0
    ],
@@ -10036,7 +10036,7 @@
     0.0,
     0.0,
     0.0,
-    0.2,
+    0.1,
     0.0,
     0.0
    ],
@@ -10161,7 +10161,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -10193,7 +10193,7 @@
     0.0,
     0.0,
     0.0,
-    0.35,
+    0.25,
     0.0,
     0.0
    ],
@@ -10257,7 +10257,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1413
    ],
    "layers_skipped": [],
    "params": {},
@@ -10341,7 +10341,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0969
    ],
    "layers_skipped": [],
    "params": {},
@@ -10383,7 +10383,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0326
    ],
    "layers_skipped": [],
    "params": {},
@@ -10425,7 +10425,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2034
    ],
    "layers_skipped": [],
    "params": {},
@@ -10509,7 +10509,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.2653
    ],
    "layers_skipped": [],
    "params": {},
@@ -10593,7 +10593,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0676
    ],
    "layers_skipped": [],
    "params": {},
@@ -12686,7 +12686,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1186
    ],
    "layers_skipped": [],
    "params": {},
@@ -12749,7 +12749,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1043
    ],
    "layers_skipped": [],
    "params": {},
@@ -12812,7 +12812,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0393
    ],
    "layers_skipped": [],
    "params": {},
@@ -13064,7 +13064,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0063
    ],
    "layers_skipped": [],
    "params": {},
@@ -13421,7 +13421,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0458
    ],
    "layers_skipped": [],
    "params": {},
@@ -13442,7 +13442,7 @@
     0.0,
     0.0,
     0.0,
-    0.0122
+    0.1811
    ],
    "layers_skipped": [],
    "params": {},
@@ -13463,7 +13463,7 @@
     0.0,
     0.0,
     0.0,
-    0.0661
+    0.7182
    ],
    "layers_skipped": [],
    "params": {},
@@ -13484,7 +13484,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0332
    ],
    "layers_skipped": [],
    "params": {},
@@ -13505,7 +13505,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1114
    ],
    "layers_skipped": [],
    "params": {},
@@ -13526,7 +13526,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1263
    ],
    "layers_skipped": [],
    "params": {},
@@ -13547,7 +13547,7 @@
     0.0,
     0.0,
     0.0,
-    0.0033
+    0.5882
    ],
    "layers_skipped": [],
    "params": {},
@@ -13610,7 +13610,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1403
    ],
    "layers_skipped": [],
    "params": {},
@@ -13631,7 +13631,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.3009
    ],
    "layers_skipped": [],
    "params": {},
@@ -13673,7 +13673,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1806
    ],
    "layers_skipped": [],
    "params": {},
@@ -13715,7 +13715,7 @@
     0.0,
     0.0,
     0.0,
-    0.1083
+    0.7328
    ],
    "layers_skipped": [],
    "params": {},
@@ -13757,7 +13757,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.0286
    ],
    "layers_skipped": [],
    "params": {},
@@ -13778,7 +13778,7 @@
     0.0,
     0.0,
     0.0,
-    0.1862
+    0.5166
    ],
    "layers_skipped": [],
    "params": {},
@@ -13799,7 +13799,7 @@
     0.0,
     0.0,
     0.0,
-    0.0601
+    0.6884
    ],
    "layers_skipped": [],
    "params": {},
@@ -13841,7 +13841,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.134
    ],
    "layers_skipped": [],
    "params": {},
@@ -13862,7 +13862,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.1341
    ],
    "layers_skipped": [],
    "params": {},
@@ -13883,7 +13883,7 @@
     0.0,
     0.0,
     0.0,
-    0.0
+    0.5274
    ],
    "layers_skipped": [],
    "params": {},
@@ -13946,7 +13946,7 @@
     0.0,
     0.0,
     0.0,
-    0.038
+    0.247
    ],
    "layers_skipped": [],
    "params": {},
@@ -13967,7 +13967,7 @@
     0.0,
     0.0,
     0.0,
-    0.022
+    0.681
    ],
    "layers_skipped": [],
    "params": {},
@@ -14030,7 +14030,7 @@
     0.0,
     0.0,
     0.0,
-    0.076
+    0.3292
    ],
    "layers_skipped": [],
    "params": {},
@@ -14047,7 +14047,7 @@
     0.0,
     0.0,
     0.0,
-    0.0507,
+    0.082,
     0.0,
     0.0,
     0.0,
@@ -14075,7 +14075,7 @@
     0.0,
     0.0,
     0.0,
-    0.0422,
+    0.0736,
     0.0,
     0.0,
     0.0,
@@ -14103,7 +14103,7 @@
     0.0,
     0.0,
     0.0,
-    0.0285,
+    0.0603,
     0.0,
     0.0,
     0.0,
@@ -14131,7 +14131,7 @@
     0.0,
     0.0,
     0.0,
-    0.0619,
+    0.0938,
     0.0,
     0.0,
     0.0,
@@ -14159,7 +14159,7 @@
     0.0,
     0.0,
     0.0,
-    0.0423,
+    0.0736,
     0.0,
     0.0,
     0.0,
@@ -14187,7 +14187,7 @@
     0.0,
     0.0,
     0.0,
-    0.0286,
+    0.06,
     0.0,
     0.0,
     0.0,
@@ -14215,7 +14215,7 @@
     0.0,
     0.0,
     0.0,
-    0.0133,
+    0.0452,
     0.0,
     0.0,
     0.0,
@@ -14243,7 +14243,7 @@
     0.0,
     0.0,
     0.0,
-    0.0217,
+    0.0449,
     0.0,
     0.0,
     0.0,
@@ -14271,7 +14271,7 @@
     0.0,
     0.0,
     0.0,
-    0.0179,
+    0.0493,
     0.0,
     0.0,
     0.0,
@@ -14299,7 +14299,7 @@
     0.0,
     0.0,
     0.0,
-    0.0145,
+    0.0459,
     0.0,
     0.0,
     0.0,
@@ -14327,7 +14327,7 @@
     0.0,
     0.0,
     0.0,
-    0.0608,
+    0.0922,
     0.0,
     0.0,
     0.0,
@@ -14355,7 +14355,7 @@
     0.0,
     0.0,
     0.0,
-    0.0282,
+    0.0539,
     0.0,
     0.0,
     0.0,
@@ -14383,7 +14383,7 @@
     0.0,
     0.0,
     0.0,
-    0.0592,
+    0.0905,
     0.0,
     0.0,
     0.0,
@@ -14411,7 +14411,7 @@
     0.0,
     0.0,
     0.0,
-    0.0455,
+    0.0745,
     0.0,
     0.0,
     0.0,
@@ -15624,19 +15624,19 @@
    "split": "train",
    "features": [
     1.0,
-    0.9991,
+    0.9999,
     0.8794,
-    0.6363,
+    0.6757,
     1.0,
     0.0,
-    0.7884,
-    0.35
+    1.0,
+    0.4173
    ],
    "layers_skipped": [],
    "params": {
     "classic_total_takeover": true
    },
-   "input_sha256": "deae71a0090cfb267842fc71661768c857e6ca65ffa639db6fd369b57f724285"
+   "input_sha256": "166e1a06251f95153bce319d51d278ce3af7fcae3a1ded9c8f91b221aea7bc4a"
   },
   {
    "id": "sanity_attack_takeover-0001",
@@ -15649,17 +15649,17 @@
     1.0,
     1.0,
     0.8794,
-    0.5975,
+    0.6357,
     1.0,
     0.0,
-    0.6714,
-    0.4512
+    1.0,
+    0.5435
    ],
    "layers_skipped": [],
    "params": {
     "classic_total_takeover": true
    },
-   "input_sha256": "6f8f6e068f41f119531cdd48201cad39405591337bf2d7d6aa947e4831b8fadf"
+   "input_sha256": "b1d42688ef5662e865c88a5209e6cb424b0d30ebdf4366135b15fc880ae33fe5"
   },
   {
    "id": "sanity_attack_takeover-0002",
@@ -15672,17 +15672,17 @@
     1.0,
     0.9999,
     0.8794,
-    0.6381,
+    0.6757,
     1.0,
     0.0,
-    0.6687,
-    0.35
+    0.9583,
+    0.4406
    ],
    "layers_skipped": [],
    "params": {
     "classic_total_takeover": true
    },
-   "input_sha256": "acae165bf76898f19fee0d4b704e319d2c63fd0bf7ef25fab1422299646e4af3"
+   "input_sha256": "cb27a32c4bfe858b3ea55d4171c05e2e23f8f3c72921919644f0a2d707f4eb80"
   },
   {
    "id": "sanity_benign_identical-0000",
