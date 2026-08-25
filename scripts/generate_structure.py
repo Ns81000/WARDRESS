@@ -2,19 +2,55 @@ import os
 import time
 from pathlib import Path
 
-# Config
-IGNORE_DIRS = {
-    '.git', 'node_modules', '__pycache__', '.pytest_cache', 
-    '.claude', '.next', '.venv', 'venv', 'dist', 'build',
-    'out', '.docusaurus', '.expo', '.svelte-kit', 'bower_components',
-    '.ruff_cache'
+# Generic runtime limits (behavioral knobs, not project-specific filters)
+BINARY_SNIFF_BYTES = 8192
+LARGE_FILE_LINE_LIMIT = 2 * 1024 * 1024  # stop counting lines beyond this
+
+# Repo internals -- never project content
+VCS_INTERNAL_DIR = ".git"
+
+# Well-known dependency / cache / build-output directory conventions across tools.
+# These are generated artifacts (the "temp folders" of any stack), not project files.
+TEMP_DIR_NAMES = {
+    # Python
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".tox",
+    ".nox", ".eggs", ".venv", "venv", ".ipynb_checkpoints",
+    # Node / JS
+    "node_modules", "bower_components", ".pnpm-store", ".yarn",
+    ".next", ".nuxt", ".output", ".svelte-kit", ".parcel-cache", ".turbo",
+    # Build outputs & caches (all stacks)
+    "dist", "build", "out", ".cache", "coverage", "htmlcov",
+    ".gradle", "target", "DerivedData", ".terraform", ".serverless",
 }
-IGNORE_FILES = {
-    '.DS_Store', 'Thumbs.db', 'desktop.ini', 'project_structure.txt'
+
+# Generic temp / OS-junk detection by naming shape (no project-specific names)
+TEMP_NAME_SUFFIXES = (
+    ".tmp", ".temp", ".swp", ".swo", ".swn",
+    ".part", ".crdownload", ".partial", ".pyc", ".pyo", ".pyd",
+)
+TEMP_NAME_PREFIXES = ("~$", "~", ".~")
+SYSTEM_JUNK_FILES = {
+    "thumbs.db", "desktop.ini", ".ds_store", ".localized", "ehthumbs.db",
 }
-IGNORE_EXTS = {
-    '.pyc', '.pyo', '.pyd', '.class', '.o', '.obj', '.dll', '.exe', '.so', '.dylib'
-}
+
+OUTPUT_FILENAME = "project_structure.txt"
+
+
+def is_temp_entry(name, is_dir):
+    """Generic temp/junk detection based on naming shape, valid for any project."""
+    lowered = name.lower()
+    if lowered.startswith(TEMP_NAME_PREFIXES):
+        return True
+    if is_dir:
+        return (
+            lowered == VCS_INTERNAL_DIR
+            or lowered in TEMP_DIR_NAMES
+            or lowered.endswith(TEMP_NAME_SUFFIXES)
+        )
+    if lowered in SYSTEM_JUNK_FILES:
+        return True
+    return lowered.endswith(TEMP_NAME_SUFFIXES)
+
 
 class Node:
     def __init__(self, name, is_dir=False, rel_path=""):
@@ -26,24 +62,20 @@ class Node:
         self.lines = None
         self.mtime = None
 
-def is_binary(file_path):
-    try:
-        with open(file_path, 'rb') as f:
-            chunk = f.read(1024)
-            return b'\x00' in chunk
-    except Exception:
-        return True
-
 def get_line_count(file_path):
-    if is_binary(file_path):
-        return None
-    
-    if os.path.getsize(file_path) > 2 * 1024 * 1024: # 2MB limit
-        return "Large (Skipped)"
-        
     try:
-        # Try reading as UTF-8 with errors ignored to handle various encodings safely
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        size = file_path.stat().st_size
+    except OSError:
+        return None
+    if size > LARGE_FILE_LINE_LIMIT:
+        return "Large (Skipped)"  # bail out before opening anything huge
+    try:
+        # Sniff the head for NUL bytes (binary marker) before counting lines
+        with open(file_path, "rb") as f:
+            if b"\x00" in f.read(BINARY_SNIFF_BYTES):
+                return None
+        # Read as UTF-8 with errors ignored to handle various encodings safely
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return sum(1 for _ in f)
     except Exception:
         return None
@@ -55,34 +87,63 @@ def format_size(size_in_bytes):
         size_in_bytes /= 1024.0
     return f"{size_in_bytes:.2f} TB"
 
-def build_tree(path, rel_path=""):
+def build_tree(path, rel_path="", visited=None):
+    """Walk the tree and capture every file on disk except temp/junk entries.
+    Nothing project-specific is hardcoded; .gitignore content is irrelevant."""
+    if visited is None:
+        visited = set()
+
     name = path.name
-    if name in IGNORE_DIRS or name in IGNORE_FILES:
+    try:
+        is_dir = path.is_dir()
+    except OSError:
         return None
-    if path.suffix in IGNORE_EXTS:
+
+    if rel_path and is_temp_entry(name, is_dir):  # never filter the workspace root itself
         return None
-        
-    node = Node(name, is_dir=path.is_dir(), rel_path=rel_path)
-    
-    if path.is_dir():
+
+    node = Node(name, is_dir=is_dir, rel_path=rel_path)
+
+    if is_dir:
         try:
-            # List contents, sort them (dirs first, then files, both alphabetically)
-            contents = sorted(list(path.iterdir()), key=lambda p: (not p.is_dir(), p.name.lower()))
-            for child_path in contents:
-                child_node = build_tree(child_path, os.path.join(rel_path, child_path.name) if rel_path else child_path.name)
+            real = str(path.resolve())
+            if real in visited:
+                return None  # symlink/junction loop protection
+            visited.add(real)
+
+            contents = []
+            for child in path.iterdir():
+                child_name = child.name
+                try:
+                    child_is_dir = child.is_dir()
+                except OSError:
+                    continue
+                if child_is_dir and child.is_symlink():
+                    child_is_dir = False  # never descend into linked directories
+                if is_temp_entry(child_name, child_is_dir):
+                    continue
+                if rel_path == "" and child_name.lower() == OUTPUT_FILENAME:
+                    continue  # never include the generated report itself
+                contents.append((child, f"{rel_path}/{child_name}" if rel_path else child_name))
+
+            contents.sort(key=lambda item: item[0].name.lower())
+            for child_path, child_rel in contents:
+                child_node = build_tree(child_path, child_rel, visited)
                 if child_node:
                     node.children.append(child_node)
             node.size = sum(c.size for c in node.children)
+            visited.discard(real)
         except Exception:
             pass
     else:
         try:
-            node.size = path.stat().st_size
-            node.mtime = path.stat().st_mtime
+            stat = path.stat()
+            node.size = stat.st_size
+            node.mtime = stat.st_mtime
             node.lines = get_line_count(path)
         except Exception:
             pass
-            
+
     return node
 
 def collect_stats(node, stats):
@@ -135,8 +196,9 @@ def render_tree(node, prefix="", is_last=True, is_root=False):
 
 def main():
     workspace_dir = Path(__file__).resolve().parent.parent
+    output_path = workspace_dir / OUTPUT_FILENAME
     print(f"Scanning workspace: {workspace_dir}")
-    
+
     root_node = build_tree(workspace_dir, "")
     if not root_node:
         print("Error: Could not scan workspace directory.")
@@ -182,8 +244,7 @@ def main():
     output.append("")
     
     report_content = "\n".join(output)
-    
-    output_path = workspace_dir / "project_structure.txt"
+
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(report_content)
         
