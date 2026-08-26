@@ -436,6 +436,19 @@ class TelegramSettingsOut(BaseModel):
     acting_user_email: str | None = None  # display hint for the linked user
 
 
+class FaviconSettingsIn(BaseModel):
+    """Opt-in site favicon resolver toggle. OFF (default) keeps every
+    sites page on local letter tiles with zero network; ON lets this
+    deployment's own backend fetch each monitored site's favicon once and
+    cache it locally (SSRF-gated, app/site_icons.py)."""
+
+    enabled: bool
+
+
+class FaviconSettingsOut(BaseModel):
+    enabled: bool
+
+
 class GeminiSettingsIn(BaseModel):
     # None keeps the stored key; empty string clears.
     api_key: str | None = Field(default=None, max_length=256)

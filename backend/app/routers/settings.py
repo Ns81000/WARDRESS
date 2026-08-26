@@ -45,6 +45,8 @@ from app.schemas import (
     AiTaskAssignmentOut,
     CatalogModelOut,
     CatalogProviderOut,
+    FaviconSettingsIn,
+    FaviconSettingsOut,
     GeminiKeyIn,
     GeminiKeyOut,
     GeminiSettingsIn,
@@ -64,6 +66,7 @@ from app.schemas import (
     TelegramSettingsOut,
 )
 from app.settings_store import (
+    FAVICON_KEY,
     SMTP_KEY,
     TELEGRAM_KEY,
     delete_setting,
@@ -910,6 +913,35 @@ async def pull_ollama_model(
             yield f"data: {_json.dumps({'status': 'error', 'error': str(exc), 'done': True})}\n\n"
 
     return StreamingResponse(_events(), media_type="text/event-stream")
+
+
+# --- Favicon resolver toggle (opt-in; Phase 27 residual-risk follow-up) ---
+
+
+@router.get("/favicon", response_model=FaviconSettingsOut)
+async def get_favicon_settings(user: AdminUser, db: DB) -> FaviconSettingsOut:
+    stored = await load_setting(db, FAVICON_KEY)
+    return FaviconSettingsOut(enabled=bool(stored and stored.get("enabled")))
+
+
+@router.put("/favicon", response_model=FaviconSettingsOut)
+async def put_favicon_settings(
+    body: FaviconSettingsIn, user: AdminUser, db: DB
+) -> FaviconSettingsOut:
+    stored = await load_setting(db, FAVICON_KEY)
+    before = bool(stored and stored.get("enabled"))
+    record_audit(
+        db,
+        actor=user,
+        action="settings.favicon.update",
+        target_type="settings",
+        target_id="favicon",
+        target_label="Favicon resolution",
+        before={"enabled": before},
+        after={"enabled": body.enabled},
+    )
+    await save_setting(db, FAVICON_KEY, {"enabled": body.enabled})
+    return FaviconSettingsOut(enabled=body.enabled)
 
 
 # --- Notification channels (§6/§8) ---

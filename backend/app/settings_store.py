@@ -24,6 +24,7 @@ SMTP_KEY = "smtp"
 TELEGRAM_KEY = "telegram"
 GEMINI_KEY = "gemini"
 OLLAMA_KEY = "ollama"
+FAVICON_KEY = "favicon"
 
 
 async def load_setting(db: AsyncSession, key: str) -> dict | None:
