@@ -61,7 +61,7 @@ Unlike simple page monitors, Wardress aggregates results from 9 independent dete
 
 Wardress is a set of containerized services coordinated by **Docker Compose**. The API and the workers share one codebase but run as separate containers, communicating only through PostgreSQL (durable state) and Redis (the task broker).
 
-```mermaid
+```mermaid actions={true}
 flowchart TB
     UI[Frontend SPA<br/>React 19 · Vite]
     subgraph HOST [Docker Compose stack]

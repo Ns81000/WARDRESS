@@ -20,7 +20,7 @@ All semantic analysis runs **locally on the worker**, CPU-only. Page text is nev
 
 ## Three signals, take the max
 
-```mermaid
+```mermaid actions={true}
 flowchart LR
     HTML["Suppressed<br/>HTML"]:::in --> VT["Visible<br/>text"]:::node
     VT --> NT["New text<br/>vs baseline"]:::node

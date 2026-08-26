@@ -12,7 +12,7 @@ The **Signatures Layer** is a fast, rule-based scanner for the "calling cards" o
 
 ## Three independent signals
 
-```mermaid
+```mermaid actions={true}
 flowchart LR
     HTML["Suppressed<br/>HTML"]:::in --> VT["Visible text<br/>lxml"]:::node
     VT --> NT{{"Isolate NEW text<br/>vs baseline"}}:::gate

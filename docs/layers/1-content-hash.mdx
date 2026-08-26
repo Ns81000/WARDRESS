@@ -54,7 +54,7 @@ A hash cannot grade *how much* a page changed — that is the job of the downstr
 
 Layer 1 is the pipeline's largest performance optimization. The hashed content is the serialized post-JS DOM, so a byte-identical document cannot differ in its DOM tree, its links, its visible text, or its semantics — an identical hash skips those layers entirely. It does **not** prove anything about rendered pixels: externally-referenced assets (images, external scripts, cross-origin iframes) are never part of the serialized DOM, so Layer 4 compares screenshots on every scan regardless of the gate.
 
-```mermaid
+```mermaid actions={true}
 flowchart LR
     B[("Baseline<br/>SHA-256")]:::src --> EQ{"Digests<br/>equal?"}
     C[("Current<br/>SHA-256")]:::src --> EQ

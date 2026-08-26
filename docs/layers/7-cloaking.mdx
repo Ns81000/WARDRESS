@@ -22,7 +22,7 @@ The prober re-fetches the page over plain HTTP with **httpx (no JavaScript execu
   Each rotated UA is compared against the **desktop raw fetch**, raw-vs-raw. The Playwright-rendered primary DOM is deliberately *not* used here — comparing a raw fetch against a JS-rendered page would false-flag every JavaScript-heavy site.
 </Warning>
 
-```mermaid
+```mermaid actions={true}
 flowchart LR
     REF["desktop_chrome · raw"]:::ref --> RT[["Reference<br/>visible text"]]:::ref
     GB["googlebot · raw"]:::ua --> C1{"usable<br/>2xx?"}:::gate

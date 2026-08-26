@@ -26,7 +26,7 @@ A new external domain in a `<script>`, `<iframe>`, or `<form action>` is treated
 
 ## Deep dive mechanism
 
-```mermaid
+```mermaid actions={true}
 flowchart LR
     HTML["Suppressed<br/>HTML"]:::in --> EX["Collect 5 ref kinds<br/>a · link · script · iframe · form"]:::node
     EX --> NM["Normalize · resolve<br/>drop js: data: mailto:"]:::node
