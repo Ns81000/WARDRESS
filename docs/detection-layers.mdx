@@ -77,6 +77,7 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 Wardress scales monitoring frequency by the fused risk score, so real changes are watched closely without wasting resources on stable sites.
 
 ```mermaid actions={true}
+%%{init: {'flowchart': {'padding': 24}}}%%
 flowchart LR
     SCAN[Scan completes] --> Q{risk ≥ 0.40?}
     Q -->|Material change| T["Tighten → base ÷ 4"]

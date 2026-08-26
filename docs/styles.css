@@ -3,18 +3,11 @@
  * Mintlify auto-loads any .css file in the docs content directory.
  */
 
-/* Mermaid diagram container — smooth margins, padding, and no clipping */
-.mermaid,
-[class*="mermaid"] {
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  margin-block: 2rem !important;
-  padding: 1.25rem 1rem !important;
-  box-sizing: border-box;
-}
-
-/* Ensure Mermaid SVG and its nodes never clip at the bottom/top edges */
+/* Mermaid diagrams render at their intrinsic SVG width and overflow the
+ * content column on wide flowcharts. Constrain every diagram to the column
+ * width and let it scale down proportionally, centered. The selectors target
+ * Mermaid's generated <svg> directly (it carries an id="mermaid-*" and an
+ * aria-roledescription), so we don't depend on Mintlify's wrapper markup. */
 svg[id^="mermaid-"],
 svg[aria-roledescription],
 .mermaid svg,
@@ -23,7 +16,12 @@ svg[aria-roledescription],
   height: auto !important;
   display: block;
   margin-inline: auto;
-  overflow: visible !important;
-  padding: 8px !important;
-  box-sizing: content-box;
+}
+
+/* Fallback: if a very dense diagram still can't shrink to fit legibly,
+ * let its container scroll horizontally instead of clipping content. */
+.mermaid,
+[class*="mermaid"] {
+  max-width: 100%;
+  overflow-x: auto;
 }
