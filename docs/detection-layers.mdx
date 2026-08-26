@@ -13,26 +13,19 @@ Every scan drives the target page through nine specialized layers, each designed
 ## The pipeline at a glance
 
 ```mermaid
-flowchart TB
-    subgraph INTAKE [Ingestion & Primary Gate]
-      direction LR
-      F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
-      L1 --> G{Identical?}
-    end
-
-    subgraph BRANCH [Gated Evaluation]
-      direction LR
-      G -->|Yes| GATE[Skip 2 · 3 · 5 · 8]
-      G -->|No| CONTENT[Run 2 · 3 · 5 · 8]
-    end
-
-    subgraph ALWAYS [Always Run · Independent of the Gate]
-      direction LR
-      L4[4 · Visual Diff] ~~~ L6[6 · Security Metadata] ~~~ L7[7 · Cloaking]
-    end
-
+flowchart LR
+    F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
+    L1 --> G{Identical?}
+    G -->|Yes| GATE[Skip 2 · 3 · 5 · 8]
+    G -->|No| CONTENT[Run 2 · 3 · 5 · 8]
     GATE --> ALWAYS
     CONTENT --> ALWAYS
+    subgraph ALWAYS [Always run · independent of the gate]
+      direction TB
+      L4[4 · Visual Diff]
+      L6[6 · Security Metadata]
+      L7[7 · Cloaking]
+    end
     ALWAYS --> L9[9 · Risk Fusion]
     L9 --> RISK([Risk score · 0.0–1.0])
 
@@ -41,8 +34,6 @@ flowchart TB
     class L1 hash;
     class L9 fusion;
     class RISK fusion;
-    style INTAKE fill:#0a170d,stroke:#1b5e20,color:#a5d6a7;
-    style BRANCH fill:#0a170d,stroke:#1b5e20,color:#a5d6a7;
     style ALWAYS fill:#0f1f12,stroke:#2e7d32,color:#a5d6a7;
 ```
 

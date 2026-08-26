@@ -3,88 +3,25 @@
  * Mintlify auto-loads any .css file in the docs content directory.
  */
 
-/* ==========================================================================
-   Mermaid Diagrams — Interactive Container & Crisp Vector Rendering
-   ========================================================================== */
-
-/* Diagram container card */
-.mermaid,
-[class*="mermaid"] {
-  position: relative;
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 1.5rem 1rem;
-  margin: 1.5rem 0;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.35);
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
-  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
-}
-
-.mermaid:active,
-[class*="mermaid"]:active {
-  cursor: grabbing;
-}
-
-.mermaid:hover,
-[class*="mermaid"]:hover {
-  border-color: rgba(46, 125, 50, 0.4);
-  box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.45);
-}
-
-/* Custom dark scrollbar for wide diagrams */
-.mermaid::-webkit-scrollbar,
-[class*="mermaid"]::-webkit-scrollbar {
-  height: 6px;
-}
-
-.mermaid::-webkit-scrollbar-track,
-[class*="mermaid"]::-webkit-scrollbar-track {
-  background: transparent;
-  border-radius: 3px;
-}
-
-.mermaid::-webkit-scrollbar-thumb,
-[class*="mermaid"]::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 3px;
-}
-
-.mermaid::-webkit-scrollbar-thumb:hover,
-[class*="mermaid"]::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.32);
-}
-
-/* SVG Vector optimization */
+/* Mermaid diagrams render at their intrinsic SVG width and overflow the
+ * content column on wide flowcharts. Constrain every diagram to the column
+ * width and let it scale down proportionally, centered. The selectors target
+ * Mermaid's generated <svg> directly (it carries an id="mermaid-*" and an
+ * aria-roledescription), so we don't depend on Mintlify's wrapper markup. */
 svg[id^="mermaid-"],
 svg[aria-roledescription],
 .mermaid svg,
 [class*="mermaid"] svg {
+  max-width: 100% !important;
+  height: auto !important;
   display: block;
   margin-inline: auto;
-  min-width: 480px;
-  max-width: 100%;
-  height: auto !important;
-  shape-rendering: geometricPrecision;
-  text-rendering: geometricPrecision;
 }
 
-@media (max-width: 640px) {
-  svg[id^="mermaid-"],
-  svg[aria-roledescription],
-  .mermaid svg,
-  [class*="mermaid"] svg {
-    min-width: 420px;
-  }
+/* Fallback: if a very dense diagram still can't shrink to fit legibly,
+ * let its container scroll horizontally instead of clipping content. */
+.mermaid,
+[class*="mermaid"] {
+  max-width: 100%;
+  overflow-x: auto;
 }
