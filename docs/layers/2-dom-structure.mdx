@@ -90,14 +90,17 @@ The findings row includes baseline and current element counts, the top added and
 Layer 2 receives the **suppression-filtered** copy of both pages. If an operator defines a CSS-selector rule (for example `#visitor-counter`), the matching subtree is dropped from *both* baseline and current via lxml `drop_tree()` before the tree is analyzed — so a widget that adds child nodes every second does not inflate structural risk.
 
 <CodeGroup>
-```html Baseline (filtered)
+```html Raw (Without Suppression)
+<!-- Baseline and Current have churning counts (triggers false alarm) -->
 <body>
   <div id="hero">Welcome</div>
-  <!-- #visitor-counter dropped by suppression -->
+  <div id="visitor-counter">4,120 visits</div> <!-- Baseline -->
+  <!-- Current scan has 4,185 visits (+3 nodes) -->
 </body>
 ```
 
-```html Current (filtered)
+```html Suppressed (Both Sides Cleaned)
+<!-- #visitor-counter dropped via lxml drop_tree() -> Churn = 0.0 -->
 <body>
   <div id="hero">Welcome</div>
   <!-- #visitor-counter dropped by suppression -->

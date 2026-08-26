@@ -10,7 +10,7 @@ icon: "shield-halved"
 
 Unlike simple page monitors, Wardress aggregates results from 9 independent detection layers into a single fused risk score. Rule-based minimum-risk floors keep high-specificity attack evidence (new external script domains, defacement signatures, crawler cloaking) from being drowned out, while ordinary churn — rotating ads, timestamps, cache-busting references — measures far below the alerting bar. Changes that clear a site's flag threshold raise alerts immediately; subtler changes are still scored and recorded, significant ones shorten the scan interval and can request a second opinion from a configured AI model, so ambiguous incidents reach operator review instead of disappearing. Detection sensitivity varies by attack technique, and per-site flag thresholds are tunable.
 
-<CardGroup cols={2}>
+<CardGroup cols={3}>
   <Card
     title="9-Layer Pipeline"
     icon="layer-group"
@@ -34,23 +34,24 @@ Unlike simple page monitors, Wardress aggregates results from 9 independent dete
     cloud model (OpenAI, Groq, Anthropic, Google, Mistral, …) or a fully local
     Ollama model.
   </Card>
-  <Card
-    title="Self-Hosted"
-    icon="server"
-    href="/installation"
-  >
-    Run the entire stack on your own infrastructure via Docker Compose.
-    Dashboard imagery is bundled same-origin by default — site avatars are
-    local letter tiles, provider logos and the AI mark ship with the app,
-    and no browser request ever reaches a third-party image CDN. An
-    opt-in server-side favicon resolver exists (Settings → Site favicons)
-    but is OFF by default; when enabled, your own server fetches each
-    monitored site's icon once and caches it locally. Incident data
-    leaves your host only through channels you configure (notifications,
-    webhooks, AI providers — pick the local Ollama profile to keep AI
-    analysis fully offline).
-  </Card>
 </CardGroup>
+
+<Card
+  title="Self-Hosted"
+  icon="server"
+  href="/installation"
+>
+  Run the entire stack on your own infrastructure via Docker Compose.
+  Dashboard imagery is bundled same-origin by default — site avatars are
+  local letter tiles, provider logos and the AI mark ship with the app,
+  and no browser request ever reaches a third-party image CDN. An
+  opt-in server-side favicon resolver exists (Settings → Site favicons)
+  but is OFF by default; when enabled, your own server fetches each
+  monitored site's icon once and caches it locally. Incident data
+  leaves your host only through channels you configure (notifications,
+  webhooks, AI providers — pick the local Ollama profile to keep AI
+  analysis fully offline).
+</Card>
 
 ## System architecture
 

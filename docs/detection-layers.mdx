@@ -13,19 +13,26 @@ Every scan drives the target page through nine specialized layers, each designed
 ## The pipeline at a glance
 
 ```mermaid
-flowchart LR
-    F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
-    L1 --> G{Identical?}
-    G -->|Yes| GATE[Skip 2 · 3 · 5 · 8]
-    G -->|No| CONTENT[Run 2 · 3 · 5 · 8]
+flowchart TB
+    subgraph INTAKE [Ingestion & Primary Gate]
+      direction LR
+      F[Capture · Playwright + httpx probe] --> L1[1 · Content Hash]
+      L1 --> G{Identical?}
+    end
+
+    subgraph BRANCH [Gated Evaluation]
+      direction LR
+      G -->|Yes| GATE[Skip 2 · 3 · 5 · 8]
+      G -->|No| CONTENT[Run 2 · 3 · 5 · 8]
+    end
+
+    subgraph ALWAYS [Always Run · Independent of the Gate]
+      direction LR
+      L4[4 · Visual Diff] ~~~ L6[6 · Security Metadata] ~~~ L7[7 · Cloaking]
+    end
+
     GATE --> ALWAYS
     CONTENT --> ALWAYS
-    subgraph ALWAYS [Always run · independent of the gate]
-      direction TB
-      L4[4 · Visual Diff]
-      L6[6 · Security Metadata]
-      L7[7 · Cloaking]
-    end
     ALWAYS --> L9[9 · Risk Fusion]
     L9 --> RISK([Risk score · 0.0–1.0])
 
@@ -34,6 +41,8 @@ flowchart LR
     class L1 hash;
     class L9 fusion;
     class RISK fusion;
+    style INTAKE fill:#0a170d,stroke:#1b5e20,color:#a5d6a7;
+    style BRANCH fill:#0a170d,stroke:#1b5e20,color:#a5d6a7;
     style ALWAYS fill:#0f1f12,stroke:#2e7d32,color:#a5d6a7;
 ```
 
@@ -41,10 +50,11 @@ flowchart LR
 
 The pipeline uses gating rules to preserve resources and suppress false alarms from dynamic rendering.
 
-<CardGroup cols={3}>
-  <Card title="Hash gate" icon="hashtag">
-    If the normalized content hash is identical to the baseline, Layers 2, 3, 5, and 8 are skipped — the hash is computed over the serialized DOM, so an identical hash proves those DOM-derived views unchanged. Layer 4 (Visual Diff) runs on every scan regardless of the gate: rendered pixels depend on externally-referenced assets that the serialized DOM never contains. Each skip is logged with its reason.
-  </Card>
+<Card title="Hash gate" icon="hashtag">
+  If the normalized content hash is identical to the baseline, Layers 2, 3, 5, and 8 are skipped — the hash is computed over the serialized DOM, so an identical hash proves those DOM-derived views unchanged. Layer 4 (Visual Diff) runs on every scan regardless of the gate: rendered pixels depend on externally-referenced assets that the serialized DOM never contains. Each skip is logged with its reason.
+</Card>
+
+<CardGroup cols={2}>
   <Card title="Persistent probes" icon="rotate">
     Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan regardless of the hash. TLS details, response headers, and UA-rotated fetches are invisible to the primary content hash and could reveal MITM or crawler-specific cloaking.
   </Card>
