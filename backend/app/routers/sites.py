@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from app.models import (
     Site,
     SuppressionRule,
 )
+from app.ratelimit import enforce_user_rate_limit
 from app.scanning import clamp_interval
 from app.schemas import (
     BaselineOut,
@@ -37,6 +38,7 @@ from app.schemas import (
     SuppressionRuleOut,
 )
 from app.services import ServiceError, site_snapshot
+from app.site_icons import get_favicon_enabled, resolve_site_icon
 
 router = APIRouter(prefix="/api/sites", tags=["sites"])
 
@@ -493,3 +495,56 @@ async def delete_suppression_rule(
     )
     await db.delete(rule)
     await db.commit()
+
+
+# --- Opt-in favicon resolver (Phase 27 residual-risk follow-up) ---
+
+
+@router.get("/{site_id}/icon")
+async def get_site_icon(
+    request: Request,
+    site_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """The monitored site's cached favicon — raster bytes served to the
+    dashboard's fetch-as-blob pipeline (plain <img src> cannot carry the
+    Authorization header).
+
+    Setting OFF (default): 404 immediately, zero outbound work. Target
+    confidentiality is the default (Phase 27): sites pages render local
+    letter avatars and nothing about the watchlist leaves the deployment.
+
+    Setting ON: serve the cache when fresh/inside its windows; otherwise
+    attempt exactly one SSRF-gated fetch (app/site_icons.py documents the
+    security posture and the concurrency claim). Failures answer 404 so
+    the frontend falls back to the letter avatar — a missing favicon is
+    cosmetic here, never an error surfaced to operators. RBAC mirrors the
+    sites-read surface (any authenticated role); rate-limited per user
+    since images load in bursts on dashboard render.
+    """
+    enforce_user_rate_limit(request, str(user.id))
+    if not await get_favicon_enabled(db):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Site icon unavailable")
+
+    site = await _get_site_or_404(db, site_id)
+
+    row = None
+    try:
+        row, _fetched_now = await resolve_site_icon(db, site)
+    except Exception:
+        # A resolver crash must never surface as a 500 on a cosmetic image;
+        # the client falls back to the letter avatar either way.
+        row = None
+
+    if row is None or row.status != "ok" or not row.data:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Site icon unavailable")
+
+    return Response(
+        content=row.data,
+        media_type=row.content_type or "application/octet-stream",
+        headers={
+            # Private: per-operator authenticated resource; never proxy-cached.
+            "Cache-Control": "private, max-age=86400",
+        },
+    )

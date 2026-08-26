@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     String,
     Text,
@@ -540,6 +541,37 @@ class ScanFinding(Base):
         # never duplicate.
         Index("uq_scan_findings_scan_layer", "scan_id", "layer", unique=True),
     )
+
+
+class SiteIcon(Base):
+    """One cached favicon per site for the opt-in resolver (Phase 27
+    residual-risk follow-up). Rows exist only while the operator keeps
+    ``favicon_resolution_enabled`` on; the feature is OFF by default and
+    the sites pages then never touch this table.
+
+    ``data`` holds raw image bytes (raster formats only — SVG rejected at
+    fetch time, see app/site_icons.py). ``source_url`` is fetch
+    provenance. ``detail`` is a type-name-level failure reason — never a
+    URL or credentials (Phase 26 redaction discipline).
+    ``retry_after`` is the negative-cache deadline for failed rows so a
+    dead site is not re-fetched on every dashboard load.
+    ``claimed_at`` arbitrates concurrent first-loads (conditional-UPDATE
+    claim; NULL means nobody is mid-fetch)."""
+
+    __tablename__ = "site_icons"
+
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), primary_key=True
+    )
+    content_type: Mapped[str] = mapped_column(String(64), default="")
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+    source_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    # "ok" | "failed"
+    status: Mapped[str] = mapped_column(String(16), default="failed")
+    detail: Mapped[str | None] = mapped_column(String(200), default=None)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    retry_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class AuditLog(Base):
