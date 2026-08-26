@@ -3,16 +3,17 @@
  * Mintlify auto-loads any .css file in the docs content directory.
  */
 
-/* Mermaid diagram container — spacious vertical margins and internal padding */
+/* Mermaid diagram container — clean horizontal layout with zero vertical scrollbars */
 .mermaid,
 [class*="mermaid"] {
   max-width: 100%;
-  overflow-x: auto;
-  margin-block: 2.25rem !important;
-  padding: 1.75rem 1.25rem !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important; /* Prevents accidental vertical browser scrollbars */
+  margin-block: 2rem !important;
+  padding: 1rem !important;
 }
 
-/* Mermaid SVG vector scaling with internal breathing room */
+/* Mermaid SVG vector scaling */
 svg[id^="mermaid-"],
 svg[aria-roledescription],
 .mermaid svg,
@@ -21,5 +22,5 @@ svg[aria-roledescription],
   height: auto !important;
   display: block;
   margin-inline: auto;
-  padding-block: 0.75rem;
+  overflow: visible !important;
 }
