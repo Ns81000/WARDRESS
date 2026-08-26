@@ -214,7 +214,14 @@
   - The vendorer itself is throwaway (deleted scratch in %TEMP%), per protocol; re-running the
     sourcing for a refreshed catalog would need it re-created (documented here, not committed).
 - **New leads observed**: none outside scope beyond the claim-expiry note above.
-- **Commit(s)**: see the four commits following this entry (feat(frontend), feat(audit),
-  feat(settings), docs) — hashes recorded in git log; not pushed, left for user review.
+- **Commit(s)** (7, on `main`, NOT pushed — left for user review):
+  - `ee19a71` — feat(frontend): restore dashboard imagery — brand AI mark + full-color catalog provider logos bundled same-origin
+  - `178b535` — feat(sites): opt-in server-side site-favicon resolver — GET /api/sites/{id}/icon
+  - `d757d69` — feat(settings): site-favicon resolver UI — SiteFavicon component, toggle card, both pages
+  - `19f33e8` — feat(settings): favicon resolver toggle — GET/PUT /api/settings/favicon (admin)
+  - `9b44cf8` — feat(audit): complete target-type filter coverage — add scan, ai_provider, ai_task
+  - `9262c56` — docs: privacy disclosure synced to post-PROMPT-001 reality
+  - `b3e19af` — docs(implementation): PROMPT-001 log entry (this file)
+  - `43ff72a` — docs(prompts): add PROMPT-001 spec and the prompt-authoring template. Note: this self-referential entry's hash changes each time the list itself is edited; `git log` is authoritative for the final hash. The seven preceding hashes are stable.
 
 *(format reference retained above; newest entries append below)*
