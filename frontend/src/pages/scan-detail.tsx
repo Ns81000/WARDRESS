@@ -1,10 +1,11 @@
 import { Suspense, lazy, useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Download, FileText, Sparkles } from "lucide-react"
+import { ArrowLeft, Download, FileText } from "lucide-react"
 import { Link, useParams } from "react-router"
 import { toast } from "sonner"
 
 import { DomDiffTree } from "@/components/dom-diff-tree"
+import { SparkIcon } from "@/components/spark-icon"
 import { StatusDot } from "@/components/status-dot"
 import { VisualDiffSlider } from "@/components/visual-diff-slider"
 import { parseBboxValue, type Region } from "@/lib/bbox"
@@ -128,7 +129,7 @@ function ExplainCard({ siteId, scan }: { siteId: string; scan: ScanDetail }) {
           <div className="space-y-4">
             <div className="flex-items-center justify-between border-b border-hairline pb-3 flex">
               <div className="flex items-center gap-2">
-                <Sparkles className="size-5 shrink-0 text-accent-orange animate-pulse" aria-hidden="true" />
+                <SparkIcon className="size-5 text-accent-orange animate-pulse" />
                  <h3 className="text-body-sm font-medium text-ink">Incident explanation</h3>
               </div>
               <Button
@@ -151,7 +152,7 @@ function ExplainCard({ siteId, scan }: { siteId: string; scan: ScanDetail }) {
           </div>
         ) : (
           <div className="flex flex-col items-center text-center py-6 px-4">
-            <Sparkles className="mb-4 size-14 shrink-0 text-accent-orange" aria-hidden="true" />
+            <SparkIcon className="mb-4 size-14" />
              <h3 className="text-body-sm font-medium text-ink mb-1.5">No incident explanation generated</h3>
             <p className="text-caption text-mute max-w-md mb-5 leading-relaxed">
               Ask our AI model to synthesize a plain-English explanation summarizing what changed on the site and how the risk score was calculated.
@@ -163,7 +164,7 @@ function ExplainCard({ siteId, scan }: { siteId: string; scan: ScanDetail }) {
               onClick={() => explain.mutate(false)}
                className="bg-primary hover:bg-surface-light text-primary-foreground font-medium"
             >
-              <Sparkles className="mr-2 size-4 shrink-0" aria-hidden="true" />
+              <SparkIcon className="mr-2 size-4" />
               {explain.isPending ? "Generating explanation..." : "Explain this incident"}
             </Button>
             <span className="mt-3 text-caption text-stone">

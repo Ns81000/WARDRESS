@@ -1,18 +1,10 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Cloud, ExternalLink, Plus, Search, Server, Sparkles, Trash2 } from "lucide-react"
+import { Check, Cloud, ExternalLink, Plus, Search, Server, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
-import anthropicLogo from "@/assets/providers/anthropic.svg"
-import deepseekLogo from "@/assets/providers/deepseek.svg"
-import googleLogo from "@/assets/providers/google.svg"
-import groqLogo from "@/assets/providers/groq.svg"
-import mistralLogo from "@/assets/providers/mistral.svg"
-import ollamaLogo from "@/assets/providers/ollama.svg"
-import openaiLogo from "@/assets/providers/openai.svg"
-import xaiLogo from "@/assets/providers/xai.svg"
-
 import { StatusDot, type DotState } from "@/components/status-dot"
+import { SparkIcon } from "@/components/spark-icon"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -34,33 +26,16 @@ import { Label } from "@/components/ui/label"
 import * as apiClient from "@/lib/api"
 import { ApiError } from "@/lib/api"
 import { assignModelToTasks } from "@/lib/ai-task-assignment"
+import { PROVIDER_LOGOS } from "@/lib/provider-logos"
 
 function errMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-// Provider id -> bundled same-origin logo asset. The previous implementation
-// built a six-candidate chain of third-party CDNs (search-engine favicons plus
-// four icon CDNs, one pinned to a moving branch ref), which fanned requests
-// out to external hosts on every settings render, broke air-gapped installs,
-// and pinned mutable content. Providers without a bundled mark fall back to
-// the local letter avatar below — never a network fetch.
-const PROVIDER_LOGOS: Record<string, string> = {
-  ollama: ollamaLogo,
-  openai: openaiLogo,
-  openai_compatible: openaiLogo,
-  anthropic: anthropicLogo,
-  google: googleLogo,
-  groq: groqLogo,
-  mistral: mistralLogo,
-  deepseek: deepseekLogo,
-  xai: xaiLogo,
-}
-
 // A provider's logo as a plain <img> over a same-origin bundled asset (never
 // inlined SVG markup — that would be an XSS vector; never a remote URL —
-// that would leak usage to a third party). Unknown providers get a local
-// letter-avatar badge.
+// that would leak usage to a third party). The id→asset map lives in
+// lib/provider-logos.ts. Unknown providers get a local letter-avatar badge.
 export function ProviderLogo({
   providerType,
   className,
@@ -804,7 +779,7 @@ export function AiSettingsCard() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2.5">
-              <Sparkles className="size-5 shrink-0 text-accent-blue" aria-hidden="true" />
+              <SparkIcon className="size-5" />
               AI providers
             </CardTitle>
             <CardDescription>
