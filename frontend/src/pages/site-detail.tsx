@@ -44,7 +44,7 @@ import { ApiError, type Scan, type Site } from "@/lib/api"
 
 import { useArtifact } from "@/lib/use-artifact"
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog"
-import { SiteAvatar } from "@/components/site-avatar"
+import { SiteFavicon } from "@/components/site-favicon"
 
 const IncidentTimeline = lazy(() =>
   import("@/components/incident-timeline").then((m) => ({
@@ -456,7 +456,7 @@ export function SiteDetailPage() {
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-start gap-3.5">
-            <SiteAvatar url={s.url} className="size-10 mt-1.5 rounded-md text-lg" />
+            <SiteFavicon siteId={s.id} url={s.url} className="size-10 mt-1.5 rounded-md text-lg" />
             <h1 className={titleClassName}>{s.name}</h1>
           </div>
           <p className="mt-2 truncate text-code-md text-charcoal">{s.url}</p>

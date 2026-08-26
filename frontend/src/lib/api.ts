@@ -416,6 +416,19 @@ export async function fetchArtifactObjectURL(path: string): Promise<string> {
   return URL.createObjectURL(await resp.blob())
 }
 
+/**
+ * The opt-in site icon (GET /api/sites/{id}/icon): 404 when the feature
+ * is off or the site has no cached favicon — both mean "render the local
+ * letter avatar". Same blob pipeline as artifacts so the Authorization
+ * header rides along.
+ */
+export const siteIconPath = (siteId: string) => `/api/sites/${siteId}/icon`
+
+export async function fetchSiteIconObjectURL(siteId: string): Promise<string> {
+  const resp = await artifactFetch(siteIconPath(siteId))
+  return URL.createObjectURL(await resp.blob())
+}
+
 /** Fetch an auth-protected text artifact (HTML snapshot) as a string. */
 export async function fetchArtifactText(path: string): Promise<string> {
   return (await artifactFetch(path)).text()
@@ -650,6 +663,19 @@ export const putOllamaSettings = (body: {
   model?: string | null
 }) => api<OllamaSettings>("/api/settings/ollama", { method: "PUT", body: JSON.stringify(body) })
 export const testOllama = () => api<TestResult>("/api/settings/ollama/test", { method: "POST" })
+
+// --- Opt-in site favicon resolver ---
+
+export interface FaviconSettings {
+  enabled: boolean
+}
+
+export const getFaviconSettings = () => api<FaviconSettings>("/api/settings/favicon")
+export const putFaviconSettings = (enabled: boolean) =>
+  api<FaviconSettings>("/api/settings/favicon", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  })
 
 // --- Unified AI layer API ---
 

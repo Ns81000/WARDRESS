@@ -12,6 +12,7 @@ import { parsePort } from "@/lib/numeric-inputs"
 
 import { ApiKeysCard } from "@/components/api-keys-card"
 import { AiSettingsCard } from "@/components/ai-settings-card"
+import { FaviconCard } from "@/components/favicon-card"
 import { StatusDot } from "@/components/status-dot"
 import { UsersCard } from "@/components/users-card"
 import { Badge } from "@/components/ui/badge"
@@ -1159,6 +1160,7 @@ export function SettingsPage() {
             <SmtpCard />
             <TelegramCard />
             <AiSettingsCard />
+            <FaviconCard />
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

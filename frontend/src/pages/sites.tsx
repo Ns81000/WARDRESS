@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { BulkImportDialog } from "@/components/bulk-import-dialog"
-import { SiteAvatar } from "@/components/site-avatar"
+import { SiteFavicon } from "@/components/site-favicon"
 import * as apiClient from "@/lib/api"
 import { ApiError, type Site } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -250,7 +250,7 @@ export function SitesPage() {
                 >
                   <TableCell className="max-w-[240px] md:max-w-[360px]">
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <SiteAvatar url={site.url} />
+                      <SiteFavicon siteId={site.id} url={site.url} />
                       {/* The row navigates via this real link stretched over
                           it (after:inset-0), so keyboard users reach the same
                           target the mouse click hits. */}
