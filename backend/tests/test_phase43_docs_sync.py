@@ -81,9 +81,12 @@ def test_health_captions_match_measured_telemetry():
 
 def test_introduction_self_hosted_card_matches_local_imagery():
     text = _read(INTRODUCTION_DOCS)
-    # Phase 27 removed every third-party image fetch; the old disclosure is false.
+    # Phase 27 removed every third-party image fetch; the old disclosure is
+    # false. PROMPT-001 restored bundled same-origin logos + an opt-in
+    # server-side favicon resolver; the copy must state the new truth.
     assert "loads site favicons and provider logos from public CDNs" not in text
-    assert "no third-party CDN requests" in text
+    assert "no browser request ever reaches a third-party image CDN" in text
+    assert "OFF by default" in text
     # The configured-channels egress truth stays.
     assert "channels you configure" in text
 

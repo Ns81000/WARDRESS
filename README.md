@@ -32,6 +32,8 @@
 
 Unlike simple page monitors, Wardress aggregates results from 9 independent detection layers into a single fused risk score. Rule-based minimum-risk floors keep high-specificity attack evidence (new external script domains, defacement signatures, crawler cloaking) from being drowned out, while ordinary churn — rotating ads, timestamps, cache-busting references — measures far below the alerting bar. Changes that clear a site's flag threshold raise alerts immediately; subtler changes are still scored and recorded, significant ones shorten the scan interval and can request a second opinion from a configured AI model, so ambiguous incidents reach operator review instead of disappearing. Detection sensitivity varies by attack technique, and per-site flag thresholds are tunable.
 
+Dashboard imagery is bundled same-origin by default: site avatars are local letter tiles, provider logos ship with the app, and the browser makes no third-party image-CDN requests. An opt-in server-side favicon resolver (Settings → Site favicons, off by default) lets your own server fetch each monitored site's icon once and cache it locally.
+
 ---
 
 ## Installation Guide (`install.ps1`)
@@ -389,7 +391,8 @@ Interactive OpenAPI documentation is available locally at **`http://localhost:83
 
 ## Security Features
 
-*   **SSRF Protection & Redirect Validation**: Monitored scan targets must resolve to public IP addresses by default. Probing internal, loopback, or link-local targets (`127.0.0.1`, `192.168.x.x`) is blocked unless explicitly enabled via the per-site configuration flag `allow_private_networks`. To prevent SSRF bypasses via open redirects or DNS rebinding, redirect locations are checked hop-by-hop before fetching.
+*   **SSRF Protection & Redirect Validation**: Monitored scan targets must resolve to public IP addresses by default. Probing internal, loopback, or link-local targets (`127.0.0.1`, `192.168.x.x`) is blocked unless explicitly enabled via the per-site configuration flag `allow_private_networks`. To prevent SSRF bypasses via open redirects or DNS rebinding, redirect locations are checked hop-by-hop before fetching. The same gate covers the opt-in site-favicon resolver: every outbound URL (including each redirect hop) is re-validated before any bytes are read.
+*   **No Third-Party Image Requests**: The dashboard's imagery — provider logos, the AI mark, and site avatars — ships as bundled same-origin assets; the browser never contacts an image CDN. Site favicons are local letter tiles unless an admin enables the opt-in server-side resolver (Settings → Site favicons), which fetches each monitored site's icon once through SSRF-gated, size-capped, raster-only requests and caches it in the database.
 *   **ReDoS Protection in Suppression Engine**: When filtering dynamic parts of pages using Regex-based suppression rules, the regex parser enforces a strict **2.0 second timeout limit** (`_REGEX_TIMEOUT_SECONDS`) on match evaluations to safeguard worker nodes against Catastrophic Backtracking Denial of Service attacks.
 *   **Fernet Encryption at Rest**: Integration secrets (like SMTP passwords, Telegram bot tokens, API keys, and Apprise Webhook URLs) are encrypted in the PostgreSQL database using a Fernet key (`CREDENTIALS_ENCRYPTION_KEY`). They are never exposed via the API.
 *   **Hashed API Keys**: API keys are stored in the database as SHA-256 hashes. If the database is compromised, the actual API tokens cannot be decrypted.

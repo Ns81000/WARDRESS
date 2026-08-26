@@ -40,8 +40,12 @@ Unlike simple page monitors, Wardress aggregates results from 9 independent dete
     href="/installation"
   >
     Run the entire stack on your own infrastructure via Docker Compose.
-    Dashboard imagery is generated and served locally — site avatars and
-    provider logos make no third-party CDN requests — and incident data
+    Dashboard imagery is bundled same-origin by default — site avatars are
+    local letter tiles, provider logos and the AI mark ship with the app,
+    and no browser request ever reaches a third-party image CDN. An
+    opt-in server-side favicon resolver exists (Settings → Site favicons)
+    but is OFF by default; when enabled, your own server fetches each
+    monitored site's icon once and caches it locally. Incident data
     leaves your host only through channels you configure (notifications,
     webhooks, AI providers — pick the local Ollama profile to keep AI
     analysis fully offline).

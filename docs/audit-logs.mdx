@@ -8,7 +8,7 @@ The **Audit Log** is Wardress's central mechanism for operational transparency a
 
 ## Immutable Tracking
 
-Every configuration change, baseline capture, suppression-rule addition, settings edit, alert acknowledgment, site muting, and user-management action writes a row to the Audit Log.
+Every configuration change, baseline capture, suppression-rule addition, settings edit, alert acknowledgment, site muting, and user-management action writes a row to the Audit Log. Each row carries a `target_type` (site, scan, suppression rule, settings, notification channel, alert, user, API key, AI provider, AI task, remediation hook, remediation execution), and the dashboard's filter dropdown offers every one of them.
 
 <Warning>
   **Immutability Guarantee**: By design, the Wardress REST API does not expose any endpoint to `UPDATE` or `DELETE` audit log rows. Once an action is recorded, it remains permanently in the database ledger.

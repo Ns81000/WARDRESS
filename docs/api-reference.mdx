@@ -66,6 +66,7 @@ RBAC is enforced per endpoint via dependency factories, so a `403` (valid creden
     | GET | `/api/sites/{id}/scans` · `/scans/{scanId}` | any |
     | POST | `/api/sites/{id}/scans/{scanId}/explain` | analyst |
     | GET/POST/DELETE | `/api/sites/{id}/suppression-rules[/{ruleId}]` | GET any · write analyst |
+    | GET | `/api/sites/{id}/icon` (opt-in resolver; `404` while off) | any |
     | POST | `/api/sites/bulk-import` | analyst |
   </Accordion>
   <Accordion title="Alerts · /api/alerts" icon="bell">
@@ -97,6 +98,7 @@ RBAC is enforced per endpoint via dependency factories, so a `403` (valid creden
     | GET/POST/DELETE | `/api/api-keys[/{id}]` | session (own keys) · POST analyst+ |
     | GET | `/api/audit-log` (paged) | admin |
     | GET/PUT/POST | `/api/settings/{smtp,telegram}` (+ `/test`) | admin |
+    | GET/PUT | `/api/settings/favicon` (site-favicon resolver toggle) | admin |
     | GET/POST/PATCH/DELETE | `/api/settings/ai/providers[/{id}]` | admin |
     | POST | `/api/settings/ai/providers/{id}/{validate,ollama-models,pull}` | admin |
     | GET/PUT | `/api/settings/ai/{catalog/providers,catalog/models,assignments}` | admin |
