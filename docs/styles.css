@@ -1,12 +1,19 @@
 /*
  * Wardress docs — custom styles.
+ * Mintlify auto-loads any .css file in the docs content directory.
  */
 
-/* Mermaid diagrams render at their intrinsic SVG width and overflow the
- * content column on wide flowcharts. Constrain every diagram to the column
- * width and let it scale down proportionally, centered. The selectors target
- * Mermaid's generated <svg> directly (it carries an id="mermaid-*" and an
- * aria-roledescription), so we don't depend on Mintlify's wrapper markup. */
+/* Mermaid diagram container — spacious vertical margins, padding, and zero vertical scrollbar artifacts */
+.mermaid,
+[class*="mermaid"] {
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: hidden !important; /* Eliminates native Windows vertical scrollbar glitch */
+  margin-block: 2.25rem !important;
+  padding: 1.5rem 1.25rem !important;
+}
+
+/* Mermaid SVG vector scaling */
 svg[id^="mermaid-"],
 svg[aria-roledescription],
 .mermaid svg,
@@ -15,12 +22,5 @@ svg[aria-roledescription],
   height: auto !important;
   display: block;
   margin-inline: auto;
-}
-
-/* Fallback: if a very dense diagram still can't shrink to fit legibly,
- * let its container scroll horizontally instead of clipping content. */
-.mermaid,
-[class*="mermaid"] {
-  max-width: 100%;
-  overflow-x: auto;
+  overflow: visible !important;
 }
