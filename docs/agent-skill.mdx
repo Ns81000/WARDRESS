@@ -1,0 +1,95 @@
+---
+title: "Agent Skill"
+description: "Let AI agents operate Wardress through a standards-compliant Agent Skill."
+icon: "plug"
+---
+
+Wardress ships a machine-readable **Agent Skill** that teaches AI coding agents and assistants how to operate a running instance over its REST API — checking health, triaging flagged scans, acknowledging alerts, and handling remediation confirmations on an operator's behalf.
+
+<Info>
+  The skill follows the open [Agent Skills specification](https://agentskills.io) (`SKILL.md` format) and lives in the repository at `docs/.mintlify/skills/wardress-operations/SKILL.md`. Mintlify serves it automatically from this documentation site.
+</Info>
+
+## Why a skill?
+
+The [AI Agent](/agent) is the assistant *inside* Wardress. This skill is the inverse surface: it equips *external* agents — Claude Code, Cursor, VS Code extensions, or any client that supports the Agent Skills format — to work with your Wardress deployment as a tool. The skill encodes the operational knowledge that otherwise lives only in human docs:
+
+- Authentication with hashed `wk_` API keys and the three-role RBAC model
+- Health checks, site review, alert triage, and scan investigation workflows
+- How to read 9-layer evidence and the fused risk score (a ranking signal, not a probability)
+- Hard safety boundaries: never auto-confirm remediations, never rebaseline without explicit operator approval
+
+## Install the skill
+
+<Tabs>
+  <Tab title="From this documentation site">
+    Any agent that supports the `skills` CLI can pull the skill straight from the live site:
+
+    ```bash
+    npx skills add https://wardress.mintlify.site
+    ```
+
+    The agent discovers the skill via the standard skills discovery endpoints (`/.well-known/skills/index.json`).
+  </Tab>
+  <Tab title="From the repository">
+    Point your agent at the file in a clone of the repository:
+
+    ```
+    docs/.mintlify/skills/wardress-operations/SKILL.md
+    ```
+
+    Copy the `wardress-operations/` directory into your agent's skills location, or reference the path directly if your client supports loading skills from disk.
+  </Tab>
+</Tabs>
+
+## What agents can do
+
+| Capability | Key endpoints | Role floor |
+| :--- | :--- | :--- |
+| Check system health | `GET /api/health`, `/api/health/live` | viewer |
+| List sites and alerts | `GET /api/sites`, `GET /api/alerts` | viewer |
+| Investigate flagged scans | `GET /api/sites/{id}/scans/{scanId}`, explain, reports | viewer (explain: analyst) |
+| Trigger scans | `POST /api/sites/{id}/scan-now` | analyst |
+| Acknowledge alerts | `POST /api/alerts/{id}/ack` | analyst |
+| Manage suppression rules | `/api/sites/{id}/suppression-rules` | analyst |
+| Confirm/dismiss remediations | `POST /api/remediation/executions/{id}/{confirm,dismiss}` | analyst |
+
+## Frontmatter
+
+The skill's frontmatter follows the [Agent Skills specification](https://agentskills.io/specification):
+
+```yaml
+---
+name: wardress-operations
+description: Operate Wardress, a self-hosted website defacement detection platform,
+  over its REST API. Check system health, list monitored sites and alerts, trigger
+  manual scans, acknowledge alerts, triage flagged scans by interpreting 9-layer
+  evidence and fused risk scores, manage suppression rules, export incident reports,
+  and confirm or dismiss pending remediation webhooks. Use when the user asks to
+  monitor, triage, or respond to website defacement incidents through Wardress...
+license: MIT
+compatibility: Requires network access to a running Wardress instance
+  (default http://localhost:8321) and an API key (wk_...) generated in
+  Settings → API Keys.
+metadata:
+  author: Ns81000
+  version: "1.0"
+---
+```
+
+<Note>
+  The `name` must match the parent directory name and may only contain lowercase letters, numbers, and hyphens; the `description` (≤ 1024 characters) tells agents both what the skill does and when to activate it.
+</Note>
+
+## Safety boundaries baked into the skill
+
+The skill is written defensively on purpose:
+
+- **No credential management** — API keys cannot mint more credentials (`/api/api-keys` rejects them), so a leaked key cannot self-replicate.
+- **Remediations always require explicit human approval** — the skill instructs agents to surface hook targets and get confirmation before calling the confirm endpoint, mirroring Wardress's own fail-safe confirmation queue.
+- **Rebaseline requires operator consent** — re-capturing a baseline erases the trusted state, so the skill forbids doing it silently, especially after a suspected incident.
+- **Respect rate limits** — agents back off on `429` and honor `Retry-After`.
+
+<Card title="API Reference" icon="code" href="/api-reference">
+  The skill is a curated subset of the full REST surface. See the complete endpoint map for everything else Wardress exposes.
+</Card>

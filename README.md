@@ -147,6 +147,7 @@ To update Wardress to the latest release while maintaining all database records,
 - [Configuration Reference (`.env`)](#configuration-reference-env)
 - [Role-Based Access Control (RBAC)](#role-based-access-control-rbac)
 - [API Reference](#api-reference)
+- [Agent Skill](#agent-skill)
 - [Security Features](#security-features)
 - [Development and Testing](#development-and-testing)
 - [License](#license)
@@ -386,6 +387,33 @@ Interactive OpenAPI documentation is available locally at **`http://localhost:83
     ```bash
     curl -H "Authorization: Bearer wk_your_api_key_here" http://localhost:8321/api/sites
     ```
+
+---
+
+## Agent Skill
+
+Wardress ships a standards-compliant [Agent Skill](https://agentskills.io) — a `SKILL.md` file that teaches external AI agents (Claude Code, Cursor, VS Code extensions, or any client supporting the format) how to operate a running instance over its REST API: checking health, reviewing sites and alerts, triaging flagged scans by interpreting 9-layer evidence, triggering scans, acknowledging alerts, and handling remediation confirmations.
+
+The skill lives at [`docs/.mintlify/skills/wardress-operations/SKILL.md`](docs/.mintlify/skills/wardress-operations/SKILL.md) and is served automatically by the documentation site.
+
+### Installing into your agent
+
+```bash
+npx skills add https://wardress.mintlify.site
+```
+
+Or copy the `wardress-operations/` directory from this repository into your agent's skills location.
+
+### Built-in safety boundaries
+
+The skill encodes Wardress's security posture, not just its endpoints:
+
+*   **No credential management** — API keys cannot mint more credentials (`/api/api-keys` rejects them), so a leaked key cannot self-replicate.
+*   **Remediations require explicit human approval** — agents must surface hook targets and get operator confirmation before firing webhooks, mirroring the platform's fail-safe confirmation queue.
+*   **Rebaseline requires operator consent** — re-capturing a baseline erases the trusted state and is never done silently.
+*   **Rate-limit aware** — agents back off on `429` and honor `Retry-After`.
+
+See the [Agent Skill documentation](https://wardress.mintlify.site/agent-skill) for the full capability matrix.
 
 ---
 
