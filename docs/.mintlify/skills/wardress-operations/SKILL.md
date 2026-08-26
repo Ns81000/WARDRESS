@@ -177,3 +177,10 @@ curl -X POST -H "Authorization: Bearer $WARDRESS_API_KEY" \
 Report findings to the operator with: overall risk score, which layers fired
 and why, whether the evidence pattern matches churn vs. attack, and the
 recommended next action (suppress, rebaseline, ack, or escalate).
+
+## Further reading
+
+For deeper detail on any capability, consult the project's documentation index
+in [references/REFERENCE.md](references/REFERENCE.md). It mirrors the site's
+`llms.txt` and links to the full per-layer, API, and agent guides. Load it only
+when a task calls for specifics beyond the workflows above.
