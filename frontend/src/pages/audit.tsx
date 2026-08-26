@@ -19,15 +19,21 @@ import { listboxAction } from "@/lib/listbox-keys"
 
 const PAGE_SIZE = 50
 
+// Every target_type literal written by record_audit() across backend/app
+// (re-derived by grep at implementation time). The dropdown must offer all
+// of them so no audit family is unfilterable.
 const TARGET_TYPES = [
   "",
   "site",
+  "scan",
   "suppression_rule",
   "settings",
   "notification_channel",
   "alert",
   "user",
   "api_key",
+  "ai_provider",
+  "ai_task",
   "remediation_hook",
   "remediation_execution",
 ]
@@ -104,6 +110,31 @@ function getTargetIcon(type: string, action: string, label: string) {
       return (
         <svg className={cn(baseClass, "text-accent-yellow")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+        </svg>
+      )
+    case "scan":
+      return (
+        <svg className={cn(baseClass, "text-accent-blue")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <line x1="11" y1="8" x2="11" y2="14" />
+          <line x1="8" y1="11" x2="14" y2="11" />
+        </svg>
+      )
+    case "ai_provider":
+    case "ai_task":
+      return (
+        <svg className={cn(baseClass, "text-accent-green")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <rect x="9" y="9" width="6" height="6" />
+          <line x1="9" y1="1" x2="9" y2="4" />
+          <line x1="15" y1="1" x2="15" y2="4" />
+          <line x1="9" y1="20" x2="9" y2="23" />
+          <line x1="15" y1="20" x2="15" y2="23" />
+          <line x1="20" y1="9" x2="23" y2="9" />
+          <line x1="20" y1="14" x2="23" y2="14" />
+          <line x1="1" y1="9" x2="4" y2="9" />
+          <line x1="1" y1="14" x2="4" y2="14" />
         </svg>
       )
     case "remediation_hook":
