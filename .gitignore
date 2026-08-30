@@ -5,6 +5,7 @@
 # --- Python / uv ---
 __pycache__/
 *.py[cod]
+wardress-test-sites (1).txt
 .venv/
 .pytest_cache/
 .ruff_cache/
