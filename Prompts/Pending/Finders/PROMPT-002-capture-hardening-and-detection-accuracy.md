@@ -72,6 +72,15 @@ This means: **if it isn't written into `IMPLEMENTATION_LOG.md`, it did not happe
 
 12. **Trust nothing you have not personally re-verified.** Before relying on any claim from this prompt about line numbers, function signatures, or behavior, verify it against the actual current code. The codebase may have changed since this prompt was written. If a claim is wrong, do the right thing and log the deviation.
 
+13. **Infrastructure and ops files must stay in sync.** When a phase adds a new dependency, changes a timeout, introduces a new environment variable, or alters any runtime behavior, the following files MUST be updated to reflect the change:
+    - **`docker-compose.yml`** — if a new service, volume, environment variable, or build argument is needed (e.g., Playwright browser cache volume, new stealth-related env vars)
+    - **`.env` / `.env.example`** — if any new environment variable is introduced (even optional ones), add it with a sensible default and a comment explaining what it controls
+    - **`scripts/`** — if install/update/diagnostics scripts need to know about new dependencies, new browser installs, or changed timeout budgets (e.g., `install.ps1` may need to run `playwright install chromium` with new args, `diagnostics.ps1` may need to check stealth health)
+    - **`docs/`** — if any user-facing behavior changes: new capture capabilities, changed timeout defaults, new scan evidence fields, new verdict logic. Update the relevant `.mdx` files in `docs/` to document the new behavior accurately. Follow the verifiable-copy discipline from Phase 34/43 of the fix effort: no absolutes, no constants pinned in prose, no claims that can silently drift from the code.
+    - Every such change must be included in the SAME phase commit — infrastructure drift (code changes without matching config/docs) is a defect, not a follow-up.
+
+14. **Fresh Docker install available for testing.** The user will provide a fresh Wardress install running in Docker before this effort begins. You have full access to test against it: run captures against real sites, execute the detection pipeline end-to-end, verify scan results in the database, inspect screenshots and artifacts. Use it aggressively — especially in Phase 6 (E2E validation) but also in earlier phases to smoke-test stealth/scrolling/banner changes against live sites before committing. **Do not run `scripts/install.ps1` or `scripts/uninstall.ps1` yourself** — the user manages the Docker deployment. If containers are not up when you need them, ASK the user to start them.
+
 ---
 
 ## 2. THE GAUNTLET LOOP (mandatory for every change, every phase)
@@ -731,16 +740,31 @@ After each phase, append an entry to `Prompts\Done\Loogers\IMPLEMENTATION_LOG.md
 ## 6. THE KICKOFF PROMPT (paste into a new chat to start/continue any phase)
 
 ```
-Before anything else: read C:\Users\Ns8pc\Music\WARDRESS\Prompts\Pending\Finders\PROMPT-002-capture-hardening-and-detection-accuracy.md COMPLETELY, start to finish — every rule, every phase spec.
+Before anything else: read C:\Users\Ns8pc\Music\WARDRESS\Prompts\Pending\Finders\PROMPT-002-capture-hardening-and-detection-accuracy.md COMPLETELY, start to finish — every rule, every phase spec. Do not skim. Do not jump to a section. Read every line from §0 through §7 before doing anything else.
 
-Then read:
-1. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Finders\WARDRESS_PARANOID_FIX_PROTOCOL.md — its Gauntlet Loop discipline applies to your work.
-2. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Loogers\IMPLEMENTATION_LOG.md — prior implementation decisions.
-3. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Loogers\WARDRESS_FIX_LOG.md — grep for entries touching the files you'll edit this phase. Read those entries in full.
+Then read these files COMPLETELY, in order:
+1. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Finders\WARDRESS_PARANOID_FIX_PROTOCOL.md — its Gauntlet Loop discipline (§2) applies to your work. Read the full file, not just the phase list.
+2. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Loogers\IMPLEMENTATION_LOG.md — every prior implementation entry, including design decisions and residual risks.
+3. C:\Users\Ns8pc\Music\WARDRESS\Prompts\Done\Loogers\WARDRESS_FIX_LOG.md — grep for every entry touching fetcher.py, probe.py, stealth, ssrf, detection/pipeline.py, scan_tasks.py, and the detection layers. Read those entries IN FULL. Pay special attention to Phase 6 (hash gate fix), Phase 16 (SSRF fixes), Phase 24 (degradation signaling), and Phase 36 (layer 4 chroma shift).
 
-Then read the ACTUAL current code for every file this phase targets — with read_file, tracing symbols to definitions and callers. Verify every claim in the prompt against the real tree.
+Then read the ACTUAL current code for every file this phase targets — with read_file, tracing symbols to definitions and callers:
+- backend/worker/fetcher.py (the entire file, plus every caller of fetch_page)
+- backend/worker/probe.py (the entire file)
+- backend/worker/scan_tasks.py (at minimum the _capture_baseline and _run_scan functions)
+- backend/worker/detection/pipeline.py (understand the layer flow)
+- backend/app/ssrf.py (understand the SSRF policy you must never weaken)
+- backend/pyproject.toml (check existing dependencies)
+- docker-compose.yml (understand current service definitions and env vars)
+- .env / .env.example (understand current environment configuration)
+- scripts/ directory (understand install/update/diagnostics scripts)
+- docs/ directory (understand current documentation claims)
+- backend/tests/ — find every existing test file for fetcher, scan_tasks, and SSRF
 
-Execute the next incomplete phase now, following every rule in the protocol exactly — the full Gauntlet Loop for every change. No scope creep. Full existing test suite must be green before you're done.
+Verify every claim in the prompt against the real tree. If any line number, function signature, or behavior described in the prompt is wrong, do the right thing instead and log the deviation.
+
+IMPORTANT: A fresh Wardress install is running in Docker and available for you to test against. Use it to smoke-test captures against real sites, run the detection pipeline end-to-end, and verify results. If the containers are not up when you need them, ASK me to start them — do not run install/uninstall scripts yourself.
+
+Execute the next incomplete phase now, following every rule in §1 (including Rule 13: keep docker-compose.yml, .env, scripts/, and docs/ in sync with your changes) and the full Gauntlet Loop in §2 exactly. No scope creep. Full existing test suite must be green before you're done.
 
 When done: append your implementation log entry, commit (do not push), then stop.
 ```
