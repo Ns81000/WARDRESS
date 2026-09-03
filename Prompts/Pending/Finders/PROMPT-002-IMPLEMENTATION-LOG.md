@@ -7,11 +7,14 @@
 >
 > **If it isn't written here, it did not happen.**
 
+> **Baseline (Phase 1 must fill this in — do NOT invent numbers):** record the pre-Phase-1 full-suite result here — exact command (e.g. `cd backend && uv run --frozen pytest -q`), pass/fail/skip counts, and wall time — before making ANY code change. The suite requires the live Postgres test database (`backend/tests/db_harness.py`; default `postgresql+asyncpg://wardress:wardress@127.0.0.1:5433/wardress_test` — if it is not already running, start the disposable container with the `docker run` command that module prints on failure). This recorded baseline is the Rule-4 "at or above baseline" reference for every phase.
+
 ## Entry Format (each phase appends below, newest last)
 
 ```
-### [DONE / PARTIAL] Phase N — <phase title>
+### [DONE / PARTIAL] PROMPT-002 Phase N — <phase title>
 
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
 - **Session date**: YYYY-MM-DD
 - **Goal**: one paragraph — what this phase set out to do
 - **Files changed**: path/to/file.py(:lines), ...

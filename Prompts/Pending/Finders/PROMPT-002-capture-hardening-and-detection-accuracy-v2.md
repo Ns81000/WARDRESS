@@ -15,7 +15,7 @@ This is a multi-session, fourteen-phase implementation effort against the Wardre
 
 These two problems are causally linked: inconsistent captures (different scroll depth, different banner state, different JS execution timing) create artificial DOM/visual deltas that the detection pipeline cannot distinguish from real tampering. Fixing capture consistency will eliminate a large class of false positives before detection tuning even begins.
 
-**This effort builds on the completed 44-phase fix effort** (see `WARDRESS_FIX_LOG.md`). That effort already:
+**This effort builds on the completed 44-phase fix effort** (see `Prompts\Done\Loogers\WARDRESS_FIX_LOG.md`). That effort already:
 - Refitted the fusion model with non-negative coefficients (Phases 8–10)
 - Ungated layer 4 (visual diff) from the content hash (Phase 6)
 - Added chroma-shift detection to layer 4 (Phase 36)
@@ -149,7 +149,7 @@ Before starting any phase, read completely — not skimmed:
 
 ## 4. PRIOR ART — CRITICAL CONSTRAINTS FROM THE 44-PHASE FIX EFFORT
 
-The following constraints were established by the completed fix effort and are **permanent**. Every phase of this implementation must honor them. They are embedded here so you do not need to read the 810KB `WARDRESS_FIX_LOG.md` — but if you need deeper context on any of these, grep that file for the phase number.
+The following constraints were established by the completed fix effort and are **permanent**. Every phase of this implementation must honor them. They are embedded here so you do not need to read the 810KB `Prompts\Done\Loogers\WARDRESS_FIX_LOG.md` — but if you need deeper context on any of these, grep that file for the phase number.
 
 ### 4.1 SSRF Policy (Fix Phase 16)
 
@@ -259,6 +259,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
    Verify the package is compatible with the project's pinned Playwright version. If incompatible, fall back to vendoring the stealth JS scripts directly via `page.addInitScript()`.
 
 2. **Create `backend/worker/stealth.py`** — a focused module that:
+   - Add the exact pin `playwright-stealth==2.0.3` to `backend/pyproject.toml` dependencies and run `uv lock` (Rule 5) — it exposes the context-level `Stealth().apply_stealth_async(context)` API (Python ≥3.9, compatible with this project's 3.12). Its own README states it bypasses ONLY the simplest bot detection — treat it as detection-noise reduction, not WAF evasion (see Phase 13's honest acceptance criteria).
    - Exports an `async def apply_stealth(context)` function that applies all stealth patches to a Playwright browser context
    - Applies `playwright-stealth`'s standard patches (navigator.webdriver, chrome.runtime, codecs, permissions, WebGL, etc.)
    - Adds supplementary init scripts for:
@@ -267,6 +268,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
      - Patching `Permissions.query` to return "prompt" for notifications
      - Overriding `navigator.languages` to match the context locale
    - Sets browser launch args: `--disable-blink-features=AutomationControlled`
+   - **Container smoke-check before committing:** smoke-test the new launch args with a live capture inside the running Docker worker image (Rule 14). Add `--no-sandbox` ONLY if that image's Chromium actually requires it — the current `pw.chromium.launch(headless=True)` works there without it, so do not assume.
    - **DOES NOT** weaken any SSRF check — the route guard (`_make_ssrf_route_guard`) must still be applied AFTER stealth patches
 
 3. **Modify `fetcher.py:fetch_page()`**:
@@ -280,7 +282,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
 **Edge cases to handle:**
 - Stealth patches must not break legitimate Playwright functionality (screenshots, page.content(), route interception)
 - Stealth patches must not interfere with the SSRF route guard (test explicitly)
-- Browser launch args must not conflict with Docker/container environment (headless mode in containers)
+- Browser launch args must not conflict with Docker/container environment (headless mode in containers) — proven by the container smoke-test, not assumed
 - The stealth module must degrade gracefully if `playwright-stealth` is not installed (log warning, continue without stealth) — for dev environments that don't install it
 - Memory: stealth init scripts add negligible overhead (<1KB JS)
 - Concurrency: stealth is stateless and per-context, no shared state between captures
@@ -292,7 +294,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
   - Test that the SSRF route guard still blocks internal addresses after stealth is applied
   - Test that `fetch_page()` with stealth produces valid HTML and screenshots
   - Test Cloudflare challenge detection logic (mock a challenge page HTML, verify detection and wait behavior)
-- All existing `tests/test_fetcher*.py` and `tests/test_scan_tasks.py` must still pass
+- All existing `tests/test_scan_tasks.py`, `tests/test_probe.py`, `tests/test_ssrf.py`, and `tests/test_end_to_end_flagging.py` must still pass (there is NO `tests/test_fetcher*.py` suite — `fetch_page` is exercised indirectly through those files and via `tests/test_phase4_scan_integration.py`, `tests/test_phase16_outbound_fetch.py`, `tests/test_phase35_backend_correctness.py`)
 
 **DO NOT DISTURB:**
 - `worker/detection/` — no detection layer changes in this phase
@@ -322,6 +324,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
    - Body contains `cf-challenge-running` or `cf-error-details` classes
    - HTTP status is 403 with `cf-ray` header present
    If detected: wait up to 10 seconds for the challenge to auto-solve (Cloudflare JS challenges often auto-complete for real browsers), then re-check. If still blocked after retry, raise `FetchError("Site is behind bot protection that could not be bypassed (Cloudflare challenge detected)")` — a clear, user-safe error that tells the operator what happened, not a generic timeout.
+   This makes a persistent challenge a HARD scan/baseline failure (`ScanStatus.failed` / `BaselineStatus.failed` with a clear message) — NOT a degraded capture that silently stores challenge HTML as if it were real content. This is an operator-visible behavior change: document it in `docs/usage.mdx` and in the implementation log entry in this phase; Phase 7 re-verifies the docs stay accurate.
 
 **Edge cases:**
 - UA strings must be syntactically valid and match real Chrome versions
@@ -338,7 +341,7 @@ Use `playwright-stealth` (Python package) as the base stealth layer, supplemente
   - Test that non-challenge pages with similar text do not false-positive
   - Test the wait-and-retry behavior when challenge auto-solves
   - Test the FetchError raised when challenge persists
-- All existing probe and fetcher tests must still pass
+- All existing probe tests (`tests/test_probe.py`) and scan/fetcher-path tests (`tests/test_scan_tasks.py`, `tests/test_ssrf.py`, `tests/test_end_to_end_flagging.py`) must still pass
 
 **DO NOT DISTURB:**
 - `worker/stealth.py` — already created in Phase 1
@@ -469,7 +472,8 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
    - Populate it with `{**scroll_evidence, **stability_evidence, "screenshot_capped": bool}`
 
 3. **Persist capture evidence in scan output** — modify `scan_tasks.py`:
-   - The scan task stores capture_evidence in `scan.layer_scores` or a new `scan.capture_evidence` JSON column (if adding a column, add a migration)
+   - **DECIDED: store it in a NEW nullable `scan.capture_evidence` JSON column** (Postgres JSONB via the existing `.with_variant(postgresql.JSONB, ...)` pattern, mirroring `baselines.capture_meta`). Add a new Alembic migration + `Scan.capture_evidence: Mapped[dict | None]` on `models.py`, then persist the assembled evidence there.
+   - **Do NOT reuse `scan.layer_scores`** — that column is the documented per-layer summary (`models.py:470-474`) read by site-detail/health/alert aggregation (`_summarize_layer_scores`, `routers/sites.py` degraded reads); stuffing capture evidence into it violates that contract.
    - This metadata is invaluable for debugging capture issues
    - Add a simple health indicator: `capture_quality: "full" | "partial" | "degraded"` based on:
      - "full": scroll completed, content stable, screenshot not capped
@@ -479,7 +483,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 **Edge cases:**
 - Screenshot capping must not break the visual diff layer — a capped screenshot is still a valid PNG, just shorter than the full page
 - The `capture_evidence` field must be optional and default to `None` — old FetchResult objects (from tests, from pre-change code) must work without it
-- The migration (if adding a column) must be reversible
+- The new `scans.capture_evidence` migration must be reversible (downgrade drops the column)
 - `capture_quality` must be informational only — it must NOT affect detection scores or verdicts
 
 **Test obligations:**
@@ -522,11 +526,16 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 1. **Create `backend/worker/banner_dismiss.py`**:
 
    ```python
+   # `context.add_cookies()` requires a `domain` OR `url` per cookie — materialize each
+   # entry at runtime with a scheme-aware `url=f"{scheme}://{hostname}"` (explicit ports
+   # preserved) from the parsed target origin; never a bare `"domain": ""` literal.
+   # `Secure`-flagged consent cookies (OneTrust's OptanonAlertBoxClosed is often Secure)
+   # must only be set when the target scheme is https: — Chromium refuses Secure on http:.
    CONSENT_COOKIES: list[dict] = [
-       {"name": "OptanonAlertBoxClosed", "value": "<current_iso_time>", "domain": ""},  # OneTrust
-       {"name": "CookieConsent", "value": "{stamp:%27-1%27,necessary:true,...}", "domain": ""},  # Cookiebot
-       {"name": "cookieyes-consent", "value": "{...accepted categories...}", "domain": ""},  # CookieYes
-       {"name": "euconsent-v2", "value": "...", "domain": ""},  # IAB TCF v2
+       {"name": "OptanonAlertBoxClosed", "value": "<current_iso_time>"},  # OneTrust
+       {"name": "CookieConsent", "value": "{stamp:%27-1%27,necessary:true,...}"},  # Cookiebot
+       {"name": "cookieyes-consent", "value": "{...accepted categories...}"},  # CookieYes
+       {"name": "euconsent-v2", "value": "..."},  # IAB TCF v2
        # ... (research and add the top 10-15 most common CMP cookies)
    ]
 
@@ -576,7 +585,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 3. **Add banner evidence to `capture_evidence`** — merge `banner_evidence` into the existing capture evidence dict from Phase 4.
 
 **Edge cases:**
-- **Consent cookie injection must use the correct domain** — parse the URL's domain and set cookies for it, not a wildcard. `context.add_cookies()` requires a domain or URL.
+- **Consent cookie injection must use the correct domain** — parse the URL's domain and set cookies for it, not a wildcard. `context.add_cookies()` requires a `domain` OR `url` per cookie — follow the spec's scheme-aware `url=` shape, and only set `Secure`-flagged consent cookies when the target scheme is `https:`.
 - **Banner dismissal click must be safe** — only click if the element is visible and within the viewport. Never click elements that might navigate away from the page.
 - **Some banners use iframes** — the dismiss selectors should also check `page.frames()` for common consent iframe patterns (e.g., Quantcast's iframe)
 - **The SSRF route guard must remain active** — banner dismissal is page-level interaction, not network requests, so the guard is unaffected
@@ -607,6 +616,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 1. **Retry logic** — add retry-with-backoff for transient capture failures:
    - If `page.goto()` fails with a timeout or network error (not SSRF block, not FetchError), retry ONCE after a 3-second pause
    - If the Cloudflare challenge detection (Phase 2) fires but the challenge doesn't auto-solve, retry ONCE with a longer wait (15s instead of 10s)
+   - **Retry uses a reduced nav timeout** — new constant `RETRY_NAV_TIMEOUT_MS = 30_000` (the retry must be fast enough for the decided budget below)
    - Maximum 2 total attempts (1 original + 1 retry) — never retry indefinitely
    - Log retries at WARNING level with the reason
    - Store retry count in `FetchResult.capture_evidence`
@@ -621,7 +631,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 **Edge cases:**
 - **Retry must not double-count the capture** — on retry, clear the previous attempt's partial state
 - **The SSRF route guard must survive across retries** — it's per-page, so a new page on retry gets its own guard
-- **Retry must not exceed the overall Celery timeout budget** — verify that original attempt (fail at ~60s) + 3s pause + retry attempt (up to ~135s) fits within the 300s soft limit
+- **Retry must stay inside the Celery soft-limit budget — a DECIDED constraint, not a verify step.** Worst case with Phase 3's constants: attempt 1 consumes its full slow path (60s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 135s) + 3s pause + retry at `RETRY_NAV_TIMEOUT_MS` (30s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 105s) ≈ 243s, then `probe_site` (~20s, runs after `fetch_page` in `scan_tasks.py`) ≈ **263s < 300s soft limit**. Trace `_run_scan` end-to-end to confirm; if any path exceeds 300s, RAISE the limits in `worker/celery_app.py` (300/360s today) and sync `docs/` per Rule 13 — do not ship a budget that can SoftTimeLimitExceed mid-capture.
 - **Concurrent retries** — each scan task's retry is independent; no shared retry state between tasks
 
 **Test obligations:**
@@ -657,6 +667,8 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
    - Merge all evidence from Phases 1–6 into a single `capture_evidence` dict:
      ```python
      capture_evidence = {
+         # This phase — migration-gate field for the re-baseline signal (see item 3):
+         "capture_method_version": 1,  # bump whenever the capture flow structurally changes
          # From Phase 1 (stealth):
          "stealth_applied": bool,
          # From Phase 2 (Cloudflare):
@@ -688,7 +700,10 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 3. **Verify the complete capture pipeline** end-to-end:
    - Trace the full flow from `scan_tasks.py` → `fetch_page()` → stealth → cookies → navigate → Cloudflare check → banners → scroll → stability → screenshot → evidence → store
    - Verify the total worst-case time budget fits within Celery limits
-   - Verify backward compatibility with existing baselines
+   - **Answer Gauntlet Step 3's backward-compat category decisively:** existing baselines were captured with the OLD flow (no scroll, banners visible, shorter pages), so the first post-upgrade scan against an old baseline WILL produce one-time false deltas. Provide the operator-facing mechanism instead of hoping it self-heals:
+     - (a) `docs/usage.mdx`: "after upgrading to capture-method vN, re-baseline monitored sites (one-time false-positive wave expected otherwise)". The baseline capture task (`_capture_baseline`) must ALSO store `capture_method_version` in `baseline.capture_meta` so both sides can be compared.
+     - (b) A visible signal: surface a re-baseline hint (site-detail or health page) when the active baseline's `capture_meta.capture_method_version` is older than the current capture's.
+   - **Confirm the Phase 2 contract is documented** in `docs/usage.mdx`: a persistent Cloudflare challenge fails the scan/baseline with the clear error (never stored as challenge HTML).
 
 **Edge cases:**
 - Infrastructure files must be consistent with each other (docker-compose env vars match .env.example, scripts reference correct paths)
@@ -875,10 +890,9 @@ Key principle: **normalization must be conservative.** A pattern is only normali
    - The noise floor must NEVER affect the `flagged` verdict — that's driven by `risk >= site.flag_threshold`, independent of `changed`
 
 2. **Verify adaptive cadence sensitivity**:
-   - Currently: `MATERIAL_CHANGE_RISK = 0.15` triggers cadence tightening
-   - Verify this is appropriate after Phases 8–10. If the noise floor is working correctly, most benign-dynamic sites should score below 0.15 consistently
-   - If testing shows that dynamic sites still hover around 0.10-0.14, consider raising to 0.20
-   - **Document the decision** either way with measured data
+   - **`MATERIAL_CHANGE_RISK` is ALREADY 0.40** (`backend/app/scanning.py:53`) — deliberately raised during the 44-phase fix effort because benign dynamic-content churn fuses to ~0.14–0.37, putting the old 0.15 BELOW the benign noise distribution (rationale at `scanning.py:39-52`; pinned in `README.md:159` and `docs/detection-layers.mdx:93`; guarded by `tests/test_phase34_docs_sync.py::test_readme_material_change_constant_matches_scanning_module`).
+   - Verify 0.40 is still appropriate after Phases 8–10 — the noise floor + normalization should push benign-dynamic fusions DOWN, widening the margin. If the measured data justifies changing the constant, modify `app/scanning.py` AND the README line AND `docs/detection-layers.mdx`'s cadence section IN THE SAME COMMIT — the docs-sync tests fail otherwise.
+   - **Document the decision** with measured data either way
 
 **Edge cases:**
 - **The noise floor must NOT hide a real attack** — verify against the measured attack vectors from the fusion training dataset: every scenario there scored well above 0.02 on at least one layer
@@ -964,7 +978,7 @@ Key principle: **normalization must be conservative.** A pattern is only normali
 
 1. **Build the comprehensive test site list** (`test_sites_comprehensive.txt`):
 
-   Start with the existing `wardress-test-sites (1).txt` (112 URLs) and ADD 30-40 sites specifically chosen to stress every failure mode. Categorize each site:
+   Start with the existing `wardress-test-sites (1).txt` (currently 89 URLs — count the seed list yourself, never trust prose counts) and ADD 30-40 sites specifically chosen to stress every failure mode. The current seed already lacks e-commerce, non-Latin, and heavy-Cloudflare entries, so the required category counts below MUST come from the additions. Categorize each site:
 
    The categories must include AT LEAST:
    - 10 SPA/heavy-JS sites (React, Angular, Vue, SvelteKit, Next.js sites)
@@ -979,6 +993,13 @@ Key principle: **normalization must be conservative.** A pattern is only normali
 2. **End-to-end capture validation** (`test_capture_e2e.py`):
 
    > **IMPORTANT: These tests require LIVE NETWORK ACCESS and must be marked with `@pytest.mark.network` so CI can skip them.** They are NOT run in CI — they are run manually as a validation gate.
+   >
+   > **Prerequisite — register the marker FIRST in this phase:** `backend/pyproject.toml` currently has no `markers` and no `addopts`, so plain `pytest -q` would RUN (and fail) the network tests. Add to the existing `[tool.pytest.ini_options]`:
+   > ```toml
+   > markers = ["network: live-network e2e (skipped in CI)"]
+   > addopts = "-m 'not network'"
+   > ```
+   > so the hermetic default is structural (config), not procedural (agents remembering to opt out).
 
    For each category in the test list:
    - Capture the site using the new `fetch_page()` (with stealth, scrolling, banner dismissal)
@@ -986,11 +1007,11 @@ Key principle: **normalization must be conservative.** A pattern is only normali
    - Assert: screenshot is a valid PNG with reasonable dimensions (width ~1366, height > viewport height for scrollable sites)
    - Assert: `capture_evidence` shows scroll completed (not capped) for finite sites
    - Assert: for cookie-banner sites, banner evidence shows dismissal attempted
-   - Assert: for Cloudflare-protected sites, the response is NOT a challenge page
+   - Assert: for Cloudflare-protected sites, the response is EITHER real content OR a correctly DETECTED challenge (the Phase 2 `FetchError` message). Record `clean_captures` and `correctly_detected_challenges` as separate numbers — a correctly detected-and-reported block counts as a PASS.
    - Assert: HTTP status is 200 (not 403/429/503)
    - Record per-category success rates and capture times
 
-   **Expected results**: ≥90% of sites in each category should capture successfully. Document any persistent failures with root-cause analysis.
+   **Expected results**: ≥90% clean captures for the non-Cloudflare categories; for the Cloudflare category, ≥90% must be either clean captures OR correctly detected-and-reported challenges (report the two numbers separately). Expecting ≥90% CLEAN captures on real Cloudflare is unrealistic — `playwright-stealth`'s own README says it evades only the simplest bot detection; this effort's contract is to RECOGNIZE a block, not defeat every WAF (managed challenge / Turnstile). Document any persistent failures with root-cause analysis.
 
 3. **Performance regression test**:
    - Time the capture of 5 representative sites (1 static, 1 SPA, 1 lazy-load, 1 Cloudflare, 1 cookie-banner)
