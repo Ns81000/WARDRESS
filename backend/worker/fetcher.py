@@ -16,6 +16,15 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Route, async_playwright
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
+from worker.stealth import (
+    BROWSER_LAUNCH_ARGS,
+    CAPTURE_USER_AGENT,
+    CONTEXT_COLOR_SCHEME,
+    CONTEXT_LOCALE,
+    CONTEXT_TIMEZONE_ID,
+    CONTEXT_VIEWPORT,
+    apply_stealth,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +32,6 @@ NAV_TIMEOUT_MS = 45_000
 SCREENSHOT_TIMEOUT_MS = 30_000
 SETTLE_MS = 2_000  # post-load pause for late JS DOM writes
 MAX_HTML_BYTES = 10 * 1024 * 1024  # refuse absurd pages rather than OOM
-
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Wardress/0.1 SiteMonitor"
 
 
 class FetchError(Exception):
@@ -108,13 +115,25 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
 
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            # Blink's AutomationControlled feature is the single loudest
+            # "this is a bot" signal Chromium ships; disable it at launch
+            # (worker/stealth.py owns the capture's browser shape).
+            browser = await pw.chromium.launch(
+                headless=True, args=BROWSER_LAUNCH_ARGS
+            )
             try:
                 context = await browser.new_context(
-                    user_agent=USER_AGENT,
-                    viewport={"width": 1366, "height": 900},
+                    user_agent=CAPTURE_USER_AGENT,
+                    locale=CONTEXT_LOCALE,
+                    timezone_id=CONTEXT_TIMEZONE_ID,
+                    color_scheme=CONTEXT_COLOR_SCHEME,
+                    viewport=CONTEXT_VIEWPORT,
                     ignore_https_errors=False,
                 )
+                # Stealth patches (init scripts) BEFORE any page exists and
+                # BEFORE the route guard: the guard must be the last word on
+                # every request the stealthed page makes (PROMPT-002 rule 11).
+                await apply_stealth(context)
                 page = await context.new_page()
                 # SSRF-validate every request the page makes (subresources,
                 # XHR/fetch, JS-initiated navigations) — not just the top

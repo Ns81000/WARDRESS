@@ -38,6 +38,11 @@ dependencies = [
     # (master prompt rule 3: no GPU dependencies, ever).
     "torch>=2.5",
     "httpx==0.28.1",
+    # Stealth patches for the Playwright capture (PROMPT-002 Phase 1):
+    # navigator.webdriver removal, chrome.runtime, codecs, WebGL, etc.
+    # Applied per-context by worker/stealth.py BEFORE the SSRF route guard;
+    # the module degrades gracefully (log + continue) when absent.
+    "playwright-stealth==2.0.3",
     # --- Optional intelligence layer ---
     "google-genai==2.12.0",
     "aiolimiter==1.2.1",
