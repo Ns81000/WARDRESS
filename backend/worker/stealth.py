@@ -16,6 +16,11 @@ browser:
   not cover (ChromeDriver `cdc_*` properties, Permissions.query
   notifications, plugins/mimeTypes normalization when the library patch
   did not land).
+- Capture page-preparation timing (`SETTLE_MS`, `MAX_SCROLL_TIME_MS`,
+  `SCROLL_STEP_PAUSE_MS`, `CONTENT_STABLE_TIMEOUT_MS`,
+  `CONTENT_STABLE_POLL_MS`) — the capture's timing shape lives here too
+  (PROMPT-002 Phase 3), so later capture phases extend this module
+  rather than re-inlining timing constants in fetcher.py.
 
 Graceful degradation: if `playwright-stealth` is not installed (dev
 environments), `apply_stealth` logs a warning and returns — the capture
@@ -57,6 +62,21 @@ CONTEXT_LOCALE = "en-US"
 CONTEXT_TIMEZONE_ID = "America/New_York"
 CONTEXT_COLOR_SCHEME = "light"
 CONTEXT_VIEWPORT = {"width": 1366, "height": 768}  # standard laptop resolution
+
+# --- Capture page-preparation timing (PROMPT-002 Phase 3) ------------------
+#
+# Shared by fetcher.py (settle) and worker/page_prepare.py (scroll and
+# stability waits). Values are the Phase-3 spec's: a 5s initial settle
+# gives heavy JS sites time to land their DOM writes before scrolling
+# starts; the scroll pass is hard-capped so infinite-scroll sites can
+# never stall a capture. Worst-case capture wall clock (60s nav + 5s
+# settle + 10s challenge wait + 20s scroll + 5s stability + 45s
+# screenshot) stays well under the 300s Celery soft time limit.
+SETTLE_MS = 5_000  # post-load pause for late JS DOM writes before scrolling
+MAX_SCROLL_TIME_MS = 20_000  # hard cap on the auto-scroll pass
+SCROLL_STEP_PAUSE_MS = 300  # pause per scroll step for lazy content to fire
+CONTENT_STABLE_TIMEOUT_MS = 5_000  # hard cap on the content-stability wait
+CONTENT_STABLE_POLL_MS = 500  # re-check cadence while waiting for stability
 
 # --- Supplementary init script --------------------------------------------
 #

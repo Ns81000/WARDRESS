@@ -9,6 +9,12 @@ After the page settles, the capture checks for Cloudflare challenge/
 block pages (PROMPT-002 Phase 2): a solvable JS challenge gets a bounded
 wait to auto-solve, and a persistent challenge fails the capture with a
 user-safe error — challenge HTML is never stored as site content.
+
+Once the page is confirmed real (PROMPT-002 Phase 3), it is auto-scrolled
+top-to-bottom so IntersectionObserver/scroll-event lazy content loads,
+then waits for the DOM to stabilize before HTML + screenshot are taken
+(worker/page_prepare.py). Both helpers never raise, so the capture
+failure semantics below are unchanged.
 """
 
 import asyncio
@@ -22,6 +28,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, Route, async_playwright
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
+from worker.page_prepare import auto_scroll_page, wait_for_content_stable
 from worker.stealth import (
     BROWSER_LAUNCH_ARGS,
     CAPTURE_USER_AGENT,
@@ -29,14 +36,15 @@ from worker.stealth import (
     CONTEXT_LOCALE,
     CONTEXT_TIMEZONE_ID,
     CONTEXT_VIEWPORT,
+    MAX_SCROLL_TIME_MS,
+    SETTLE_MS,
     apply_stealth,
 )
 
 logger = logging.getLogger(__name__)
 
-NAV_TIMEOUT_MS = 45_000
-SCREENSHOT_TIMEOUT_MS = 30_000
-SETTLE_MS = 2_000  # post-load pause for late JS DOM writes
+NAV_TIMEOUT_MS = 60_000
+SCREENSHOT_TIMEOUT_MS = 45_000
 MAX_HTML_BYTES = 10 * 1024 * 1024  # refuse absurd pages rather than OOM
 
 
@@ -282,11 +290,12 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                 page.on("response", _track_nav)
                 # wait_until="load" (not "networkidle": Playwright's docs
                 # discourage it, and any page with long-polling/beacons
-                # never goes idle -> guaranteed timeout). A short settle
-                # window lets late JS DOM writes land before capture.
-                # The challenge auto-solve wait is bounded by the remaining
-                # navigation budget (deadline below), so a challenged page
-                # never extends the capture beyond NAV_TIMEOUT_MS + settle.
+                # never goes idle -> guaranteed timeout). A bounded settle
+                # window (stealth.SETTLE_MS) lets late JS DOM writes land
+                # before capture. The challenge auto-solve wait is bounded
+                # by the remaining navigation budget (deadline below), so a
+                # challenged page never extends the capture beyond
+                # NAV_TIMEOUT_MS + settle.
                 challenge_deadline = time.monotonic() + NAV_TIMEOUT_MS / 1000
                 response = await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="load")
                 await page.wait_for_timeout(SETTLE_MS)
@@ -311,6 +320,25 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                     nav_responses,
                     fallback_response=response,
                     deadline=challenge_deadline,
+                )
+
+                # Page confirmed real (PROMPT-002 Phase 3): scroll it so
+                # IntersectionObserver/scroll-event lazy content below the
+                # fold loads, then wait for the DOM to stop churning before
+                # capture. The challenge checks ran ABOVE, on the settled
+                # DOM — a challenge page is never scrolled, and a challenge
+                # that auto-solved via reload left a fresh page for this
+                # pass. Both helpers never raise (a failed scroll must not
+                # fail a capture), and every request the lazy loaders fire
+                # still goes through the SSRF route guard installed above.
+                scroll_evidence = await auto_scroll_page(
+                    page, max_scroll_time_ms=MAX_SCROLL_TIME_MS
+                )
+                stability_evidence = await wait_for_content_stable(page)
+                logger.debug(
+                    "Capture page preparation: scroll=%s stability=%s",
+                    scroll_evidence,
+                    stability_evidence,
                 )
 
                 html = await page.content()

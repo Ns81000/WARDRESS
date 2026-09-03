@@ -49,6 +49,14 @@ Baseline and scan captures run a stealth-hardened headless browser. When a captu
   If a monitored site sits behind persistent bot protection, work with the site owner to allow-list your instance, or use the site's *allow private networks* setting only for genuinely internal targets. A failed capture is always visible on the site detail panel with the reason above.
 </Info>
 
+### Scrolling & Lazy Content
+
+Before a baseline or scan is stored, Wardress auto-scrolls the entire page from top to bottom so content that only appears on scroll — lazy-loaded images, below-fold sections, infinite-feed entries — is included in the captured HTML and screenshot, then waits for the page to stop changing before capturing. This makes captures slower but complete: what Wardress compares is what a real visitor scrolls through.
+
+<Info>
+  If you upgraded Wardress from a version without auto-scrolling, the **first scan** after the update may flag below-fold content as new: baselines captured earlier simply do not contain it. This is a one-time difference that self-heals after the next rebaseline — force a re-baseline from the site detail panel to refresh immediately.
+</Info>
+
 ## Scan Reports
 
 When a scan is completed, a detailed report is generated.
