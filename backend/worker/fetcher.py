@@ -4,16 +4,22 @@ Async API throughout — task bodies run under asyncio.run() in the Celery
 worker. Every fetch re-validates the target against the SSRF policy
 immediately before navigation, and validates the FINAL url after
 redirects (a public site redirecting to an internal address is refused).
+
+After the page settles, the capture checks for Cloudflare challenge/
+block pages (PROMPT-002 Phase 2): a solvable JS challenge gets a bounded
+wait to auto-solve, and a persistent challenge fails the capture with a
+user-safe error — challenge HTML is never stored as site content.
 """
 
 import asyncio
 import ipaddress
 import logging
+import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Route, async_playwright
+from playwright.async_api import Page, Response, Route, async_playwright
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from worker.stealth import (
@@ -46,6 +52,128 @@ class FetchResult:
     final_url: str
     http_status: int | None
     headers: dict[str, str]
+
+
+# --- Cloudflare challenge detection (PROMPT-002 Phase 2) --------------------
+#
+# A challenge page must NEVER be stored as capture content: it would sit on
+# the baseline/scan row as if it were the real site and poison every later
+# comparison. After the page settles we look for Cloudflare's known
+# challenge/block markers; when one is present we wait (bounded by the
+# navigation budget) for the JS challenge to auto-solve for a real browser,
+# re-checking periodically, and fail the capture with a user-safe message
+# if the page is still challenged.
+CHALLENGE_WAIT_MS = 10_000  # max total auto-solve wait
+CHALLENGE_POLL_MS = 1_000  # re-check cadence while waiting
+
+BOT_PROTECTION_ERROR = (
+    "Site is behind bot protection that could not be bypassed "
+    "(Cloudflare challenge detected)"
+)
+
+_CHALLENGE_TITLE_MARKERS = ("just a moment", "attention required")
+_CHALLENGE_MARKER_SELECTOR = ".cf-challenge-running, .cf-error-details"
+
+# DOM probe for the two Cloudflare-specific classes. Class selectors only —
+# never body text, which legitimately mentions these strings on sites that
+# write about (or imitate) challenge pages.
+_CHALLENGE_PROBE_JS = (
+    "() => ({"
+    " title: document.title || '',"
+    f" marker: !!document.querySelector('{_CHALLENGE_MARKER_SELECTOR}'),"
+    "})"
+)
+
+
+def is_challenge_title(title: str | None) -> bool:
+    """True when the page title carries a canonical Cloudflare challenge/
+    block marker. Title-only by design: body text is content."""
+    lowered = (title or "").strip().lower()
+    return any(marker in lowered for marker in _CHALLENGE_TITLE_MARKERS)
+
+
+def looks_like_challenge_page(
+    *,
+    title: str | None = None,
+    has_challenge_marker: bool = False,
+    http_status: int | None = None,
+    headers: dict[str, str] | None = None,
+) -> bool:
+    """OR-combined Cloudflare indicators: canonical challenge title, the
+    cf-challenge-running/cf-error-details classes in the DOM, or a 403
+    response carrying a cf-ray header."""
+    if has_challenge_marker or is_challenge_title(title):
+        return True
+    if http_status == 403 and headers:
+        return "cf-ray" in {k.lower() for k in headers}
+    return False
+
+
+async def _challenge_markers(page: Page) -> dict:
+    """DOM challenge markers for the CURRENT document. Degrades to
+    not-a-challenge on any evaluate failure (page closed or navigating
+    mid-check) — ambiguous detection must never fail the capture."""
+    try:
+        return await page.evaluate(_CHALLENGE_PROBE_JS)
+    except Exception:  # noqa: BLE001 — any evaluate failure is not-a-challenge
+        logger.debug("Challenge marker probe failed", exc_info=True)
+        return {"title": "", "marker": False}
+
+
+def _latest_nav(
+    nav_responses: list[Response], fallback: Response | None
+) -> tuple[int | None, dict[str, str]]:
+    """Status + header map of the most recent main-frame navigation
+    response (the challenge reload makes the goto response stale)."""
+    latest = nav_responses[-1] if nav_responses else fallback
+    if latest is None:
+        return None, {}
+    return latest.status, {k.lower(): v for k, v in latest.headers.items()}
+
+
+async def _wait_out_challenge(
+    page: Page,
+    nav_responses: list[Response],
+    *,
+    fallback_response: Response | None,
+    deadline: float,
+) -> None:
+    """Detect a Cloudflare challenge after the initial settle and wait for
+    it to auto-solve within the navigation budget, re-checking at
+    CHALLENGE_POLL_MS. A persistent challenge raises FetchError — a hard
+    capture failure, never challenge HTML stored as content.
+
+    Every re-check combines the CURRENT document's markers with the latest
+    main-frame response: a challenge that solves reloads the page, and
+    nav_responses then carries the fresh (real-page) response, while the
+    goto fallback only ever serves when response tracking found nothing."""
+    http_status, headers = _latest_nav(nav_responses, fallback_response)
+    markers = await _challenge_markers(page)
+    if not looks_like_challenge_page(
+        title=markers.get("title"),
+        has_challenge_marker=bool(markers.get("marker")),
+        http_status=http_status,
+        headers=headers,
+    ):
+        return
+
+    logger.info("Cloudflare challenge detected; waiting for auto-solve")
+    remaining_ms = min(CHALLENGE_WAIT_MS, int((deadline - time.monotonic()) * 1000))
+    while remaining_ms > 0:
+        await page.wait_for_timeout(min(CHALLENGE_POLL_MS, remaining_ms))
+        markers = await _challenge_markers(page)
+        http_status, headers = _latest_nav(nav_responses, fallback_response)
+        if not looks_like_challenge_page(
+            title=markers.get("title"),
+            has_challenge_marker=bool(markers.get("marker")),
+            http_status=http_status,
+            headers=headers,
+        ):
+            logger.info("Cloudflare challenge cleared during wait")
+            return
+        remaining_ms = min(CHALLENGE_WAIT_MS, int((deadline - time.monotonic()) * 1000))
+
+    raise FetchError(BOT_PROTECTION_ERROR)
 
 
 def _hostnames_differ(url_a: str, url_b: str) -> bool:
@@ -139,10 +267,27 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                 # XHR/fetch, JS-initiated navigations) — not just the top
                 # frame. "**/*" matches all URLs; the handler fails safe.
                 await page.route("**/*", _make_ssrf_route_guard(allow_private_networks))
+                # Track every main-frame navigation response: a challenge that
+                # auto-solves reloads the page, and the capture must record
+                # the REAL response (status/headers), not the challenge's.
+                nav_responses: list[Response] = []
+
+                def _track_nav(resp: Response) -> None:
+                    try:
+                        if resp.request.is_navigation_request() and resp.frame == page.main_frame:
+                            nav_responses.append(resp)
+                    except Exception:  # noqa: BLE001 — tracking must never break a fetch
+                        logger.debug("Navigation-response tracking skipped", exc_info=True)
+
+                page.on("response", _track_nav)
                 # wait_until="load" (not "networkidle": Playwright's docs
                 # discourage it, and any page with long-polling/beacons
                 # never goes idle -> guaranteed timeout). A short settle
                 # window lets late JS DOM writes land before capture.
+                # The challenge auto-solve wait is bounded by the remaining
+                # navigation budget (deadline below), so a challenged page
+                # never extends the capture beyond NAV_TIMEOUT_MS + settle.
+                challenge_deadline = time.monotonic() + NAV_TIMEOUT_MS / 1000
                 response = await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="load")
                 await page.wait_for_timeout(SETTLE_MS)
                 final_url = page.url
@@ -159,6 +304,15 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                         allow_private_networks=allow_private_networks,
                     )
 
+                # Cloudflare challenge page? Wait out a solvable one, or fail
+                # the capture hard (rule: never store challenge HTML).
+                await _wait_out_challenge(
+                    page,
+                    nav_responses,
+                    fallback_response=response,
+                    deadline=challenge_deadline,
+                )
+
                 html = await page.content()
                 if len(html.encode("utf-8", errors="replace")) > MAX_HTML_BYTES:
                     raise FetchError(
@@ -169,13 +323,16 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                     full_page=True, type="png", timeout=SCREENSHOT_TIMEOUT_MS
                 )
 
+                # The latest main-frame response, not goto's: the challenge
+                # reload path re-navigates (403 challenge -> 200 real page).
+                latest = nav_responses[-1] if nav_responses else response
                 headers: dict[str, str] = {}
                 http_status: int | None = None
-                if response is not None:
-                    http_status = response.status
+                if latest is not None:
+                    http_status = latest.status
                     # Keep a curated subset now; layer 6 (Phase 2) captures more.
                     for k in ("content-type", "server", "last-modified", "etag"):
-                        v = response.headers.get(k)
+                        v = latest.headers.get(k)
                         if v is not None:
                             headers[k] = v
 

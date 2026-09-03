@@ -38,19 +38,22 @@ PROBE_TIMEOUT_S = 20.0
 MAX_RAW_BYTES = 5 * 1024 * 1024  # raw UA fetches: cap read size
 MAX_ROBOTS_BYTES = 128 * 1024
 
-# Layer 7 UA rotation (§5): reference + crawler + mobile.
+# Layer 7 UA rotation (§5): reference + crawler + mobile. The Chrome major
+# tracks worker/stealth.py's CAPTURE_USER_AGENT so layer 7's raw-vs-render
+# era stays consistent; refreshed in PROMPT-002 Phase 2 (the previous
+# Chrome/126.0.0.0 strings were ~2 years stale).
 USER_AGENTS: dict[str, str] = {
     "desktop_chrome": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
     ),
     "googlebot": (
         "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; "
-        "Googlebot/2.1; +http://www.google.com/bot.html) Chrome/126.0.0.0 Safari/537.36"
+        "Googlebot/2.1; +http://www.google.com/bot.html) Chrome/152.0.0.0 Safari/537.36"
     ),
     "mobile_safari": (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
-        "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
     ),
 }
 
