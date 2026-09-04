@@ -12,6 +12,7 @@ import pytest
 
 from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, Site
 from worker import scan_tasks
+from worker.detection.pipeline import LAYERS
 from worker.fetcher import FetchError, FetchResult
 from worker.hashing import content_sha256
 from worker.probe import ProbeResult
@@ -323,6 +324,56 @@ async def test_scan_missing_baseline(db_factory, fetch_calls) -> None:
     row = await _get(db_factory, Scan, scan.id)
     assert row.status is ScanStatus.failed
     assert fetch_calls == []
+
+
+async def test_scan_persists_capture_evidence(db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PROMPT-002 Phase 4: the FetchResult's capture evidence is stored on
+    the scan row as-is, and the documented layer_scores contract is
+    untouched by the new column."""
+    evidence = {
+        "scroll_steps": 3,
+        "initial_height": 2000,
+        "final_height": 2000,
+        "capped": False,
+        "scroll_time_ms": 900,
+        "stable": True,
+        "polls": 3,
+        "final_length": 42,
+        "screenshot_capped": False,
+        "actual_height": 2000,
+        "capture_quality": "full",
+    }
+
+    async def evidencing_fetch(
+        url: str, *, allow_private_networks: bool = False
+    ) -> FetchResult:
+        result = _fetch_result()
+        result.capture_evidence = evidence
+        return result
+
+    monkeypatch.setattr(scan_tasks, "fetch_page", evidencing_fetch)
+    site, baseline = await _ready_site_and_baseline(db_factory)
+    scan = await _make_scan(db_factory, site.id, baseline.id)
+
+    assert await scan_tasks._run_scan(scan.id) in ("clean", "changed", "flagged")
+
+    row = await _get(db_factory, Scan, scan.id)
+    assert row.capture_evidence == evidence
+    # layer_scores keeps its per-layer summary shape — capture evidence
+    # must never be stuffed into it (documented contract, models.py).
+    assert set(row.layer_scores) == {key for _, key in LAYERS}
+
+
+async def test_scan_without_capture_evidence_stays_null(db_factory, fetch_calls) -> None:
+    """Backward compatibility at the persistence layer: a fetch result
+    predating the capture_evidence field stores SQL NULL, not a crash."""
+    site, baseline = await _ready_site_and_baseline(db_factory)
+    scan = await _make_scan(db_factory, site.id, baseline.id)
+
+    assert await scan_tasks._run_scan(scan.id) == "clean"
+
+    row = await _get(db_factory, Scan, scan.id)
+    assert row.capture_evidence is None
 
 
 async def test_scan_already_completed_is_idempotent(db_factory, fetch_calls) -> None:

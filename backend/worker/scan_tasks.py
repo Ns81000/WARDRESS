@@ -302,6 +302,12 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
         scan.screenshot_path = shot_rel
         # Compact summary for the scan table; full evidence in findings.
         scan.layer_scores = _summarize_layer_scores(results)
+        # Capture evidence (PROMPT-002 Phase 4): how this capture happened
+        # (scroll/stability/screenshot facts + capture_quality). Debugging
+        # metadata only — nothing in detection reads it, and the per-layer
+        # contract stays with layer_scores above. None on results that
+        # predate the field — stored as-is (SQL NULL), never crash.
+        scan.capture_evidence = result.capture_evidence
         scan.risk_score = risk
         if flagged:
             scan.verdict = ScanVerdict.flagged

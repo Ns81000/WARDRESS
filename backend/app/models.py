@@ -472,6 +472,11 @@ class Scan(Base):
     # failures (channel dark) as distinct from structural gate skips; the
     # site-detail and health degradation aggregates read it.
     layer_scores: Mapped[dict | None] = mapped_column(default=None)
+    # Capture-side evidence (PROMPT-002 Phase 4): how this scan's page was
+    # captured — scroll/stability/screenshot-cap facts plus the
+    # informational capture_quality label. Debugging metadata only; the
+    # per-layer detection contract above stays layer_scores' alone.
+    capture_evidence: Mapped[dict | None] = mapped_column(default=None)
     # Fused risk score from layer 9 (0-1). Own indexed column — the
     # dashboard filters and thresholds on it (never buried in JSON).
     risk_score: Mapped[float | None] = mapped_column(Float, default=None, index=True)

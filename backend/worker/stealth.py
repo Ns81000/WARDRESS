@@ -21,6 +21,8 @@ browser:
   `CONTENT_STABLE_POLL_MS`) — the capture's timing shape lives here too
   (PROMPT-002 Phase 3), so later capture phases extend this module
   rather than re-inlining timing constants in fetcher.py.
+- Screenshot shape (`MAX_SCREENSHOT_HEIGHT`, PROMPT-002 Phase 4) — the
+  height at which a full-page raster is capped to keep the PNG valid.
 
 Graceful degradation: if `playwright-stealth` is not installed (dev
 environments), `apply_stealth` logs a warning and returns — the capture
@@ -77,6 +79,18 @@ MAX_SCROLL_TIME_MS = 20_000  # hard cap on the auto-scroll pass
 SCROLL_STEP_PAUSE_MS = 300  # pause per scroll step for lazy content to fire
 CONTENT_STABLE_TIMEOUT_MS = 5_000  # hard cap on the content-stability wait
 CONTENT_STABLE_POLL_MS = 500  # re-check cadence while waiting for stability
+
+# --- Screenshot shape (PROMPT-002 Phase 4) ---------------------------------
+#
+# Chromium's full-page raster fails or produces a corrupt image beyond
+# ~16384px on many GPUs (texture/tile limits), and an auto-scroll walk
+# that hits its time cap on an infinite-scroll site can leave the document
+# far taller than that. Pages taller than MAX_SCREENSHOT_HEIGHT are
+# captured as a clip of the document's top MAX_SCREENSHOT_HEIGHT pixels —
+# a shorter but still-valid PNG, so the visual-diff layer only sees a
+# truncated page.
+MAX_SCREENSHOT_HEIGHT = 16_384
+
 
 # --- Supplementary init script --------------------------------------------
 #

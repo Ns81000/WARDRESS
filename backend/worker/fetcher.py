@@ -15,6 +15,13 @@ top-to-bottom so IntersectionObserver/scroll-event lazy content loads,
 then waits for the DOM to stabilize before HTML + screenshot are taken
 (worker/page_prepare.py). Both helpers never raise, so the capture
 failure semantics below are unchanged.
+
+The screenshot is height-capped (PROMPT-002 Phase 4): pages taller than
+stealth.MAX_SCREENSHOT_HEIGHT rasterize as a clip of the document's top
+MAX_SCREENSHOT_HEIGHT pixels — a shorter but still-valid PNG. Every
+capture also returns structured `capture_evidence` (scroll/stability/
+screenshot facts plus the informational `capture_quality` label),
+persisted on the scan row by worker/scan_tasks.py.
 """
 
 import asyncio
@@ -36,6 +43,7 @@ from worker.stealth import (
     CONTEXT_LOCALE,
     CONTEXT_TIMEZONE_ID,
     CONTEXT_VIEWPORT,
+    MAX_SCREENSHOT_HEIGHT,
     MAX_SCROLL_TIME_MS,
     SETTLE_MS,
     apply_stealth,
@@ -60,6 +68,11 @@ class FetchResult:
     final_url: str
     http_status: int | None
     headers: dict[str, str]
+    # How the capture happened (PROMPT-002 Phase 4): scroll/stability/
+    # screenshot evidence plus the informational capture_quality label.
+    # None on results from before this field existed — consumers must
+    # treat absence as "unknown", never crash on it.
+    capture_evidence: dict | None = None
 
 
 # --- Cloudflare challenge detection (PROMPT-002 Phase 2) --------------------
@@ -244,6 +257,82 @@ def _make_ssrf_route_guard(allow_private_networks: bool):
     return _handler
 
 
+# --- Screenshot height cap + capture evidence (PROMPT-002 Phase 4) ----------
+
+_PAGE_HEIGHT_JS = (
+    "() => Math.max("
+    "document.body ? document.body.scrollHeight : 0,"
+    " document.documentElement ? document.documentElement.scrollHeight : 0)"
+)
+
+
+def _classify_capture_quality(evidence: dict) -> str:
+    """`full` / `partial` / `degraded` health label for a completed capture.
+
+    - full: scroll completed, content stable, screenshot not capped.
+    - partial: the capture completed but is incomplete — the scroll pass
+      hit its time cap (unwalked content may remain), the content never
+      stabilized, or the screenshot was height-capped.
+    - degraded: a critical capture step failed yet the capture completed —
+      here, the page height could not be measured, so the screenshot-cap
+      decision (and the capture's completeness) is unknown.
+
+    Informational only: no detection code reads it — it rides inside
+    capture_evidence for debugging and operator tooling.
+    """
+    if evidence.get("actual_height", 0) <= 0:
+        return "degraded"
+    if (
+        evidence.get("capped")
+        or evidence.get("screenshot_capped")
+        or not evidence.get("stable", False)
+    ):
+        return "partial"
+    return "full"
+
+
+async def _take_screenshot(page: Page) -> tuple[bytes, dict]:
+    """Full-page PNG with a height cap; returns (png, evidence).
+
+    Chromium's full-page raster fails or produces a corrupt image beyond
+    ~16384px on many GPUs, and a time-capped scroll walk can leave an
+    infinite-scroll page far taller than that. Pages taller than
+    stealth.MAX_SCREENSHOT_HEIGHT are captured as a clip of the document's
+    top MAX_SCREENSHOT_HEIGHT pixels — a shorter but still-valid PNG, so
+    the visual-diff layer only sees a truncated page. The clip runs under
+    full_page=True because clip coordinates are PAGE coordinates there:
+    verified against Playwright 1.61, full_page=False + clip clamps the
+    result to the current viewport instead of the requested region.
+
+    The height probe never fails the capture: a probe error records
+    actual_height=0 (capture_quality "degraded") and takes the normal
+    full-page screenshot. Screenshot failures themselves still propagate —
+    a capture without a screenshot is a failed capture, unchanged.
+    """
+    evidence: dict = {"screenshot_capped": False, "actual_height": 0}
+    try:
+        page_height = int(await page.evaluate(_PAGE_HEIGHT_JS) or 0)
+    except Exception:  # noqa: BLE001 — evidence gathering must not fail a capture
+        logger.debug("Page-height probe failed; height cap not applied", exc_info=True)
+        page_height = 0
+    evidence["actual_height"] = page_height
+
+    if page_height > MAX_SCREENSHOT_HEIGHT:
+        viewport_width = (page.viewport_size or {}).get("width") or CONTEXT_VIEWPORT["width"]
+        screenshot = await page.screenshot(
+            full_page=True,
+            clip={"x": 0, "y": 0, "width": viewport_width, "height": MAX_SCREENSHOT_HEIGHT},
+            type="png",
+            timeout=SCREENSHOT_TIMEOUT_MS,
+        )
+        evidence["screenshot_capped"] = True
+        return screenshot, evidence
+    return (
+        await page.screenshot(full_page=True, type="png", timeout=SCREENSHOT_TIMEOUT_MS),
+        evidence,
+    )
+
+
 async def fetch_page(url: str, *, allow_private_networks: bool = False) -> FetchResult:
     # DNS resolution is blocking — offload like the route guard below
     # (Finding: sync assert_url_allowed inside async functions).
@@ -347,9 +436,7 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                         f"Page HTML exceeds the {MAX_HTML_BYTES // (1024 * 1024)} MB limit"
                     )
 
-                screenshot = await page.screenshot(
-                    full_page=True, type="png", timeout=SCREENSHOT_TIMEOUT_MS
-                )
+                screenshot, screenshot_evidence = await _take_screenshot(page)
 
                 # The latest main-frame response, not goto's: the challenge
                 # reload path re-navigates (403 challenge -> 200 real page).
@@ -364,12 +451,26 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                         if v is not None:
                             headers[k] = v
 
+                # Structured capture evidence (PROMPT-002 Phase 4): the
+                # scroll/stability facts the helpers returned, the screenshot
+                # cap decision, and the informational health label. Debugging
+                # metadata only — nothing in detection reads it.
+                capture_evidence = {
+                    **scroll_evidence,
+                    **stability_evidence,
+                    **screenshot_evidence,
+                    "capture_quality": _classify_capture_quality(
+                        {**scroll_evidence, **stability_evidence, **screenshot_evidence}
+                    ),
+                }
+
                 return FetchResult(
                     html=html,
                     screenshot=screenshot,
                     final_url=final_url,
                     http_status=http_status,
                     headers=headers,
+                    capture_evidence=capture_evidence,
                 )
             finally:
                 await browser.close()
