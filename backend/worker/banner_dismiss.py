@@ -35,7 +35,7 @@ Contracts (mirroring worker/page_prepare.py):
 import logging
 import time
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 from playwright.async_api import BrowserContext, ElementHandle, Page
 
@@ -77,6 +77,19 @@ def _cookiebot_value() -> str:
     )
 
 
+def _onetrust_consent_value() -> str:
+    """OneTrust's OptanonConsent record. The datestamp mirrors the real
+    CMP's `Wkd Mon DD YYYY HH:MM:SS GMT:0000` shape but is stamped at
+    runtime (URL-encoded: spaces as `+`, colons as `%3A`) like the
+    sibling OptanonAlertBoxClosed value."""
+    now = datetime.now(UTC)
+    datestamp = quote_plus(f"{now:%a} {now:%b} {now.day:02d} {now.year} {now:%H:%M:%S} GMT:0000")
+    return (
+        f"isGpcEnabled=0&datestamp={datestamp}"
+        "&version=202401.1.0&hosts=&consentIds=&interactionCount=1"
+    )
+
+
 CONSENT_COOKIES: list[dict] = [
     # OneTrust — "often Secure" (the spec's named case): only set on https.
     {
@@ -86,10 +99,7 @@ CONSENT_COOKIES: list[dict] = [
     },
     {
         "name": "OptanonConsent",
-        "value": (
-            "isGpcEnabled=0&datestamp=Mon+Jan+01+2024+00%3A00%3A00+GMT%3A0000"
-            "&version=202401.1.0&hosts=&consentIds=&interactionCount=1"
-        ),
+        "value_fn": _onetrust_consent_value,
         "secure_when_https": True,
     },
     # Cookiebot (Usercentrics Cookiebot)

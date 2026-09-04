@@ -382,7 +382,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
    The function:
    - Scrolls the page from current position to the bottom in steps of `window.innerHeight * 0.8` (80% viewport height — ensures overlap for IntersectionObserver trigger)
    - At each step: `window.scrollBy(0, step)`, then wait `step_pause_ms` for lazy content to trigger
-   - Monitors `document.body.scrollHeight` — if it stops growing for 2 consecutive steps, the page has fully loaded
+   - Monitors `document.body.scrollHeight` — the page counts as fully loaded only when scrolling has reached the bottom (or provably cannot scroll further — `scroll_y` stalled with no height growth) AND the height has stopped growing for 2 consecutive steps. (Spec correction post-Phase-3: a height-only check stops a STATIC tall page mid-scroll, because its height never grows and the stability check fires on step 2. The shipped `page_prepare.py::auto_scroll_page` requires at-bottom/unscrollable AND stable.)
    - **Hard time cap**: stops after `max_scroll_time_ms` regardless (protects against infinite-scroll sites that never stop growing)
    - After reaching bottom, scrolls back to top (`window.scrollTo(0, 0)`) — the screenshot should capture from the top
    - Returns evidence dict: `{"scroll_steps": N, "initial_height": H0, "final_height": H1, "capped": bool, "scroll_time_ms": T}`
@@ -412,6 +412,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
    ```
    response = await page.goto(url, ...)
    await page.wait_for_timeout(SETTLE_MS)          # initial settle (now 5s)
+   await _wait_out_challenge(page, ...)            # Phase 2 challenge gate — BEFORE scrolling
    scroll_evidence = await auto_scroll_page(page, max_scroll_time_ms=20_000)
    stability_evidence = await wait_for_content_stable(page, timeout_ms=5_000)
    html = await page.content()
@@ -464,7 +465,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 1. **Screenshot height cap** — add a safety limit on screenshot height:
    - After scrolling, very tall pages (infinite scroll that hit the time cap) could be 50,000+ pixels tall
    - Cap screenshot height at `MAX_SCREENSHOT_HEIGHT = 16_384` pixels (16K — well beyond any reasonable page, but prevents OOM on truly infinite pages)
-   - If the page is taller, use `page.screenshot(full_page=False, clip={"x": 0, "y": 0, "width": viewport_width, "height": MAX_SCREENSHOT_HEIGHT})` instead
+   - If the page is taller, use `page.screenshot(full_page=True, clip={"x": 0, "y": 0, "width": viewport_width, "height": MAX_SCREENSHOT_HEIGHT})` instead. (Spec correction post-Phase-4: the originally specified `full_page=False` + clip silently clamps the result to the current viewport under Playwright 1.61.0 — probed live in the worker container: 1366×768 instead of 1366×16384 — destroying below-fold content; clip coordinates are PAGE coordinates only under `full_page=True`. See `fetcher.py::_take_screenshot` and `tests/test_screenshot_cap.py`.)
    - Record this in the evidence: `"screenshot_capped": true, "actual_height": H`
 
 2. **Store scroll/stability evidence** — add fields to `FetchResult`:
@@ -575,6 +576,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
    page.route("**/*", ssrf_guard)                       # SSRF — always last before nav
    response = await page.goto(url, ...)
    await page.wait_for_timeout(SETTLE_MS)
+   await _wait_out_challenge(page, ...)                 # Phase 2 gate — a challenge page is never clicked or scrolled
    banner_evidence = await dismiss_banners(page)        # Phase 5
    scroll_evidence = await auto_scroll_page(page, ...)  # Phase 3
    stability = await wait_for_content_stable(page, ...) # Phase 3
@@ -631,7 +633,7 @@ Implement an incremental auto-scroll function that scrolls the page from top to 
 **Edge cases:**
 - **Retry must not double-count the capture** — on retry, clear the previous attempt's partial state
 - **The SSRF route guard must survive across retries** — it's per-page, so a new page on retry gets its own guard
-- **Retry must stay inside the Celery soft-limit budget — a DECIDED constraint, not a verify step.** Worst case with Phase 3's constants: attempt 1 consumes its full slow path (60s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 135s) + 3s pause + retry at `RETRY_NAV_TIMEOUT_MS` (30s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 105s) ≈ 243s, then `probe_site` (~20s, runs after `fetch_page` in `scan_tasks.py`) ≈ **263s < 300s soft limit**. Trace `_run_scan` end-to-end to confirm; if any path exceeds 300s, RAISE the limits in `worker/celery_app.py` (300/360s today) and sync `docs/` per Rule 13 — do not ship a budget that can SoftTimeLimitExceed mid-capture.
+- **Retry must stay inside the Celery soft-limit budget — a DECIDED constraint, not a verify step.** Worst case with Phase 3's constants: attempt 1 consumes its full slow path (60s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 135s) + 3s pause + retry at `RETRY_NAV_TIMEOUT_MS` (30s nav + 5s settle + 20s scroll + 5s stability + 45s shot ≈ 105s) ≈ 243s of capture. The probe is NOT a flat ~20s: `probe_site`'s four httpx requests each carry the full `PROBE_TIMEOUT_S` (20s) and time out SEQUENTIALLY (~90s worst), and detection adds ~30s worst — honest total ≈ **384s**, which is why Phase 6 RAISED the Celery limits in `worker/celery_app.py` to **420 soft / 480 hard** (was 300/360), still well under the 600s stale-in-flight cutoff (`STALE_INFLIGHT = 10 min`) the API and Beat dispatcher use in `app/scanning.py`. Trace `_run_scan` end-to-end when touching capture timing; do not ship a budget that can SoftTimeLimitExceed mid-capture. (Budget arithmetic corrected post-Phase-6 — the original ≈263s estimate undercounted the sequential probe timeouts and omitted detection.)
 - **Concurrent retries** — each scan task's retry is independent; no shared retry state between tasks
 
 **Test obligations:**

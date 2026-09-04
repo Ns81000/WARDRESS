@@ -14,8 +14,8 @@ capture takes its HTML + screenshot.
 Contracts:
 - Neither function EVER raises: a failed scroll must never fail a
   capture, which proceeds with whatever content is available.
-- Both return evidence dicts (logged by fetcher.py now; Phase 4 will
-  persist them as capture evidence).
+- Both return evidence dicts (logged by fetcher.py and persisted as
+  capture evidence on the scan row — worker/scan_tasks.py).
 - No network policy here: every request the page makes while scrolling
   (lazy images, XHR) goes through the SSRF route guard the caller
   installed — scrolling itself only calls scrollBy/scrollTo, never
