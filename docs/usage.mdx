@@ -57,6 +57,14 @@ Before a baseline or scan is stored, Wardress auto-scrolls the entire page from 
   If you upgraded Wardress from a version without auto-scrolling, the **first scan** after the update may flag below-fold content as new: baselines captured earlier simply do not contain it. This is a one-time difference that self-heals after the next rebaseline — force a re-baseline from the site detail panel to refresh immediately.
 </Info>
 
+### Consent & Cookie Banners
+
+Captures use a fresh browser with no stored cookies, so many sites greet every capture with a first-visit consent banner — which would otherwise obscure content in the screenshot, block scrolling, and inject changing elements into the DOM. Wardress suppresses these banners two ways: before navigation it injects the well-known consent-management-platform cookies (OneTrust, Cookiebot, CookieYes, IAB TCF v2, and others), and if a banner still appears it clicks a known accept/dismiss control from a curated list before scrolling. Dismissal is best-effort — a banner Wardress cannot recognize is captured as-is, and dismissal never fails a capture.
+
+<Info>
+  If you upgraded Wardress from a version without banner dismissal, the **first scan** after the update may flag the now-missing banner elements as a change: baselines captured earlier contain the banner. This is a one-time difference that self-heals after the next rebaseline — force a re-baseline from the site detail panel to refresh immediately.
+</Info>
+
 ## Scan Reports
 
 When a scan is completed, a detailed report is generated.

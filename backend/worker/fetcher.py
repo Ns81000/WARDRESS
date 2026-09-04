@@ -22,6 +22,13 @@ MAX_SCREENSHOT_HEIGHT pixels — a shorter but still-valid PNG. Every
 capture also returns structured `capture_evidence` (scroll/stability/
 screenshot facts plus the informational `capture_quality` label),
 persisted on the scan row by worker/scan_tasks.py.
+
+Consent banners are suppressed (PROMPT-002 Phase 5): the common CMP
+consent cookies are injected on the context before navigation, and —
+once the page is confirmed real, before scrolling — a curated selector
+pass clicks the first visible accept/dismiss control
+(worker/banner_dismiss.py). Both helpers never raise; banner evidence
+rides inside capture_evidence but does not affect capture_quality.
 """
 
 import asyncio
@@ -35,8 +42,10 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, Route, async_playwright
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
+from worker.banner_dismiss import dismiss_banners, inject_consent_cookies
 from worker.page_prepare import auto_scroll_page, wait_for_content_stable
 from worker.stealth import (
+    BANNER_DISMISS_TIMEOUT_MS,
     BROWSER_LAUNCH_ARGS,
     CAPTURE_USER_AGENT,
     CONTEXT_COLOR_SCHEME,
@@ -359,6 +368,11 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                 # BEFORE the route guard: the guard must be the last word on
                 # every request the stealthed page makes (PROMPT-002 rule 11).
                 await apply_stealth(context)
+                # Consent cookies BEFORE navigation (PROMPT-002 Phase 5):
+                # sites that check cookies first never render their
+                # banner. Context-level state — no request path, never
+                # raises, and the route guard below stays the last word.
+                await inject_consent_cookies(context, url)
                 page = await context.new_page()
                 # SSRF-validate every request the page makes (subresources,
                 # XHR/fetch, JS-initiated navigations) — not just the top
@@ -411,6 +425,19 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
                     deadline=challenge_deadline,
                 )
 
+                # Consent banner click-dismissal (PROMPT-002 Phase 5) —
+                # AFTER the challenge gate (a challenge page must never
+                # have its buttons clicked; an auto-solved challenge
+                # reloads the real page before we get here) and BEFORE
+                # scrolling (a full-page overlay would block the lazy
+                # loaders). Page-level interaction only: every request
+                # the page makes still flows through the route guard
+                # installed above. Never raises; dismiss_banners returns
+                # {"dismissed", "selector", "attempts"}.
+                banner_evidence = await dismiss_banners(
+                    page, timeout_ms=BANNER_DISMISS_TIMEOUT_MS
+                )
+
                 # Page confirmed real (PROMPT-002 Phase 3): scroll it so
                 # IntersectionObserver/scroll-event lazy content below the
                 # fold loads, then wait for the DOM to stop churning before
@@ -453,12 +480,18 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
 
                 # Structured capture evidence (PROMPT-002 Phase 4): the
                 # scroll/stability facts the helpers returned, the screenshot
-                # cap decision, and the informational health label. Debugging
-                # metadata only — nothing in detection reads it.
+                # cap decision, and the informational health label. Phase 5
+                # merges the banner facts in; they deliberately do NOT feed
+                # capture_quality — that label grades capture mechanics
+                # (scroll/stability/screenshot), not the site's presentation
+                # (a banner Wardress could not dismiss is site content, not
+                # a capture failure). Debugging metadata only — nothing in
+                # detection reads it.
                 capture_evidence = {
                     **scroll_evidence,
                     **stability_evidence,
                     **screenshot_evidence,
+                    **banner_evidence,
                     "capture_quality": _classify_capture_quality(
                         {**scroll_evidence, **stability_evidence, **screenshot_evidence}
                     ),

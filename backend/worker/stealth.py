@@ -23,6 +23,9 @@ browser:
   rather than re-inlining timing constants in fetcher.py.
 - Screenshot shape (`MAX_SCREENSHOT_HEIGHT`, PROMPT-002 Phase 4) — the
   height at which a full-page raster is capped to keep the PNG valid.
+- Banner-dismissal timing (`BANNER_DISMISS_TIMEOUT_MS`, PROMPT-002
+  Phase 5) — the total budget `worker/banner_dismiss.py` spends trying
+  to click a consent banner before the capture proceeds as-is.
 
 Graceful degradation: if `playwright-stealth` is not installed (dev
 environments), `apply_stealth` logs a warning and returns — the capture
@@ -90,6 +93,18 @@ CONTENT_STABLE_POLL_MS = 500  # re-check cadence while waiting for stability
 # a shorter but still-valid PNG, so the visual-diff layer only sees a
 # truncated page.
 MAX_SCREENSHOT_HEIGHT = 16_384
+
+# --- Banner dismissal (PROMPT-002 Phase 5) ----------------------------------
+#
+# Total budget worker/banner_dismiss.py.dismiss_banners() may spend trying
+# to click a consent banner (an instant pass over the DOM first, then one
+# bounded wait for a late-rendering banner). Best-effort by design: when
+# the budget expires with nothing clicked, the capture proceeds with the
+# banner visible rather than failing. Worst-case capture wall clock grows
+# by this budget (60s nav + 5s settle + 10s challenge + 3s banners + 20s
+# scroll + 5s stability + 45s screenshot) and stays well under the 300s
+# Celery soft time limit.
+BANNER_DISMISS_TIMEOUT_MS = 3_000
 
 
 # --- Supplementary init script --------------------------------------------
