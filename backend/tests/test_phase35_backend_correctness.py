@@ -380,12 +380,17 @@ class TestWorkerChecksOffloaded:
             await guard(response)
 
     async def test_fetch_page_both_checks_offloaded(self, monkeypatch) -> None:
-        """Both direct checks inside fetch_page run via `await
+        """Both direct SSRF checks in the capture flow run via `await
         asyncio.to_thread(...)` — pinned at the seam level plus behavioral
-        proof that a refusal raises before Playwright ever launches."""
+        proof that a refusal raises before Playwright ever launches. Since
+        Phase 6 the flow spans fetch_page (top-level gate) and
+        _capture_attempt (final-URL recheck), so the seam is pinned across
+        both functions' sources."""
         import worker.fetcher as fetcher_mod
 
-        src = inspect.getsource(fetcher_mod.fetch_page)
+        src = inspect.getsource(fetcher_mod.fetch_page) + inspect.getsource(
+            fetcher_mod._capture_attempt
+        )
         assert src.count("await asyncio.to_thread(") >= 2, src
 
         calls: list = []

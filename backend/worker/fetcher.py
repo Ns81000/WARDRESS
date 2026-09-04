@@ -29,6 +29,16 @@ once the page is confirmed real, before scrolling — a curated selector
 pass clicks the first visible accept/dismiss control
 (worker/banner_dismiss.py). Both helpers never raise; banner evidence
 rides inside capture_evidence but does not affect capture_quality.
+
+Transient capture failures are retried (PROMPT-002 Phase 6): a
+navigation timeout or network-level goto error gets ONE retry after a
+short pause, at a reduced navigation timeout, and a challenge that did
+not auto-solve gets ONE retry with a longer wait. SSRF refusals and
+permanent fetch failures are never retried — they are decisions, not
+transient errors. Every attempt builds a fresh browser/context/page
+with its own stealth patches, consent cookies and SSRF route guard;
+nothing from a failed attempt survives except the retry count, which
+rides in capture_evidence.
 """
 
 import asyncio
@@ -40,6 +50,7 @@ from urllib.parse import urlparse
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, Route, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from worker.banner_dismiss import dismiss_banners, inject_consent_cookies
@@ -54,6 +65,8 @@ from worker.stealth import (
     CONTEXT_VIEWPORT,
     MAX_SCREENSHOT_HEIGHT,
     MAX_SCROLL_TIME_MS,
+    RETRY_NAV_TIMEOUT_MS,
+    RETRY_PAUSE_MS,
     SETTLE_MS,
     apply_stealth,
 )
@@ -95,11 +108,51 @@ class FetchResult:
 # if the page is still challenged.
 CHALLENGE_WAIT_MS = 10_000  # max total auto-solve wait
 CHALLENGE_POLL_MS = 1_000  # re-check cadence while waiting
+# PROMPT-002 Phase 6: an unsolved challenge gets ONE retry with a longer
+# wait. Lives beside CHALLENGE_WAIT_MS (the Phase-2 challenge-timing
+# family), not in worker/stealth.py's page-preparation section.
+CHALLENGE_RETRY_WAIT_MS = 15_000
 
 BOT_PROTECTION_ERROR = (
     "Site is behind bot protection that could not be bypassed "
     "(Cloudflare challenge detected)"
 )
+
+
+class _ChallengeUnsolvedError(FetchError):
+    """A challenge was detected and did not auto-solve within the wait
+    window. Is-a FetchError with the user-safe BOT_PROTECTION_ERROR
+    message (the public contract is unchanged); the subclass exists so
+    the Phase-6 retry loop can tell this retryable failure apart from
+    permanent FetchErrors."""
+
+
+class _TransientNavError(Exception):
+    """A page.goto failure classified as TRANSIENT (navigation timeout or
+    network-level error) — eligible for the Phase-6 retry. Carries the
+    short human-readable reason; the original Playwright error is the
+    __cause__."""
+
+
+def _classify_goto_failure(exc: PlaywrightError) -> str | None:
+    """Transient classification for a failed page.goto: a short human
+    reason when the failure is retryable, None when it is not.
+
+    Retryable: navigation timeouts and network-level net::ERR_* errors
+    (DNS blips, refused/reset connections) — the transient failures the
+    Phase-6 spec names. NOT retryable: net::ERR_BLOCKED_BY_CLIENT (the
+    SSRF route guard's denial — a policy decision, never retried) and
+    anything unclassifiable (retrying an unknown failure shape doubles
+    the cost of permanent breakage for no expected gain).
+    """
+    first_line = str(exc).splitlines()[0].lower()
+    if "err_blocked_by_client" in first_line or "blockedbyclient" in first_line:
+        return None
+    if isinstance(exc, PlaywrightTimeoutError):
+        return "navigation timeout"
+    if "net::err_" in first_line:
+        return "network error"
+    return None
 
 _CHALLENGE_TITLE_MARKERS = ("just a moment", "attention required")
 _CHALLENGE_MARKER_SELECTOR = ".cf-challenge-running, .cf-error-details"
@@ -167,11 +220,14 @@ async def _wait_out_challenge(
     *,
     fallback_response: Response | None,
     deadline: float,
+    wait_ms: int = CHALLENGE_WAIT_MS,
 ) -> None:
     """Detect a Cloudflare challenge after the initial settle and wait for
-    it to auto-solve within the navigation budget, re-checking at
-    CHALLENGE_POLL_MS. A persistent challenge raises FetchError — a hard
-    capture failure, never challenge HTML stored as content.
+    it to auto-solve within `wait_ms` (bounded by the navigation budget
+    deadline), re-checking at CHALLENGE_POLL_MS. A persistent challenge
+    raises _ChallengeUnsolvedError (is-a FetchError) — a hard capture
+    failure, never challenge HTML stored as content. Phase 6 passes the
+    longer CHALLENGE_RETRY_WAIT_MS on the challenge retry.
 
     Every re-check combines the CURRENT document's markers with the latest
     main-frame response: a challenge that solves reloads the page, and
@@ -188,7 +244,7 @@ async def _wait_out_challenge(
         return
 
     logger.info("Cloudflare challenge detected; waiting for auto-solve")
-    remaining_ms = min(CHALLENGE_WAIT_MS, int((deadline - time.monotonic()) * 1000))
+    remaining_ms = min(wait_ms, int((deadline - time.monotonic()) * 1000))
     while remaining_ms > 0:
         await page.wait_for_timeout(min(CHALLENGE_POLL_MS, remaining_ms))
         markers = await _challenge_markers(page)
@@ -201,9 +257,9 @@ async def _wait_out_challenge(
         ):
             logger.info("Cloudflare challenge cleared during wait")
             return
-        remaining_ms = min(CHALLENGE_WAIT_MS, int((deadline - time.monotonic()) * 1000))
+        remaining_ms = min(wait_ms, int((deadline - time.monotonic()) * 1000))
 
-    raise FetchError(BOT_PROTECTION_ERROR)
+    raise _ChallengeUnsolvedError(BOT_PROTECTION_ERROR)
 
 
 def _hostnames_differ(url_a: str, url_b: str) -> bool:
@@ -343,170 +399,72 @@ async def _take_screenshot(page: Page) -> tuple[bytes, dict]:
 
 
 async def fetch_page(url: str, *, allow_private_networks: bool = False) -> FetchResult:
+    """Capture `url` (HTML + screenshot + evidence), retrying TRANSIENT
+    failures once (PROMPT-002 Phase 6).
+
+    Never retried: SSRF refusals (the top-level gate here, route-guard
+    denials, the final-URL recheck — policy decisions) and permanent
+    FetchErrors (HTML over budget, anything unclassifiable). Retried
+    exactly once, then failed: a goto timeout / network error (after a
+    RETRY_PAUSE_MS pause, at the reduced RETRY_NAV_TIMEOUT_MS) and a
+    challenge that did not auto-solve (with the longer
+    CHALLENGE_RETRY_WAIT_MS). Each attempt is a completely fresh
+    browser/context/page; the successful attempt's capture_evidence
+    records how many retries preceded it.
+    """
     # DNS resolution is blocking — offload like the route guard below
-    # (Finding: sync assert_url_allowed inside async functions).
-    await asyncio.to_thread(assert_url_allowed, url, allow_private_networks=allow_private_networks)
+    # (Finding: sync assert_url_allowed inside async functions). The
+    # top-level SSRF gate runs before ANY browser work and is never
+    # retried: a refusal is a policy decision, not a transient error.
+    await asyncio.to_thread(
+        assert_url_allowed, url, allow_private_networks=allow_private_networks
+    )
 
+    retry_count = 0
+    nav_timeout_ms = NAV_TIMEOUT_MS
+    challenge_wait_ms = CHALLENGE_WAIT_MS
     try:
-        async with async_playwright() as pw:
-            # Blink's AutomationControlled feature is the single loudest
-            # "this is a bot" signal Chromium ships; disable it at launch
-            # (worker/stealth.py owns the capture's browser shape).
-            browser = await pw.chromium.launch(
-                headless=True, args=BROWSER_LAUNCH_ARGS
-            )
+        for attempt in (1, 2):
             try:
-                context = await browser.new_context(
-                    user_agent=CAPTURE_USER_AGENT,
-                    locale=CONTEXT_LOCALE,
-                    timezone_id=CONTEXT_TIMEZONE_ID,
-                    color_scheme=CONTEXT_COLOR_SCHEME,
-                    viewport=CONTEXT_VIEWPORT,
-                    ignore_https_errors=False,
+                return await _capture_attempt(
+                    url,
+                    allow_private_networks=allow_private_networks,
+                    nav_timeout_ms=nav_timeout_ms,
+                    challenge_wait_ms=challenge_wait_ms,
+                    retry_count=retry_count,
                 )
-                # Stealth patches (init scripts) BEFORE any page exists and
-                # BEFORE the route guard: the guard must be the last word on
-                # every request the stealthed page makes (PROMPT-002 rule 11).
-                await apply_stealth(context)
-                # Consent cookies BEFORE navigation (PROMPT-002 Phase 5):
-                # sites that check cookies first never render their
-                # banner. Context-level state — no request path, never
-                # raises, and the route guard below stays the last word.
-                await inject_consent_cookies(context, url)
-                page = await context.new_page()
-                # SSRF-validate every request the page makes (subresources,
-                # XHR/fetch, JS-initiated navigations) — not just the top
-                # frame. "**/*" matches all URLs; the handler fails safe.
-                await page.route("**/*", _make_ssrf_route_guard(allow_private_networks))
-                # Track every main-frame navigation response: a challenge that
-                # auto-solves reloads the page, and the capture must record
-                # the REAL response (status/headers), not the challenge's.
-                nav_responses: list[Response] = []
+            except _TransientNavError as exc:
+                if attempt == 2:
+                    raise FetchError(f"Fetch failed: {exc}") from exc
+                reason = f"transient navigation failure ({exc})"
+                nav_timeout_ms = RETRY_NAV_TIMEOUT_MS
+            except _ChallengeUnsolvedError:
+                if attempt == 2:
+                    raise
+                reason = "Cloudflare challenge did not auto-solve within the wait window"
+                nav_timeout_ms = RETRY_NAV_TIMEOUT_MS
+                challenge_wait_ms = CHALLENGE_RETRY_WAIT_MS
+            except FetchError:
+                # Any other FetchError is permanent — never retried.
+                raise
 
-                def _track_nav(resp: Response) -> None:
-                    try:
-                        if resp.request.is_navigation_request() and resp.frame == page.main_frame:
-                            nav_responses.append(resp)
-                    except Exception:  # noqa: BLE001 — tracking must never break a fetch
-                        logger.debug("Navigation-response tracking skipped", exc_info=True)
+            # Only reachable when a retry was decided above. Everything
+            # attempt-specific lives inside _capture_attempt (fresh
+            # browser/context/page, route guard, consent cookies, evidence
+            # dicts) — nothing from the failed attempt survives except this
+            # loop's bookkeeping, so a retry can never double-count the
+            # previous attempt's partial state.
+            retry_count = 1
+            logger.warning(
+                "Capture attempt %d/2 for %s failed (%s); retrying once after %ds pause",
+                attempt,
+                url,
+                reason,
+                RETRY_PAUSE_MS // 1000,
+            )
+            await asyncio.sleep(RETRY_PAUSE_MS / 1000)
 
-                page.on("response", _track_nav)
-                # wait_until="load" (not "networkidle": Playwright's docs
-                # discourage it, and any page with long-polling/beacons
-                # never goes idle -> guaranteed timeout). A bounded settle
-                # window (stealth.SETTLE_MS) lets late JS DOM writes land
-                # before capture. The challenge auto-solve wait is bounded
-                # by the remaining navigation budget (deadline below), so a
-                # challenged page never extends the capture beyond
-                # NAV_TIMEOUT_MS + settle.
-                challenge_deadline = time.monotonic() + NAV_TIMEOUT_MS / 1000
-                response = await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="load")
-                await page.wait_for_timeout(SETTLE_MS)
-                final_url = page.url
-
-                # Redirect landed on a different host? Re-run the SSRF check
-                # on where we actually ended up.
-                if _hostnames_differ(url, final_url):
-                    # Offloaded like every other direct check (the route
-                    # guard above sets the precedent): resolution is
-                    # blocking and must not stall the loop.
-                    await asyncio.to_thread(
-                        assert_url_allowed,
-                        final_url,
-                        allow_private_networks=allow_private_networks,
-                    )
-
-                # Cloudflare challenge page? Wait out a solvable one, or fail
-                # the capture hard (rule: never store challenge HTML).
-                await _wait_out_challenge(
-                    page,
-                    nav_responses,
-                    fallback_response=response,
-                    deadline=challenge_deadline,
-                )
-
-                # Consent banner click-dismissal (PROMPT-002 Phase 5) —
-                # AFTER the challenge gate (a challenge page must never
-                # have its buttons clicked; an auto-solved challenge
-                # reloads the real page before we get here) and BEFORE
-                # scrolling (a full-page overlay would block the lazy
-                # loaders). Page-level interaction only: every request
-                # the page makes still flows through the route guard
-                # installed above. Never raises; dismiss_banners returns
-                # {"dismissed", "selector", "attempts"}.
-                banner_evidence = await dismiss_banners(
-                    page, timeout_ms=BANNER_DISMISS_TIMEOUT_MS
-                )
-
-                # Page confirmed real (PROMPT-002 Phase 3): scroll it so
-                # IntersectionObserver/scroll-event lazy content below the
-                # fold loads, then wait for the DOM to stop churning before
-                # capture. The challenge checks ran ABOVE, on the settled
-                # DOM — a challenge page is never scrolled, and a challenge
-                # that auto-solved via reload left a fresh page for this
-                # pass. Both helpers never raise (a failed scroll must not
-                # fail a capture), and every request the lazy loaders fire
-                # still goes through the SSRF route guard installed above.
-                scroll_evidence = await auto_scroll_page(
-                    page, max_scroll_time_ms=MAX_SCROLL_TIME_MS
-                )
-                stability_evidence = await wait_for_content_stable(page)
-                logger.debug(
-                    "Capture page preparation: scroll=%s stability=%s",
-                    scroll_evidence,
-                    stability_evidence,
-                )
-
-                html = await page.content()
-                if len(html.encode("utf-8", errors="replace")) > MAX_HTML_BYTES:
-                    raise FetchError(
-                        f"Page HTML exceeds the {MAX_HTML_BYTES // (1024 * 1024)} MB limit"
-                    )
-
-                screenshot, screenshot_evidence = await _take_screenshot(page)
-
-                # The latest main-frame response, not goto's: the challenge
-                # reload path re-navigates (403 challenge -> 200 real page).
-                latest = nav_responses[-1] if nav_responses else response
-                headers: dict[str, str] = {}
-                http_status: int | None = None
-                if latest is not None:
-                    http_status = latest.status
-                    # Keep a curated subset now; layer 6 (Phase 2) captures more.
-                    for k in ("content-type", "server", "last-modified", "etag"):
-                        v = latest.headers.get(k)
-                        if v is not None:
-                            headers[k] = v
-
-                # Structured capture evidence (PROMPT-002 Phase 4): the
-                # scroll/stability facts the helpers returned, the screenshot
-                # cap decision, and the informational health label. Phase 5
-                # merges the banner facts in; they deliberately do NOT feed
-                # capture_quality — that label grades capture mechanics
-                # (scroll/stability/screenshot), not the site's presentation
-                # (a banner Wardress could not dismiss is site content, not
-                # a capture failure). Debugging metadata only — nothing in
-                # detection reads it.
-                capture_evidence = {
-                    **scroll_evidence,
-                    **stability_evidence,
-                    **screenshot_evidence,
-                    **banner_evidence,
-                    "capture_quality": _classify_capture_quality(
-                        {**scroll_evidence, **stability_evidence, **screenshot_evidence}
-                    ),
-                }
-
-                return FetchResult(
-                    html=html,
-                    screenshot=screenshot,
-                    final_url=final_url,
-                    http_status=http_status,
-                    headers=headers,
-                    capture_evidence=capture_evidence,
-                )
-            finally:
-                await browser.close()
+        raise FetchError("Fetch failed")  # pragma: no cover — loop always returns/raises
     except SSRFBlockedError:
         raise
     except FetchError:
@@ -516,3 +474,207 @@ async def fetch_page(url: str, *, allow_private_networks: bool = False) -> Fetch
         raise FetchError(f"Fetch failed: {str(exc).splitlines()[0][:500]}") from exc
     except ipaddress.AddressValueError as exc:  # defensive; should not happen
         raise FetchError(f"Fetch failed: {exc}") from exc
+
+
+async def _capture_attempt(
+    url: str,
+    *,
+    allow_private_networks: bool,
+    nav_timeout_ms: int,
+    challenge_wait_ms: int,
+    retry_count: int,
+) -> FetchResult:
+    """One full capture attempt (PROMPT-002 Phase 6): a fresh browser,
+    context, page, stealth patches, consent cookies and SSRF route guard,
+    ending in the assembled FetchResult. Everything is attempt-local, so a
+    retried attempt can never double-count the previous attempt's state."""
+    async with async_playwright() as pw:
+        # Blink's AutomationControlled feature is the single loudest
+        # "this is a bot" signal Chromium ships; disable it at launch
+        # (worker/stealth.py owns the capture's browser shape).
+        browser = await pw.chromium.launch(
+            headless=True, args=BROWSER_LAUNCH_ARGS
+        )
+        try:
+            context = await browser.new_context(
+                user_agent=CAPTURE_USER_AGENT,
+                locale=CONTEXT_LOCALE,
+                timezone_id=CONTEXT_TIMEZONE_ID,
+                color_scheme=CONTEXT_COLOR_SCHEME,
+                viewport=CONTEXT_VIEWPORT,
+                ignore_https_errors=False,
+            )
+            # Stealth patches (init scripts) BEFORE any page exists and
+            # BEFORE the route guard: the guard must be the last word on
+            # every request the stealthed page makes (PROMPT-002 rule 11).
+            await apply_stealth(context)
+            # Consent cookies BEFORE navigation (PROMPT-002 Phase 5):
+            # sites that check cookies first never render their
+            # banner. Re-injected on EVERY attempt (Phase 6) — the
+            # fresh context starts cookie-empty. Context-level state
+            # — no request path, never raises, and the route guard
+            # below stays the last word.
+            await inject_consent_cookies(context, url)
+            page = await context.new_page()
+            # SSRF-validate every request the page makes (subresources,
+            # XHR/fetch, JS-initiated navigations) — not just the top
+            # frame. The guard is PER-PAGE, so a retried attempt's
+            # fresh page gets its own guard (Phase 6). "**/*" matches
+            # all URLs; the handler fails safe.
+            await page.route("**/*", _make_ssrf_route_guard(allow_private_networks))
+            # Track every main-frame navigation response: a challenge that
+            # auto-solves reloads the page, and the capture must record
+            # the REAL response (status/headers), not the challenge's.
+            nav_responses: list[Response] = []
+
+            def _track_nav(resp: Response) -> None:
+                try:
+                    if resp.request.is_navigation_request() and resp.frame == page.main_frame:
+                        nav_responses.append(resp)
+                except Exception:  # noqa: BLE001 — tracking must never break a fetch
+                    logger.debug("Navigation-response tracking skipped", exc_info=True)
+
+            page.on("response", _track_nav)
+            # wait_until="load" (not "networkidle": Playwright's docs
+            # discourage it, and any page with long-polling/beacons
+            # never goes idle -> guaranteed timeout). A bounded settle
+            # window (stealth.SETTLE_MS) lets late JS DOM writes land
+            # before capture. The challenge auto-solve wait is bounded
+            # by the remaining navigation budget (deadline below), so a
+            # challenged page never extends the attempt beyond
+            # nav_timeout_ms + settle.
+            nav_deadline = time.monotonic() + nav_timeout_ms / 1000
+            try:
+                response = await page.goto(url, timeout=nav_timeout_ms, wait_until="load")
+            except PlaywrightError as exc:
+                # Phase 6: classify BEFORE the generic boundary turns
+                # this into a permanent FetchError — only timeout /
+                # network-level goto failures are retryable.
+                classified = _classify_goto_failure(exc)
+                if classified is None:
+                    raise
+                raise _TransientNavError(
+                    f"{classified} ({str(exc).splitlines()[0][:200]})"
+                ) from exc
+            # Phase 2 contract: the challenge wait is bounded by the
+            # REMAINING navigation budget. Phase 6 exception: the
+            # challenge RETRY must get its full longer window even if
+            # goto consumed most of the reduced budget — extend the
+            # deadline to guarantee it. The first attempt keeps the
+            # Phase-2 shape exactly.
+            challenge_deadline = nav_deadline
+            if challenge_wait_ms > CHALLENGE_WAIT_MS:
+                challenge_deadline = max(
+                    nav_deadline, time.monotonic() + challenge_wait_ms / 1000
+                )
+            await page.wait_for_timeout(SETTLE_MS)
+            final_url = page.url
+
+            # Redirect landed on a different host? Re-run the SSRF check
+            # on where we actually ended up.
+            if _hostnames_differ(url, final_url):
+                # Offloaded like every other direct check (the route
+                # guard above sets the precedent): resolution is
+                # blocking and must not stall the loop.
+                await asyncio.to_thread(
+                    assert_url_allowed,
+                    final_url,
+                    allow_private_networks=allow_private_networks,
+                )
+
+            # Cloudflare challenge page? Wait out a solvable one, or fail
+            # the capture hard (rule: never store challenge HTML).
+            # Phase 6 passes the longer CHALLENGE_RETRY_WAIT_MS on the
+            # challenge retry.
+            await _wait_out_challenge(
+                page,
+                nav_responses,
+                fallback_response=response,
+                deadline=challenge_deadline,
+                wait_ms=challenge_wait_ms,
+            )
+
+            # Consent banner click-dismissal (PROMPT-002 Phase 5) —
+            # AFTER the challenge gate (a challenge page must never
+            # have its buttons clicked; an auto-solved challenge
+            # reloads the real page before we get here) and BEFORE
+            # scrolling (a full-page overlay would block the lazy
+            # loaders). Page-level interaction only: every request
+            # the page makes still flows through the route guard
+            # installed above. Never raises; dismiss_banners returns
+            # {"dismissed", "selector", "attempts"}.
+            banner_evidence = await dismiss_banners(
+                page, timeout_ms=BANNER_DISMISS_TIMEOUT_MS
+            )
+
+            # Page confirmed real (PROMPT-002 Phase 3): scroll it so
+            # IntersectionObserver/scroll-event lazy content below the
+            # fold loads, then wait for the DOM to stop churning before
+            # capture. The challenge checks ran ABOVE, on the settled
+            # DOM — a challenge page is never scrolled, and a challenge
+            # that auto-solved via reload left a fresh page for this
+            # pass. Both helpers never raise (a failed scroll must not
+            # fail a capture), and every request the lazy loaders fire
+            # still goes through the SSRF route guard installed above.
+            scroll_evidence = await auto_scroll_page(
+                page, max_scroll_time_ms=MAX_SCROLL_TIME_MS
+            )
+            stability_evidence = await wait_for_content_stable(page)
+            logger.debug(
+                "Capture page preparation: scroll=%s stability=%s",
+                scroll_evidence,
+                stability_evidence,
+            )
+
+            html = await page.content()
+            if len(html.encode("utf-8", errors="replace")) > MAX_HTML_BYTES:
+                raise FetchError(
+                    f"Page HTML exceeds the {MAX_HTML_BYTES // (1024 * 1024)} MB limit"
+                )
+
+            screenshot, screenshot_evidence = await _take_screenshot(page)
+
+            # The latest main-frame response, not goto's: the challenge
+            # reload path re-navigates (403 challenge -> 200 real page).
+            latest = nav_responses[-1] if nav_responses else response
+            headers: dict[str, str] = {}
+            http_status: int | None = None
+            if latest is not None:
+                http_status = latest.status
+                # Keep a curated subset now; layer 6 (Phase 2) captures more.
+                for k in ("content-type", "server", "last-modified", "etag"):
+                    v = latest.headers.get(k)
+                    if v is not None:
+                        headers[k] = v
+
+            # Structured capture evidence (PROMPT-002 Phase 4): the
+            # scroll/stability facts the helpers returned, the screenshot
+            # cap decision, and the informational health label. Phase 5
+            # merges the banner facts in; they deliberately do NOT feed
+            # capture_quality — that label grades capture mechanics
+            # (scroll/stability/screenshot), not the site's presentation
+            # (a banner Wardress could not dismiss is site content, not
+            # a capture failure). Debugging metadata only — nothing in
+            # detection reads it. Phase 6 adds the retry count (the
+            # Phase-7 final assembly expects this exact key name).
+            capture_evidence = {
+                **scroll_evidence,
+                **stability_evidence,
+                **screenshot_evidence,
+                **banner_evidence,
+                "retry_count": retry_count,
+                "capture_quality": _classify_capture_quality(
+                    {**scroll_evidence, **stability_evidence, **screenshot_evidence}
+                ),
+            }
+
+            return FetchResult(
+                html=html,
+                screenshot=screenshot,
+                final_url=final_url,
+                http_status=http_status,
+                headers=headers,
+                capture_evidence=capture_evidence,
+            )
+        finally:
+            await browser.close()

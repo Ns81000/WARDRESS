@@ -26,6 +26,9 @@ browser:
 - Banner-dismissal timing (`BANNER_DISMISS_TIMEOUT_MS`, PROMPT-002
   Phase 5) — the total budget `worker/banner_dismiss.py` spends trying
   to click a consent banner before the capture proceeds as-is.
+- Capture-retry timing (`RETRY_NAV_TIMEOUT_MS`, `RETRY_PAUSE_MS`,
+  PROMPT-002 Phase 6) — the transient-failure retry's reduced
+  navigation timeout and inter-attempt pause.
 
 Graceful degradation: if `playwright-stealth` is not installed (dev
 environments), `apply_stealth` logs a warning and returns — the capture
@@ -74,9 +77,10 @@ CONTEXT_VIEWPORT = {"width": 1366, "height": 768}  # standard laptop resolution
 # stability waits). Values are the Phase-3 spec's: a 5s initial settle
 # gives heavy JS sites time to land their DOM writes before scrolling
 # starts; the scroll pass is hard-capped so infinite-scroll sites can
-# never stall a capture. Worst-case capture wall clock (60s nav + 5s
-# settle + 10s challenge wait + 20s scroll + 5s stability + 45s
-# screenshot) stays well under the 300s Celery soft time limit.
+# never stall a capture. Worst-case SINGLE-attempt capture wall clock
+# (60s nav + 5s settle + 10s challenge wait + 20s scroll + 5s stability
+# + 45s screenshot); the Phase-6 retry below roughly doubles that worst
+# case — its budget note is the authoritative arithmetic.
 SETTLE_MS = 5_000  # post-load pause for late JS DOM writes before scrolling
 MAX_SCROLL_TIME_MS = 20_000  # hard cap on the auto-scroll pass
 SCROLL_STEP_PAUSE_MS = 300  # pause per scroll step for lazy content to fire
@@ -100,11 +104,26 @@ MAX_SCREENSHOT_HEIGHT = 16_384
 # to click a consent banner (an instant pass over the DOM first, then one
 # bounded wait for a late-rendering banner). Best-effort by design: when
 # the budget expires with nothing clicked, the capture proceeds with the
-# banner visible rather than failing. Worst-case capture wall clock grows
-# by this budget (60s nav + 5s settle + 10s challenge + 3s banners + 20s
-# scroll + 5s stability + 45s screenshot) and stays well under the 300s
-# Celery soft time limit.
+# banner visible rather than failing. It is one additive term of the
+# worst-case capture wall clock — the Phase-6 retry section below carries
+# the authoritative full arithmetic.
 BANNER_DISMISS_TIMEOUT_MS = 3_000
+
+# --- Capture retry (PROMPT-002 Phase 6) --------------------------------------
+#
+# A transient navigation failure (timeout / network-level goto error) or
+# an unsolved challenge gets ONE retry. RETRY_NAV_TIMEOUT_MS is the
+# REDUCED navigation budget for every retried attempt — the retry must
+# stay fast enough for the decided Celery soft-limit budget — and
+# RETRY_PAUSE_MS is the inter-attempt pause. Worst-case capture wall
+# clock with the retry: attempt 1 (60s nav incl. <=10s challenge wait +
+# 5s settle + 3s banners + 20s scroll + 5s stability + 45s screenshot ~=
+# 138s) + 3s pause + retry (30s nav incl. <=15s challenge wait + 5s
+# settle + 3s banners + 20s scroll + 5s stability + 45s screenshot ~=
+# 123s) ~= 264s; worker/celery_app.py's raised limits cover the probe
+# and detection that run after the capture.
+RETRY_NAV_TIMEOUT_MS = 30_000
+RETRY_PAUSE_MS = 3_000
 
 
 # --- Supplementary init script --------------------------------------------

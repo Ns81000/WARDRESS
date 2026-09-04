@@ -34,10 +34,15 @@ celery_app.conf.update(
     # Fetch/probe-level timeouts (worker/fetcher.py, worker/probe.py) fire
     # long before these. Phase 2 raised them (was 180/240): a scan now runs
     # the metadata probe + nine layers + MiniLM inference after the fetch.
-    # Both stay well under the 10-minute stale-in-flight cutoff the API
-    # and Beat dispatcher use (app/scanning.py).
-    task_soft_time_limit=300,
-    task_time_limit=360,
+    # Phase 6 raised them again (was 300/360): the capture's transient-
+    # failure retry adds a full reduced attempt (worker/fetcher.py, worst
+    # case ~264s) before a probe whose per-request timeouts are sequential
+    # (~90s worst) and detection (~30s worst) — see the budget note in
+    # worker/stealth.py's retry section. Both stay well under the
+    # 10-minute stale-in-flight cutoff the API and Beat dispatcher use
+    # (app/scanning.py).
+    task_soft_time_limit=420,
+    task_time_limit=480,
 )
 
 

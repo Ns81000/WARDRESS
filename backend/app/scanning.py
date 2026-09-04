@@ -3,7 +3,7 @@ and the Beat dispatcher so the two can never disagree about what counts
 as "in flight".
 
 In-flight rows older than STALE_INFLIGHT are treated as abandoned (the
-Celery hard time limit is 360 s, so nothing legitimate runs this long).
+Celery hard time limit is 480 s, so nothing legitimate runs this long).
 Covers a worker killed too hard to run its failure handler, and rows
 whose enqueue was lost. Without a cutoff, one orphaned row would block
 that site's rebaseline/scan-now/auto-scans forever.

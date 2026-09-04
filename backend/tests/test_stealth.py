@@ -18,7 +18,12 @@ import pytest
 from playwright.async_api import async_playwright
 
 from worker import stealth as stealth_mod
-from worker.fetcher import FetchResult, _make_ssrf_route_guard, fetch_page
+from worker.fetcher import (
+    FetchResult,
+    _capture_attempt,
+    _make_ssrf_route_guard,
+    fetch_page,
+)
 from worker.stealth import (
     BROWSER_LAUNCH_ARGS,
     CAPTURE_USER_AGENT,
@@ -126,8 +131,11 @@ def test_capture_user_agent_no_longer_self_identifies() -> None:
 def test_fetch_page_applies_stealth_before_route_guard() -> None:
     """Ordering contract (rule 11 / §4.1): stealth patches are init scripts
     that must never override the SSRF guard — the guard must be installed
-    after apply_stealth and must still be present on every fetch."""
-    src = inspect.getsource(fetch_page)
+    after apply_stealth and must still be present on every fetch. Since
+    Phase 6 the capture flow spans fetch_page (retry loop) and
+    _capture_attempt (the per-attempt body), so the seam is pinned across
+    both functions' sources."""
+    src = inspect.getsource(fetch_page) + inspect.getsource(_capture_attempt)
     assert "apply_stealth(context)" in src
     assert "page.route(\"**/*\", _make_ssrf_route_guard(" in src
     assert src.index("apply_stealth(context)") < src.index("_make_ssrf_route_guard(")

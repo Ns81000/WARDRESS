@@ -1174,3 +1174,13 @@ The capture mechanism is the foundation of everything Wardress does. A monitorin
 The detection pipeline has already survived a 44-phase adversarial audit and fix effort. The fusion model was refitted with 646 measured samples and constrained non-negative coefficients. The rule-based floors guarantee that conclusive evidence always surfaces. Do not undo this work by introducing normalization that is too aggressive, thresholds that are too forgiving, or verdicts that hide genuine change. When in doubt, err on the side of alerting — a false positive wastes an operator's time; a false negative costs a breach.
 
 Depth over speed, every phase, every change. The fourteen-phase structure exists so that depth never has to compete with a shrinking context window.
+
+### Session-ops discipline (added after Phase 6 — long-running commands)
+
+The agent harness aborts a session after a handful of consecutive identical tool calls. The full backend suite takes ~15–25 minutes and the per-call command timeout is ~30 seconds, so naive polling (`sleep; check log` over and over) KILLS the session — this happened in more than one phase. Standing rules for every later phase:
+
+1. **Never run a long command synchronously.** Start it DETACHED, writing to a log file, e.g.:
+   `Start-Process -FilePath "cmd" -ArgumentList "/c", "cd /d <repo>\backend && uv run --frozen pytest -q > ..\pytest_out.log 2>&1" -WindowStyle Hidden`
+2. **Never repeat an identical polling command.** Vary every poll: change the sleep seconds, alternate between different checks (log tail / progress-percentage / file timestamp), or combine the status check with genuinely different work (frontend baselines, git status, doc reads) between polls.
+3. **Frontend baselines are separate and slow too** (`pnpm test` ~45s) — run them detached with the same pattern; do not stack them concurrently with the backend suite if timing-sensitive tests are running (poll-log waiting is fine).
+4. Budget your context the same way: a handful of long polls is fine; dozens of identical ones are not.
