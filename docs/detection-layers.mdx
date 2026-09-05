@@ -46,6 +46,9 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 </Card>
 
 <CardGroup cols={2}>
+  <Card title="Volatile-text normalization" icon="wand-magic-sparkles">
+    Before layers 2/3/5/8 compare anything, an automatic conservative pass replaces universally-volatile text on <em>both</em> sides: ISO 8601 timestamps and date stamps, UUIDs, cache-busting query values (`?v=…`, `?_=…` — value-shape-guarded), and CSRF/token nonce values. Injected words, headlines, and signatures are never normalized; layer 1 still hashes the raw bytes. When the pass replaced anything, the layers' evidence carries a `normalization_applied` summary.
+  </Card>
   <Card title="Persistent probes" icon="rotate">
     Layers 6 (Security Metadata) and 7 (Cloaking) run on *every* scan regardless of the hash. TLS details, response headers, and UA-rotated fetches are invisible to the primary content hash and could reveal MITM or crawler-specific cloaking.
   </Card>
@@ -59,17 +62,17 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
 | Layer | Stable key | Input scope | Core heuristic |
 | :--- | :--- | :--- | :--- |
 | [1 · Content Hash](/layers/1-content-hash) | `layer1_hash` | Original HTML | SHA-256 over conservatively normalized HTML. Binary `0.0`/`1.0`. |
-| [2 · DOM Structure](/layers/2-dom-structure) | `layer2_dom_structure` | Suppressed HTML | lxml tag-tree diff: churn, plus new `<script>`/`<iframe>` and hidden elements — hiding is resolved through inline styles *and* the page's own stylesheets. |
-| [3 · Link Audit](/layers/3-link-audit) | `layer3_link_audit` | Suppressed HTML | Set-diff of `script`/`a`/`link`/`iframe`/`form` references (browser-faithful URL normalization); new external domains dominate. |
+| [2 · DOM Structure](/layers/2-dom-structure) | `layer2_dom_structure` | Suppressed + normalized HTML | lxml tag-tree diff: churn, plus new `<script>`/`<iframe>` and hidden elements — hiding is resolved through inline styles *and* the page's own stylesheets. |
+| [3 · Link Audit](/layers/3-link-audit) | `layer3_link_audit` | Suppressed + normalized HTML | Set-diff of `script`/`a`/`link`/`iframe`/`form` references (browser-faithful URL normalization); new external domains dominate. |
 | [4 · Visual Diff](/layers/4-visual-diff) | `layer4_visual_diff` | Screenshots | SSIM (0.7) + pHash/dHash (0.3) on masked grayscale captures, plus a chroma-shift term so hue-only changes register. |
-| [5 · Signatures](/layers/5-signatures) | `layer5_signatures` | New visible text | Weighted defacement phrases (matched raw and leet-decoded), profanity bursts, Unicode script flips or foreign-script inflow. |
+| [5 · Signatures](/layers/5-signatures) | `layer5_signatures` | Normalized new visible text | Weighted defacement phrases (matched raw and leet-decoded), profanity bursts, Unicode script flips or foreign-script inflow. |
 | [6 · Security Metadata](/layers/6-security-metadata) | `layer6_security_metadata` | TLS + headers + robots | Cert issuer/subject shifts, security-header downgrades, robots.txt changes. |
 | [7 · Cloaking](/layers/7-cloaking) | `layer7_cloaking` | UA-rotated raw fetches | Jaccard divergence between Googlebot/mobile and the desktop reference, graded with a churn grace so dynamic bits stay silent. |
-| [8 · Semantics](/layers/8-semantics) | `layer8_semantics` | Suppressed text | MiniLM cosine drift, aggression lexicon, defacement topic keywords. |
+| [8 · Semantics](/layers/8-semantics) | `layer8_semantics` | Suppressed + normalized text | MiniLM cosine drift, aggression lexicon, defacement topic keywords. |
 | [9 · Risk Fusion](/layers/9-risk-fusion) | `layer9_fusion` | Layers 1–8 | Non-negative-fitted logistic regression + rule-based minimum-risk floors → one `0.0–1.0` ranking score. |
 
 <Note>
-  **Input scope** matters. Layers 2, 3, 5, and 8 receive the *suppression-filtered* copy of both pages; Layer 4 gets bbox-masked screenshots; Layer 1 always hashes the *original* content so tampering is never hidden. Layers 6 and 7 read transport and per-UA data, not the primary DOM.
+  **Input scope** matters. Layers 2, 3, 5, and 8 receive the *suppression-filtered* and *volatility-normalized* copy of both pages (user rules first, then the automatic volatile-text pass — so a rule written against literal raw text still matches); Layer 4 gets bbox-masked screenshots; Layer 1 always hashes the *original* content so tampering is never hidden. Layers 6 and 7 read transport and per-UA data, not the primary DOM.
 </Note>
 
 ## Adaptive cadence scanning

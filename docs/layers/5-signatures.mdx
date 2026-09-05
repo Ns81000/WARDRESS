@@ -10,6 +10,10 @@ The **Signatures Layer** is a fast, rule-based scanner for the "calling cards" o
   Source: `backend/worker/detection/signatures.py` (`layer5_signatures`, `extract_visible_text`, `_new_text`, `script_profile`). Pure standard-library `re` and `unicodedata` — no model load, executes in milliseconds.
 </Info>
 
+<Info>
+  The visible text comes from the suppression-filtered, volatility-normalized HTML of both sides: the automatic pre-comparison pass replaces universally-volatile tokens (ISO 8601 timestamps, date stamps, UUIDs) with fixed placeholders such as `TIMESTAMP` and `UUID`, so a rotating clock or request id cannot manufacture new text. The pass is conservative — injected words and signatures are never rewritten — but evidence quotes come from the normalized text, so a match may quote a placeholder where a volatile token stood.
+</Info>
+
 ## Three independent signals
 
 ```mermaid actions={true}

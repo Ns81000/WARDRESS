@@ -1169,3 +1169,135 @@ measured number above is the reference for every later phase.
 - **Commit**: this commit — a commit cannot contain its own hash; see `git log --oneline -1` after landing — feat(capture7): capture health summary, re-baseline hint & infrastructure sync
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
+
+### [DONE] PROMPT-002 Phase 8 — Dynamic Content Normalization (Text Patterns)
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
+- **Session date**: 2026-09-05
+- **Goal**: Add an automatic, conservative pre-comparison normalization pass
+  (`worker/detection/normalize.py`, structural sibling of `suppress.py` but
+  universal and rule-free) that replaces universally-volatile TEXT — ISO 8601
+  timestamps and date stamps, UUIDs, cache-busting query values on pinned
+  parameter names, UUID-shaped values in any query parameter, and CSRF/token
+  nonce values — and wire it into `pipeline.py` so layers 2/3/5/8 compare
+  normalized text on BOTH sides. Conservatism is the prime directive: only
+  patterns that cannot plausibly be attack evidence are normalized. Headers
+  are explicitly out of scope (Phase 9).
+- **Files changed**: `backend/worker/detection/normalize.py` (new, ~310 lines);
+  `backend/worker/detection/pipeline.py` (import; content-pair assembly;
+  `normalization_applied` evidence attach; run_detection docstring);
+  `backend/tests/test_detection_normalize.py` (new, 31 tests);
+  `docs/detection-layers.mdx` (normalization card, layer-table input scopes
+  for rows 2/3/5/8, input-scope Note); `docs/layers/2-dom-structure.mdx`;
+  `docs/layers/3-link-audit.mdx` (the "query strings are kept" claim now
+  documents the cache-buster exception); `docs/layers/5-signatures.mdx`;
+  `docs/layers/8-semantics.mdx`; this log.
+- **Key design decisions**:
+  - **Surgical lxml application, suppress.py idiom**: the pass parses with the
+    shared `parse_html`, edits text nodes / attributes in place, and
+    re-serializes ONLY when at least one substitution happened (a clean page
+    is returned byte-for-byte — no serialization churn, one parse of cost).
+    Mirrors `_apply_to_html`'s fail-open structure (parse-None → original,
+    serialize-failure → original, wrap-all try/except → original).
+  - **Placeholder words, not spans**: fixed unmatchable words (`TIMESTAMP`,
+    `UUID`, `CACHEBUST`, `NONCE` — no digits/dashes) keep the pass idempotent
+    by construction and collide with no signature/profanity/topic pattern.
+    The token-attribute rule skips its own placeholder (found by the
+    idempotence test).
+  - **Order: suppression first, then normalization** — user regex rules must
+    match literal raw text (proved by a test whose rule targets the raw
+    timestamp and fires).
+  - **URL normalization is attribute-scoped**: only `href`/`src`/`action` on
+    exactly the five reference kinds layer 3 collects; only the query is
+    rewritten (path = resource identity, domain = injection signal — both
+    preserved). A bare URL in visible TEXT is deliberately left alone
+    (documented in a test + layer-5 doc).
+  - **Value-shape guard** on cache-buster params (`\d{4,}` | hex≥8 | opaque
+    alnum≥12) so `?v=3`, `?t=legal`, `?page=2` survive; pinned CB-name list
+    excludes ambiguous single letters (`r`, `s`, `d`).
+  - **script/style inner text never normalized** (no content layer reads it —
+    substituting there would be churn without signal) and inline `style` /
+    ordinary values never touched (layer 2's hidden-element detection
+    resolves inline styles).
+  - **Layer 1 untouched by design**: it hashes the ORIGINAL stored digests —
+    `PageData.content_hash` is never recomputed from normalized text; the
+    tamper-evidence anchor stays raw-byte. Layer 4/6/7 receive the original
+    `PageData` objects (proved by a spy test).
+  - **Evidence, not silence**: when the pass replaced anything, every
+    affected content layer's evidence carries `normalization_applied`
+    (per-category counts, both sides merged) — mirroring
+    `suppression_applied`; absent when nothing matched (regression-guarded).
+- **Constraints honored**: SSRF policy untouched (pure local text
+  transformation); fusion model untouched (additive evidence only);
+  `capture_*` surfaces from Phase 7 untouched; import direction unchanged
+  (worker-internal; nothing in `app/` imports worker); headers untouched
+  (Phase 9). Docs synced in the same commit per Rule 13, verified against the
+  docs-sync drift pins (test_phase33/34/41/43 — 38 passed).
+
+- **Edge cases handled** (Gauntlet Step 3, each with disposition + test):
+  empty/whitespace HTML → returned untouched, summary empty; unparseable
+  HTML → fail-open original; oversized document (>5M chars) → fail-open
+  skip (bounded input sizes); normalization making both sides identical →
+  the goal: content layers go quiet while layer 1 still reports 1.0;
+  attack evidence adjacent to volatile tokens → never masked (unit +
+  end-to-end signature test); patterns inside code blocks → normalized
+  (cannot be evidence; bare URLs in text are NOT — attribute-scoped);
+  baseline-vs-scan asymmetry → placeholder is benign new text, layers
+  function; baseline HTML artifact missing → whole pass skipped by the
+  existing gate; hash-identical → gated before the pass; regex catastrophic
+  backtracking → all patterns linear (no nested quantifiers/ambiguous
+  alternations), applied per node/attr/param, plus size cap and a ~1.7MB
+  adversarial wall-clock test; idempotence → pinned by test; backward
+  compatibility with stored baselines → normalization is comparison-time on
+  BOTH sides, baselines stay raw on disk (proved by the timestamp-only test
+  using a raw-stored baseline); short/meaningful query values survive;
+  UUID-in-path survives / UUID-in-query normalized; token-name list pinned
+  (style/value never matched); non-content layers receive raw pages (spy);
+  fusion untouched.
+- **Tests added**: `backend/tests/test_detection_normalize.py` (31 tests:
+  20 unit on `normalize_html`/`normalized_copy`/`merge_summaries`, 11
+  pipeline wiring). **Failing-before proof**: the file was written and run
+  BEFORE the implementation — `ModuleNotFoundError: No module named
+  'worker.detection.normalize'` (collection error), then 24/31 passing after
+  the first implementation cut; the 7 initial failures caught two real bugs
+  (first-query-param off-by-one in `_normalize_url` — `partition("?")` ate
+  the `?` the param regex anchors on — and the non-idempotent token-attribute
+  rule) plus two over-specified assertions (fixed in the tests, not the
+  code: text-node URLs are deliberately out of scope; layer-5 evidence
+  quotes the pattern span `HACKED BY`, not the whole headline).
+- **Full regression results**: backend `cd backend && uv run --frozen
+  pytest -q` => **1218 passed, 1 warning in 1291.99s (0:21:31)** (baseline
+  1187 + exactly the 31 new tests; the single warning is the pre-existing
+  apprise `imghdr` DeprecationWarning); lint `uv run --frozen ruff check .`
+  exit 0 ("All checks passed!"). Frontend (re-run only — NO frontend files
+  touched in this phase): `pnpm test` => 21 files / **133 passed**; `pnpm
+  exec tsc -b --noEmit` exit 0; `pnpm exec oxlint src` 0 errors / 12
+  warnings (all at baseline). Docker Desktop + Wardress stack +
+  `wardress-test-pg` (127.0.0.1:5433) were up throughout; the detached
+  suite log was polled with varied commands per §8.
+- **Manual verification performed**: none beyond the suites — the pass is
+  pure comparison-time logic with no capture/network surface; no live-site
+  smoke needed (detection semantics verified through the pipeline tests).
+- **Residual risk / follow-ups**: (1) the pinned pattern lists are
+  intentionally narrow — sites with exotic volatile formats (e.g. locale
+  timestamps like "5 września 2026, 14:22") still produce churn; widening
+  is deliberately left to future evidence. (2) Re-serialization when the
+  pass fires goes through lxml `tostring` (same idiom as suppression), so
+  representation details (attribute quoting) are canonicalized on both
+  sides equally — symmetric, hence comparison-fair, but a layer that ever
+  compares serialized bytes directly would see them. (3) `_MAX_HTML_CHARS`
+  fail-open means >5MB pages get no normalization (documented; layers still
+  run on raw HTML).
+- **New leads observed**: (a) the prompt's Phase-8 spec sentence "compare
+  normalized text on BOTH sides" is satisfied via normalized HTML copies;
+  if Phase 9 (headers) or Phase 10 (DOM churn) wants the same shape for
+  header dicts, `normalized_copy`'s summary plumbing is reusable; (b) the
+  four `SiteDetailOut(...)` construction sites from the Phase 7 leads
+  remain untouched (out of scope, unchanged); (c) `ScanDetailOut` still
+  does not expose `capture_evidence` (Phase 7 lead, unchanged).
+- **Commit**: this commit — a commit cannot contain its own hash; see `git
+  log --oneline -1` after landing — feat(capture8): automatic volatile-text
+  normalization for detection layers 2/3/5/8
+- **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
+
+

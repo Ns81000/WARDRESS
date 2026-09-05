@@ -7,7 +7,7 @@ icon: "code"
 The **DOM Structure Layer** inspects the tag tree of the page, independent of how it renders. Defacements frequently inject hidden elements, add `<script>` or `<iframe>` nodes, or gut the original markup — all of which show up as structural deltas even when the visual layout is manipulated to hide them.
 
 <Info>
-  Source: `backend/worker/detection/dom.py` (`layer2_dom_structure`, `_tree_stats`, `parse_html`). Input: the suppression-filtered HTML of both sides.
+  Source: `backend/worker/detection/dom.py` (`layer2_dom_structure`, `_tree_stats`, `parse_html`). Input: the suppression-filtered, volatility-normalized HTML of both sides.
 </Info>
 
 ## Parsing: lxml with recovery
@@ -83,11 +83,13 @@ Maximum tree-depth delta is recorded in evidence for context but does not direct
 
 ## Evidence recorded
 
-The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. Hidden elements carry a per-side attribution block (`hidden_detection`): how much stylesheet text was resolved, and which source hid each counted element (`hidden-attribute`, `inline-style`, or the deciding rule's selector subject). When suppression content rules applied, a `suppression_applied` summary is attached.
+The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. Hidden elements carry a per-side attribution block (`hidden_detection`): how much stylesheet text was resolved, and which source hid each counted element (`hidden-attribute`, `inline-style`, or the deciding rule's selector subject). When suppression content rules applied, a `suppression_applied` summary is attached. When the automatic volatile-text normalization pass replaced anything, a `normalization_applied` summary (replacement counts by category) is attached.
 
 ## False-positive suppression
 
 Layer 2 receives the **suppression-filtered** copy of both pages. If an operator defines a CSS-selector rule (for example `#visitor-counter`), the matching subtree is dropped from *both* baseline and current via lxml `drop_tree()` before the tree is analyzed — so a widget that adds child nodes every second does not inflate structural risk.
+
+On top of operator rules, an **automatic volatile-text normalization** pass (`backend/worker/detection/normalize.py`) replaces universally-volatile text — ISO 8601 timestamps, date stamps, UUIDs — in both sides' text nodes before the tree is analyzed. It is conservative by design: it only ever touches patterns that cannot plausibly be attack evidence (headlines, injected words, and signatures are never rewritten), and it never touches `<script>`/`<style>` inner text or inline styles (hidden-element detection resolves the latter).
 
 <CodeGroup>
 ```html Raw (Without Suppression)

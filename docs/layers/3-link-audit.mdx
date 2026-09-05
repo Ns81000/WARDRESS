@@ -7,7 +7,7 @@ icon: "link"
 The **Link Audit Layer** diffs the *sets* of external references embedded in the page. Attackers redirect form submissions to phishing endpoints, inject third-party `<script>` sources, or add unauthorized tracking. A brand-new external domain appearing on a page is one of the strongest injection signals, and this layer isolates it statically without executing anything.
 
 <Info>
-  Source: `backend/worker/detection/dom.py` (`layer3_link_audit`, `_collect_refs`, `_norm_ref`, `_domains`). Input: the suppression-filtered HTML of both sides.
+  Source: `backend/worker/detection/dom.py` (`layer3_link_audit`, `_collect_refs`, `_norm_ref`, `_domains`). Input: the suppression-filtered, volatility-normalized HTML of both sides.
 </Info>
 
 ## References collected
@@ -48,7 +48,7 @@ flowchart LR
     lxml walks the tree and collects `src`/`href`/`action` for the five tag kinds into sets.
   </Step>
   <Step title="Normalization">
-    Each reference is normalized **browser-faithfully** before resolution: for `http`/`https` references, backslashes are treated as slashes (including any run of slashes/backslashes immediately after the scheme colon), exactly as browsers parse URLs — so a hijacked reference like `/\evil.com/x.js` attributes to `evil.com`, not to the page's own host. The result is then resolved against the page's `final_url` with `urljoin`. References that are not comparable links are dropped: fragments (`#...`), and `javascript:`, `data:`, `mailto:`, `tel:`, `about:` schemes. Only `http`, `https`, and scheme-relative refs survive. Fragments are stripped from the tail; **query strings are kept** (defacers love appending `?redirect=`).
+    Each reference is normalized **browser-faithfully** before resolution: for `http`/`https` references, backslashes are treated as slashes (including any run of slashes/backslashes immediately after the scheme colon), exactly as browsers parse URLs — so a hijacked reference like `/\evil.com/x.js` attributes to `evil.com`, not to the page's own host. The result is then resolved against the page's `final_url` with `urljoin`. References that are not comparable links are dropped: fragments (`#...`), and `javascript:`, `data:`, `mailto:`, `tel:`, `about:` schemes. Only `http`, `https`, and scheme-relative refs survive. Fragments are stripped from the tail; **query strings are kept** (defacers love appending `?redirect=`). The one exception is the automatic volatile-text pass that ran before extraction: values of well-known cache-busting parameters (`v`, `ver`, `t`, `ts`, `cb`, `nocache`, … — value-shape-guarded, so `?v=3` survives) and UUID-shaped values in any query parameter are replaced with a stable placeholder on both sides, so a re-fetched asset no longer registers as a removed + added reference. URL paths and domains are never rewritten.
   </Step>
   <Step title="Known-domain set">
     The baseline's domains across all reference kinds, plus the page's own host, form the `known_domains` set. Any added reference whose hostname is not in that set is a *new external domain*.

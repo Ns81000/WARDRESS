@@ -10,6 +10,10 @@ The **Semantics Layer** goes beyond exact string matching. If a corporate homepa
   Source: `backend/worker/detection/semantics.py` (`layer8_semantics`, `embed_text`, `cosine_similarity`). It reuses Layer 5's `extract_visible_text` and `_new_text`.
 </Info>
 
+<Note>
+  Like Layer 5, Layer 8 sees the suppression-filtered, volatility-normalized text of both sides: the automatic pre-comparison pass replaces universally-volatile tokens (ISO 8601 timestamps, date stamps, UUIDs) with fixed placeholders on both sides, so clock/request-id churn cannot register as semantic drift. Aggression and topic lexicons still run on the actual injected words — only the volatile tokens themselves are rewritten.
+</Note>
+
 ## Local, CPU-bound, private
 
 All semantic analysis runs **locally on the worker**, CPU-only. Page text is never sent to an external API during scanning — zero API cost, and data stays on your infrastructure. The MiniLM model is process-cached after first load.

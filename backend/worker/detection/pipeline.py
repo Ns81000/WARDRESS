@@ -38,6 +38,7 @@ from worker.detection.cloaking import layer7_cloaking
 from worker.detection.dom import layer2_dom_structure, layer3_link_audit
 from worker.detection.fusion import layer9_fusion
 from worker.detection.metadata import layer6_security_metadata
+from worker.detection.normalize import merge_summaries, normalized_copy
 from worker.detection.semantics import layer8_semantics
 from worker.detection.signatures import layer5_signatures
 from worker.detection.suppress import Suppression, suppressed_copy
@@ -109,10 +110,15 @@ def run_detection(
     `suppression` (site's §5 exclusion rules) filters what the content
     layers compare: css_selector/regex rules strip matching subtrees/text
     from BOTH sides before layers 2/3/5/8; bbox rules mask screenshot
-    regions before layer 4. Layer 1 always hashes the ORIGINAL content —
-    the hash is a tamper-evidence anchor, so suppression can gate the
-    downstream layers' *scores* but never hide that bytes changed.
-    Every applied rule is recorded in the affected layers' evidence."""
+    regions before layer 4. On top of user rules, an AUTOMATIC
+    conservative normalization pass (worker.detection.normalize) replaces
+    universally-volatile text — timestamps, UUIDs, cache-busting query
+    values, CSRF nonces — on both sides, for the same layers. Layer 1
+    always hashes the ORIGINAL content — the hash is a tamper-evidence
+    anchor, so suppression/normalization can gate the downstream layers'
+    *scores* but never hide that bytes changed. Every applied rule (and
+    the normalization pass, when it replaced anything) is recorded in the
+    affected layers' evidence."""
     supp = suppression or Suppression()
     results: dict[str, dict] = {}
 
@@ -127,12 +133,21 @@ def run_detection(
     baseline_html_missing = not baseline.html.strip()
 
     # Content-rule suppression applies to both sides identically, built
-    # once (layers 2/3/5/8 all read the same filtered pair).
-    if supp.has_content_rules and not identical and not baseline_html_missing:
-        content_baseline = suppressed_copy(baseline, supp)
-        content_current = suppressed_copy(current, supp)
-    else:
-        content_baseline, content_current = baseline, current
+    # once (layers 2/3/5/8 all read the same filtered pair); the automatic
+    # volatile-text normalization pass then runs on BOTH sides of the same
+    # pair (after user rules, so a regex written against literal raw text
+    # still matches). When the raw hash is identical or the baseline
+    # artifact is missing, the content layers are gated below anyway —
+    # neither pass runs.
+    content_baseline, content_current = baseline, current
+    normalization_summary: dict[str, int] = {}
+    if not identical and not baseline_html_missing:
+        if supp.has_content_rules:
+            content_baseline = suppressed_copy(baseline, supp)
+            content_current = suppressed_copy(current, supp)
+        content_baseline, b_norm = normalized_copy(content_baseline)
+        content_current, c_norm = normalized_copy(content_current)
+        normalization_summary = merge_summaries(b_norm, c_norm)
 
     supp_summary = supp.summary()
 
@@ -156,6 +171,8 @@ def run_detection(
                 results[key] = _LAYER_FUNCS[key](content_baseline, content_current)
                 if supp.has_content_rules and supp_summary:
                     results[key]["evidence"]["suppression_applied"] = supp_summary
+                if normalization_summary:
+                    results[key]["evidence"]["normalization_applied"] = normalization_summary
             else:
                 results[key] = _LAYER_FUNCS[key](baseline, current)
         except Exception as exc:
