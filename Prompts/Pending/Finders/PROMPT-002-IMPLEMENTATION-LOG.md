@@ -1301,3 +1301,194 @@ measured number above is the reference for every later phase.
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
 
+### [DONE] PROMPT-002 Phase 9 — CSP & Header Normalization for Detection
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
+- **Session date**: 2026-09-05
+- **Goal**: Make nonce-only CSP changes and header formatting noise never
+  reach layer 6's directional comparison. The phase spec's first demand was
+  to VERIFY whether Fix Phase 36's comparator already collapses
+  `'nonce-…'` → `'nonce-'` before building anything; this entry records
+  that verification, the one genuine gap it found, and the explicit pin
+  suite the spec requires.
+- **Files changed**: `backend/worker/detection/metadata.py:44-48,82-88`
+  (`_CSP_NONCE_RE` gains `re.IGNORECASE` + explanatory comment;
+  `_csp_directives` docstring notes the case-insensitive prefix),
+  `backend/tests/test_csp_nonce_normalization.py` (new, 22 tests).
+- **Verification results (Rule 12, claims vs. tree)**:
+  - CONFIRMED: Phase 36's comparator already normalizes upstream of the
+    directional scoring — `_csp_directives` (metadata.py:82-91) collapses
+    nonce blobs to `'nonce-'`, lowercases everything, splits directives on
+    `;` and tokens on whitespace, before `_classify_value_change`'s
+    directional logic (untouched this phase). Prior Art §4.6 documents
+    this as the intended design, so the spec's "if it fully handles nonce
+    collapse, this phase verifies and pins that behavior" branch applied.
+  - CONFIRMED: pipeline wiring — `pipeline.py:148-149` hands layers
+    2/3/5/8 `normalized_copy` (HTML only); layer 6 receives raw
+    `PageData.headers`; Phase 8's text pass never touches headers (separate
+    mechanism, as the kickoff stated). No pipeline change needed.
+  - CONFIRMED: `worker/probe.py:173` stores the FULL lowercased header map,
+    so `content-security-policy-report-only` reaches layer 6's input while
+    `SECURITY_HEADERS` tracks only `content-security-policy` — a CSP ↔
+    CSP-Report-Only switch registers as removal/addition of the enforcing
+    header (real change, as the spec demands).
+  - GAP FOUND: `_CSP_NONCE_RE` was case-SENSITIVE on the `'nonce-` prefix.
+    The CSP3 grammar (RFC 5234 ABNF string literals are case-insensitive)
+    and browsers match the nonce prefix case-insensitively, so a server
+    emitting `'NONCE-<random>'` per response landed in
+    `security_headers_changed` evidence on every scan — exactly the noise
+    this phase exists to kill. Fixed upstream-only with `re.IGNORECASE`
+    (a nonce VALUE cannot plausibly be attack evidence; the nonce's
+    PRESENCE is preserved via the `'nonce-'` placeholder, so the prime
+    directive holds).
+- **Key design decisions**:
+  - Normalize inside the existing parser (`_csp_directives`) rather than
+    introducing a separate `normalize_headers()` pass mirroring Phase 8's
+    shape: the mechanism already exists exactly where the spec wants it
+    (upstream of scoring), a second pass would duplicate it for no
+    behavioral gain, and Phase 8's `normalized_copy` plumbing is
+    HTML-specific (`replace(page, html=...)`) — not reusable for dicts
+    without new machinery.
+  - Quoting differences deliberately NOT normalized (`'self'` vs `self`
+    compares as changed-undirected, recorded, 0.0): an unquoted `self` is
+    a host token in CSP grammar, not the keyword — normalizing quotes
+    could silence a real misconfiguration that disables the policy.
+  - Docs check (Rule 13): `docs/layers/6-security-metadata.mdx:64` already
+    says "CSP nonces collapse to a `'nonce-'` placeholder and
+    case/whitespace/formatting differences are ignored" — still exactly
+    true post-change, no constants pinned in prose; left untouched.
+- **Constraints honored**: Phase 36 directional scoring logic byte-untouched
+  (the only source change is the regex + comments); `worker/detection/
+  normalize.py` untouched; all other detection layers untouched; no
+  frontend files touched (frontend gate is a re-run, recorded below);
+  worker/API import direction untouched; no new dependencies; SSRF surface
+  unchanged (pure comparison logic, zero request paths).
+
+
+
+- **Edge cases handled (Gauntlet Step 3, each pinned in the new test file)**:
+  - Multi-directive policy, only nonce values changed → every evidence
+    bucket empty, score 0.0.
+  - Nonce value case/length variance → classified `equal`.
+  - Uppercase `'NONCE-'` prefix variance → parser collapses (failing-before
+    proof: parser test); layer-level silent with no undirected bucket
+    (failing-before proof: bucket assertion).
+  - Uppercase-prefix churn + directive removal → still scores 0.1 (`weaker`
+    precedence over `unknown` — verified the interaction, not just the
+    happy path).
+  - Nonce change WITH directive removal → 0.1 weakened (with and without
+    simultaneous nonce churn).
+  - Nonce change WITH directive addition → 0.0, recorded strengthened with
+    RAW values (nonce intact) for auditability.
+  - Wildcard removal beside nonce churn → 0.1 (wildcards are real signal,
+    never normalized).
+  - Hash value swap → NOT collapsed → recorded undirected with raw values,
+    0.0 (only nonces normalize).
+  - Identical hash beside nonce churn → equal, no buckets.
+  - Formatting noise (case, tabs, spaces, `;;`, trailing `;`) → silent.
+  - Quoting difference → recorded undirected, never scored (see decision).
+  - CSP → CSP-Report-Only → enforcing header "removed", scores 0.3;
+    CSP-RO → CSP → "added", 0.0; both headers present with only the
+    report-only one churning → not compared at all, enforcing policy still
+    diffed.
+  - Other headers' formatting noise (referrer-policy, permissions-policy,
+    x-content-type-options case/whitespace) → silent.
+  - Directional scoring intact after normalization: hardening with churn →
+    0.0 + strengthened entries; HSTS downgrade beside CSP nonce churn →
+    0.1 (proves CSP normalization doesn't leak into other comparators).
+  - N/A (with reason): site categories / bot-protection tiers / consent
+    banners / capture failure modes / concurrency — this phase is pure
+    stateless header-comparison logic downstream of capture; its input
+    edge cases (probe degradation, missing headers) are covered by the
+    pre-existing skip/degraded paths (metadata.py:218-223, 288-296) and
+    Phase 24 tests, re-verified green. Backward compatibility: comparison-
+    time normalization on both sides, baselines stored raw — old baselines
+    benefit without re-capture (same principle as Phase 8, no migration).
+  - Performance: the nonce regex is linear (no nested quantifiers) and runs
+    only on CSP header values of the six tracked headers — negligible.
+- **Tests added**: `backend/tests/test_csp_nonce_normalization.py` (22
+  tests, all hermetic unit tests — no network, no DB):
+  - `TestCspNonceNormalization` (10): multi-directive nonce-only silence;
+    nonce value-case equality; uppercase-prefix parser collapse;
+    uppercase-prefix layer silence; churn+removal precedence; removal
+    scoring (×2); addition recording with raw evidence; wildcard removal;
+    hash non-collapse + raw recording; identical-hash equality.
+  - `TestCspFormattingNoise` (3): case/whitespace/semicolon silence;
+    trailing-semicolon equality; quoting difference recorded-unscored.
+  - `TestCspReportOnlyIsADifferentHeader` (3): enforcing→report-only
+    removal scores 0.3; report-only→enforcing addition records 0.0;
+    report-only churn beside a stable enforcing policy is not compared.
+  - `TestOtherHeaderFormattingNoise` (3): referrer-policy,
+    permissions-policy, x-content-type-options case/whitespace silence.
+  - `TestDirectionalScoringIntactAfterNormalization` (2): hardening
+    recorded despite nonce churn; HSTS downgrade scores beside CSP churn.
+  - **Failing-before proof (Rule 3)**: the suite was run against the
+    UNMODIFIED tree before the fix: exactly 2 failed /
+    20 passed — `test_csp_directive_parser_collapses_nonce_with_uppercase_prefix`
+    (token stayed `'nonce-aaabbb999'` instead of collapsing to
+    `'nonce-'`) and `test_uppercase_nonce_prefix_variance_is_silent`
+    (`security_headers_changed` held the CSP entry with the raw
+    `'NONCE-…'` values). The 20 pre-passing tests are deliberate
+    behavior-pins of Phase 36's already-correct normalization/directional
+    behavior, per the spec's verify-and-pin branch — failing-before is
+    inherently N/A for them, which is why the two genuine-gap tests carry
+    the proof. After the one-line fix: all 22 pass.
+- **Full regression results**: `cd backend && uv run --frozen pytest -q` →
+  **1240 passed, 1 warning in 1330.43s (0:22:10)** — the Rule-4 baseline of
+  1218 + exactly the 22 new tests; the single warning is the pre-existing
+  apprise `imghdr` DeprecationWarning. `cd backend && uv run --frozen ruff check .` →
+  "All checks passed!" (exit 0; one auto-fixed import-order nit in the new
+  test file, found and fixed before commit). Frontend re-run (no frontend
+  files touched — Rule 4 re-run, not a change): `pnpm test` → **21 files /
+  133 passed**; `pnpm exec tsc -b --noEmit` → exit 0; `pnpm exec oxlint
+  src` → **0 errors, 12 warnings** (= baseline). Focused pre-suite run:
+  new file + `test_phase36_detection_low.py` +
+  `test_phase24_degradation_signaling.py` + `test_rule_floors.py` +
+  `test_detection_normalize.py` → **130 passed in 24.12s**.
+- **Manual verification performed**: none required — the phase is pure
+  comparison logic; no capture/live-site behavior changed, so no Docker
+  smoke test adds signal beyond the automated pins (probe input behavior
+  covered by `test_probe.py`, green in the full suite).
+- **Residual risk / follow-ups**:
+  - Locale-format timestamps still churn (Phase 8's intentionally narrow
+    pattern lists) — unchanged, out of scope.
+  - The new normalization is CSP-only; other headers had no nonce-shaped
+    per-response variance to normalize (HSTS/XFO/XCTO/referrer/
+    permissions-policy values are configuration, not per-response) —
+    verified, nothing to do.
+- **New leads observed**:
+  - **CSP token-superset direction (recommended review, out of scope —
+    Phase 9 must not disturb Phase 36 scoring)**: metadata.py:127-133
+    classifies `c_toks ⊇ b_toks` as "stronger" for CSP source lists, but
+    CSP source lists are ALLOWLISTS — more sources means laxer. Under the
+    current direction, removing `'unsafe-inline'` (hardening) scores 0.1
+    as a "downgrade" (false positive) and adding a new source such as
+    `https://evil.com` (weakening) is recorded as "strengthened" and never
+    scores (false negative). This contradicts Prior Art §4.6 ("CSP
+    loosened → positive score") and the permissions-policy comparator in
+    the SAME function (metadata.py:157-167), which implements the correct
+    direction with an explanatory comment — so the 44-phase effort's
+    token branch looks direction-inverted for source lists. Not touched
+    this phase. Note for whoever fixes it: this phase's
+    `test_wildcard_removal_is_real_signal_beside_nonce_churn` and
+    `test_hash_values_are_never_collapsed` pin the CURRENT direction and
+    will need updating alongside the fix (the normalization itself is
+    direction-independent).
+  - `content-security-policy-report-only` is not in `SECURITY_HEADERS`, so
+    a report-only policy's content is never diffed (a site could gut it
+    silently). Low severity (it does not enforce), but a candidate for a
+    tracked-but-never-scored evidence bucket. This phase pins the
+    non-comparison as intended behavior.
+  - Duplicate CSP directives: `_csp_directives` keeps the LAST occurrence
+    of a duplicated directive name, while browsers honor the FIRST. Both
+    sides are parsed identically so differences still record honestly, but
+    the compared value can diverge from the effective browser policy.
+    Minor; noting only.
+  - Residual from earlier phases, unchanged: `ScanDetailOut` still does not
+    expose `capture_evidence`; the four `SiteDetailOut(...)` construction
+    sites in `routers/sites.py` still risk drifting.
+- **Commit**: this commit — a commit cannot contain its own hash; see
+  `git log --oneline -1` after landing — feat(detection9): CSP nonce-prefix
+  case-insensitive normalization + explicit layer 6 pin suite
+- **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
+

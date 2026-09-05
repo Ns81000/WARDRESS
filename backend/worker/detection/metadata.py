@@ -41,8 +41,11 @@ SECURITY_HEADERS = (
 )
 
 _HSTS_MAX_AGE_RE = re.compile(r"max-age\s*=\s*(\d+)", re.IGNORECASE)
-_CSP_NONCE_RE = re.compile(r"'nonce-[^']*'")
-# Per-response single-use values must never read as a header change.
+_CSP_NONCE_RE = re.compile(r"'nonce-[^']*'", re.IGNORECASE)
+# Per-response single-use values must never read as a header change. The
+# prefix matches case-insensitively: the CSP3 grammar (RFC 5234 ABNF
+# literals) and browsers treat 'nonce- case-insensitively, so 'NONCE-…
+# is the same per-response variance.
 _NORMALIZED_NONCE = "'nonce-'"
 _XFO_STRENGTH = {"deny": 2, "sameorigin": 1}
 # Ladder over exposure: higher = stricter. Multiple comma-separated
@@ -81,7 +84,8 @@ def _hsts_strength(value: str):
 
 def _csp_directives(value: str) -> dict[str, frozenset[str]]:
     """directive name -> normalized token set. Nonce blobs are collapsed so
-    per-response variance compares equal; case/whitespace normalized."""
+    per-response variance compares equal (case-insensitive prefix — CSP3
+    grammar literals are case-insensitive); case/whitespace normalized."""
     out: dict[str, frozenset[str]] = {}
     for part in value.split(";"):
         tokens = _CSP_NONCE_RE.sub(_NORMALIZED_NONCE, part).lower().split()
