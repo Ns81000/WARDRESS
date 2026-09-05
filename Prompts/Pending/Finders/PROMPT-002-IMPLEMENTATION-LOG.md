@@ -1492,3 +1492,181 @@ measured number above is the reference for every later phase.
   case-insensitive normalization + explicit layer 6 pin suite
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
+
+### [DONE] PROMPT-002 Phase 10 — DOM Churn Scoring Refinement
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
+- **Session date**: 2026-09-05
+- **Goal**: Refine layer 2's generic churn term to distinguish content-element
+  churn (news articles, blog posts — LOW risk) from infrastructure-element
+  churn (`<script>`/`<iframe>`/`<form>`/`<link>` — HIGH risk). Legitimate
+  publishing churn measured 0.4–0.6, which the positive-coefficient fusion
+  model (layer-2 coefficient 1.2863) weighed as mild attack evidence. Apply a
+  REDUCED multiplier to the churn contribution for content-only churn; the
+  sensitive-tag boost keeps handling the infrastructure case untouched.
+- **Files changed**: `backend/worker/detection/dom.py` (`_CONTENT_CHURN_TAGS`
+  closed whitelist, `_CHURN_WEIGHT`/`_CONTENT_CHURN_WEIGHT` constants,
+  classification + weighted `score` in `layer2_dom_structure`, additive
+  `churn_class`/`churn_weight` evidence keys, module/function docstrings);
+  `docs/layers/2-dom-structure.mdx` (mermaid node, structural-churn accordion
+  content-vs-infrastructure explanation, score formula, evidence list —
+  constants deliberately NOT pinned in prose, per verifiable-copy discipline);
+  `backend/tests/test_dom_content_churn.py` (new, 9 tests); this log.
+- **Verification (Rule 12, prompt claims vs tree, measured pre-change)**:
+  - CONFIRMED the mechanism: `dom.py` scored `max(churn_score * 0.6,
+    sensitive_score)` — every tag equal in the churn term.
+  - MEASURED (1003-element baseline, pre-change): 120 new
+    `<article>/<p>/<ul>/<li>/<h2>` (churn 720) → **0.5009** (exactly the
+    spec's "redesign 0.4–0.6" class); same magnitude via `<script>` → **1.0**
+    (sensitive boost saturates); 1 wrapped script → **0.5034**; no churn →
+    **0.0**.
+  - DEVIATION LOGGED (spec root-cause overstatement): "5 new `<article>`
+    elements score the same as 5 new `<script>` elements" is true ONLY for
+    the churn CONTRIBUTION (both add 5 to `churn`); the final scores differ
+    hugely already (0.0118 vs 0.9698) because the sensitive boost fires for
+    scripts. The genuine residual problem was large-scale content-only churn
+    (the 0.4–0.6 band), which is what this phase fixes.
+  - CONFIRMED layer-2 fusion weight 1.2863 (training/fusion_model.json,
+    intercept −6.2470): a 0.5 content churn contributed ~0.77 to z as "mild
+    attack evidence"; at 0.167 it contributes ~0.26.
+- **Key design decisions**:
+  - **Closed content WHITELIST, not an infrastructure blacklist**: churn is
+    classified `content` only when EVERY added and removed tag is an ordinary
+    content element (containers/sectioning, inline text semantics, tables,
+    non-executing media); ANY other tag — infrastructure, interactive
+    controls, `<svg>`/`<math>` (can carry script), or anything unknown/custom
+    — keeps the full weight. Unknown tags fail safe toward detection; a
+    blacklist would have given custom-element payloads the discount for no
+    FP-reduction gain. Mirrors Phase 8's "intentionally narrow pattern lists"
+  - **Binary weight, not a proportional split** (infra 0.6 + content 0.2
+    separately): rejected because mixed totals would drop below pre-change,
+    violating the "mixed churn must not weaken infrastructure detection"
+    edge case, and because the binary rule makes the guard tests exact.
+    Chosen weights: full 0.6 (unchanged), content-only 0.2 (a complete
+    content-only rewrite caps its contribution at 0.2 — below the 0.35
+    material-change band on churn evidence alone).
+  - **Sensitive-element detection byte-untouched**: `new_scripts`/
+    `new_iframes`/`new_hidden` computation and `sensitive_score` are exactly
+    as before; only the churn term's multiplier changed, and `max()` still
+    lets the sensitive boost dominate. A script wrapped in content `<div>`s
+    still scores 0.5034 (measured, unchanged).
+  - **Additive evidence** (`churn_class`: "content"/"infrastructure"/"none",
+    `churn_weight`): a reduced score is always auditable; the only non-test
+    evidence consumer (`app/explain.py`) reads other keys; no frontend
+    consumer exists (verified by grep).
+- **Constraints honored**: sensitive-element logic, all other layers,
+  `normalize.py`/`metadata.py` (Phases 8–9), and the fusion model (no refit)
+  untouched; layer-2's fusion feature key/score semantics unchanged (skipped
+  layers, degraded paths, hash gate all untouched); no frontend files touched
+  (frontend gate is a Rule-4 re-run); worker/API import direction untouched;
+  no new dependencies; SSRF surface unchanged (pure comparison logic);
+  scratch measurement script lived in %TEMP% and was deleted before commit.
+- **Edge cases handled (Gauntlet Step 3, each pinned in the new test file)**:
+  - Content-only churn (additions AND removals/archiving) → reduced weight,
+    `churn_class=content` (measured 0.5009 → 0.1670).
+  - Same-magnitude content vs infrastructure churn → content strictly below
+    (pre-change the ordering was INVERTED: content outsourced infra).
+  - Infrastructure churn (120 `<link>` removals) → exact pre-change value,
+    full weight (guard; score assertion held pre-change).
+  - Mixed content + infrastructure (news + 1 dropped `<link>`) → classified
+    infrastructure, full-weight value byte-for-byte with pre-change.
+  - No churn / static sites / text-only swap inside existing tags → 0.0,
+    `churn_class=none` (guard).
+  - Wrapped `<script>` in `<div><p>` → sensitive boost 0.5034 intact (guard;
+    passed pre-change too — the boost was already wrapper-agnostic).
+  - Unknown/legacy tags (100 `<marquee>`) → full weight (guard on scores;
+    fails safe).
+  - Hidden-element farm in content tags (12 hidden `<div>`s) → ≥0.95 via the
+    sensitive boost despite content-class tag churn (Phase 23's pin holds).
+  - Parse-failure paths: return before scoring — untouched (0.0 both-fail /
+    1.0 one-fail pins in test_detection_layers still green).
+  - Non-HTML garbage (libxml2 wraps in `<p>`) → tiny content-only churn now
+    scores even lower; the <0.3 pin still passes.
+  - N/A with reason: site categories / bot-protection tiers / consent-banner
+    patterns (banner churn is unchanged-or-more-conservative: buttons are not
+    whitelisted → full weight) / failure modes / concurrency — pure
+    stateless comparison logic downstream of capture, no I/O.
+  - Backward compatibility: comparison-time only; stored baselines benefit
+    without re-capture; evidence keys additive; no schema change.
+  - Performance: classification is O(distinct churning tags) set membership —
+    negligible against the existing tree walk.
+  - Gameability note (documented, by design): an attacker limited to
+    content-tag churn gets the discount, but that channel cannot execute
+    script; hidden-content payloads hit the sensitive boost, and new external
+    script/iframe/form domains hit layer 3's ≥0.55 rule floor (0.40 floor)
+    independent of layer 2.
+- **Tests added**: `backend/tests/test_dom_content_churn.py` (9 tests, all
+  hermetic unit tests — no network, no DB):
+  - `test_content_only_churn_gets_reduced_weight` (failing-before: KeyError
+    churn_class + score 0.5009 full weight); `test_content_only_removal_
+    churn_also_gets_reduced_weight` (failing-before); `test_content_churn_
+    reduced_vs_same_size_infrastructure_churn` (failing-before: ordering
+    inverted pre-change); `test_infrastructure_churn_keeps_full_weight`
+    (score assertion a pre-existing-behavior guard — passes on both trees;
+    the evidence-key assertion is the failing part); `test_mixed_content_
+    and_infrastructure_churn_not_weakened` (failing-before);
+    `test_no_churn_scores_unchanged` (guard, fails pre-change only on the
+    new key); `test_wrapped_script_still_boosts_sensitive_score` (PASSED
+    pre-change — N/A failing-before, honest guard);
+    `test_unknown_tags_keep_full_weight` (failing-before on keys only);
+    `test_hidden_content_farm_in_content_tags_still_scores_high` (PASSED
+    pre-change — N/A failing-before).
+  - **Failing-before proof (Rule 3)**: the file was run against the
+    UNMODIFIED tree: exactly **7 failed / 2 passed** (the two passes are the
+    pre-existing-behavior guards listed above; every failure was a missing
+    `churn_class`/`churn_weight` key or the unreduced full-weight score /
+    inverted ordering). After the change: all 9 pass.
+  - Test-construction fixes during the session (no implementation change):
+    the first ordering test compared unequal churn magnitudes (720 vs 120)
+    and the first mixed test's current page accidentally kept the `<link>`
+    (no-op `replace`); both corrected and re-proven.
+- **Full regression results**:
+  - Focused pre-suite: new file + `test_detection_layers.py` +
+    `test_phase23_dom_hidden.py` + `test_phase36_detection_low.py` +
+    `test_detection_normalize.py` + `test_suppression.py` +
+    `test_rule_floors.py` + `test_phase24_degradation_signaling.py` +
+    `test_phase34_docs_sync.py` → **208 passed in 30.34s**.
+  - Backend: `cd backend && uv run --frozen pytest -q` → **1249 passed,
+    1 warning in 1316.12s (0:21:56)** — the Rule-4 baseline of 1240 + exactly
+    the 9 new tests; the single warning is the pre-existing apprise `imghdr`
+    DeprecationWarning. At/above baseline: PASS.
+  - `cd backend && uv run --frozen ruff check .` → "All checks passed!"
+    (exit 0).
+  - Frontend re-run (no frontend files touched — Rule 4 re-run, not a
+    change): `pnpm test` → **21 files / 133 passed**; `pnpm exec tsc -b
+    --noEmit` → exit 0 (no output); `pnpm exec oxlint src` → **0 errors,
+    12 warnings** (= baseline).
+- **Manual verification performed**: scenario measurements through the real
+  `layer2_dom_structure` via a scratch script outside the repo (deleted
+  after): the pre/post pairs quoted above; defacement guard
+  (`<h1>OWNED</h1><marquee>` full-content replacement) scores **0.6000
+  unchanged** (removed content tags plus a non-whitelisted addition →
+  infrastructure classification); the doc-sync test pinning
+  `docs/layers/2-dom-structure.mdx` (`test_phase34_docs_sync.py::
+  test_dom_doc_describes_technique_independent_hidden_detection`) still
+  green after the docs edit.
+- **Residual risk / follow-ups**:
+  - The 0.2 content weight is a judgment call calibrated to the spec's
+    "reduced" wording, not to labeled data; if operators later find real
+    defacements hiding inside pure content churn, raising
+    `_CONTENT_CHURN_WEIGHT` toward 0.6 is a one-constant change (and the
+    `churn_class` evidence makes the affected scans identifiable).
+  - Consent-banner churn made of `<div>/<p>/<span>` now scores lower than
+    before (it IS legitimate content-class churn); banner buttons/inputs
+    keep full weight. No test pins banner shapes (not modeled in the suite).
+  - Sites whose feeds emit `<video>/<audio>/<track>` churn now get the
+    discount (non-executing media, layer-3-invisible); deliberate,
+    documented.
+- **New leads observed**:
+  - `app/explain.py`'s layer-2 explainer could surface `churn_class` when a
+    reduced weight applied (operator-facing clarity); not done — additive
+    nicety, out of scope.
+  - Pre-existing residuals unchanged: metadata.py CSP token-superset
+    direction question (Phase 9), `ScanDetailOut` not exposing
+    `capture_evidence`, four `SiteDetailOut(...)` construction sites,
+    locale-format timestamps still churning (Phase 8's narrow lists).
+- **Commit**: this commit — a commit cannot contain its own hash; see
+  `git log --oneline -1` after landing — feat(detection10): content-aware
+  churn weighting for layer 2
+- **Next phase kickoff prompt**: (delivered in chat only — never written to
+  this log)

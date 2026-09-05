@@ -27,7 +27,7 @@ If **both** sides fail to parse, the layer returns `0.0` with a note. If **one**
 flowchart LR
     HTML["Suppressed HTML"]:::in --> P{{"lxml recover-parse<br/>→ element tree"}}
     P --> S["Tree statistics<br/>depth · counts · attrs"]:::node
-    S --> CH["Tag churn<br/>× 0.6"]:::node
+    S --> CH["Tag churn<br/>content-aware weight"]:::node
     S --> SN["Sensitive tags<br/>script · iframe · hidden"]:::node
     CH & SN --> M(("max")):::pick
     M --> OUT["Layer 2<br/>0.0 – 1.0"]:::out
@@ -48,7 +48,10 @@ The layer walks the tree once and extracts a statistics bundle for each side: to
     churn_score = min(1.0, churn / (0.5 * total))
     ```
 
-    where `total = max(baseline_elements, current_elements, 1)`. Roughly half the tree changing drives `churn_score` to `1.0`. This term is then weighted by `0.6` in the final score, so pure structural churn alone caps its contribution at `0.6`.
+    where `total = max(baseline_elements, current_elements, 1)`. Roughly half the tree changing drives `churn_score` to `1.0`. This term is then weighted before the final score — and the weight depends on **what** changed:
+
+    - **Content-only churn** — every added and removed tag is an ordinary content element (`<article>`, `<p>`, `<li>`, `<div>` and the rest of the publishing set in `_CONTENT_CHURN_TAGS`) — receives a **reduced** weight. New articles, refreshed feeds, and content-only redesigns are the benign churn class; scoring them like structural overhauls made the fusion model read them as mild attack evidence.
+    - **Infrastructure churn** — the delta touches anything else (`<script>`, `<iframe>`, `<form>`, `<link>`, form controls, embedded objects such as `<svg>`/`<math>`, or any unknown/custom tag) — keeps the **full** weight. The content list is deliberately closed: tags it doesn't recognize fail safe toward detection.
   </Accordion>
   <Accordion title="Sensitive-tag deltas" icon="triangle-exclamation">
     New `<script>`, `<iframe>`, and hidden elements get a dedicated boost — one injected script on a 1,000-element page is negligible churn but a serious signal. Their combined increase saturates through an exponential:
@@ -76,14 +79,16 @@ The layer walks the tree once and extracts a statistics bundle for each side: to
 The final score is:
 
 ```python
-score = max(churn_score * 0.6, sensitive_score)
+score = max(churn_score * churn_weight, sensitive_score)
 ```
+
+where `churn_weight` is the content-aware weight from the structural-churn accordion above. The classification and the weight applied are recorded in evidence (`churn_class`, `churn_weight`) so a reduced score is always auditable.
 
 Maximum tree-depth delta is recorded in evidence for context but does not directly drive the score.
 
 ## Evidence recorded
 
-The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. Hidden elements carry a per-side attribution block (`hidden_detection`): how much stylesheet text was resolved, and which source hid each counted element (`hidden-attribute`, `inline-style`, or the deciding rule's selector subject). When suppression content rules applied, a `suppression_applied` summary is attached. When the automatic volatile-text normalization pass replaced anything, a `normalization_applied` summary (replacement counts by category) is attached.
+The findings row includes baseline and current element counts, the top added and removed tags (capped at 50 items), the churn classification and weight (`churn_class` / `churn_weight`), script / iframe / hidden counts for both sides, the max-depth delta, and the raw structural churn. Hidden elements carry a per-side attribution block (`hidden_detection`): how much stylesheet text was resolved, and which source hid each counted element (`hidden-attribute`, `inline-style`, or the deciding rule's selector subject). When suppression content rules applied, a `suppression_applied` summary is attached. When the automatic volatile-text normalization pass replaced anything, a `normalization_applied` summary (replacement counts by category) is attached.
 
 ## False-positive suppression
 

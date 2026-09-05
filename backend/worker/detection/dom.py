@@ -2,7 +2,11 @@
 
 Layer 2 compares tag-tree structure: tag counts, tree depth, and the
 counts that matter most for defacement detection — <script>, <iframe>,
-and hidden elements. Hidden-element detection is technique-independent:
+and hidden elements. The generic churn term is content-aware: churn
+confined to ordinary content elements (articles, paragraphs, lists — the
+publishing-churn class) weighs less than churn that touches
+infrastructure tags or anything outside the content list. Hidden-element
+detection is technique-independent:
 it counts the `hidden` attribute, the element's own inline style, and
 rules from the page's own <style> blocks resolved onto each element
 (display/visibility, opacity:0, font-size:0, offscreen positioning).
@@ -37,6 +41,107 @@ from worker.detection.types import PageData, layer_result
 # Cap list-shaped evidence so a pathological page can't balloon the
 # findings row (full artifacts remain on disk for manual inspection).
 MAX_EVIDENCE_ITEMS = 50
+
+# --- content-aware churn weighting (PROMPT-002 Phase 10) ----------------------
+# The generic churn term treats every element equally, so legitimate publishing
+# churn (new articles, feed refreshes, content-only redesigns) can saturate it
+# exactly like an attack and the positive-coefficient fusion model then weighs
+# it as mild attack evidence. Churn confined EXCLUSIVELY to ordinary content
+# elements is therefore weighted down. The list is intentionally narrow and
+# closed (same conservatism as the Phase-8 normalization patterns): churn that
+# touches ANY other tag — infrastructure (script/iframe/form/link), interactive
+# controls, embedded objects (svg/math can carry script), or anything unknown /
+# custom — keeps the full weight, failing safe toward detection. This only ever
+# reduces the churn term: sensitive-tag deltas (new scripts/iframes/hidden
+# elements) are scored separately and are unaffected, so a malicious <script>
+# wrapped inside content <div>s still gets its boost.
+_CONTENT_CHURN_TAGS = frozenset(
+    {
+        # Content containers and sectioning (the publishing-churn class).
+        "article",
+        "div",
+        "p",
+        "li",
+        "ul",
+        "ol",
+        "section",
+        "main",
+        "header",
+        "footer",
+        "nav",
+        "aside",
+        "span",
+        "figure",
+        "figcaption",
+        "blockquote",
+        "pre",
+        "details",
+        "summary",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hgroup",
+        "address",
+        # Inline text semantics.
+        "a",
+        "em",
+        "strong",
+        "b",
+        "i",
+        "u",
+        "s",
+        "small",
+        "sub",
+        "sup",
+        "abbr",
+        "cite",
+        "q",
+        "code",
+        "kbd",
+        "samp",
+        "mark",
+        "time",
+        "var",
+        "del",
+        "ins",
+        "br",
+        "hr",
+        "wbr",
+        "bdi",
+        "bdo",
+        "ruby",
+        "rt",
+        "rp",
+        "data",
+        "dl",
+        "dt",
+        "dd",
+        # Tables.
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "td",
+        "th",
+        "caption",
+        "col",
+        "colgroup",
+        # Non-executing media (their sources carry no script; layer 3 audits
+        # script/iframe/link/form sources, not these).
+        "img",
+        "picture",
+        "source",
+        "video",
+        "audio",
+        "track",
+    }
+)
+_CHURN_WEIGHT = 0.6
+_CONTENT_CHURN_WEIGHT = 0.2
 
 
 def _safe_hostname(url: str | None) -> str:
@@ -413,7 +518,8 @@ def _added_removed(before: Counter, after: Counter) -> tuple[dict, dict]:
 def layer2_dom_structure(baseline: PageData, current: PageData) -> dict:
     """Tag-tree diff with weighted attention on script/iframe/hidden
     deltas. Score grows with the fraction of the tree that changed and
-    jumps on new scripts/iframes/hidden elements."""
+    jumps on new scripts/iframes/hidden elements. Churn consisting only
+    of content tags gets a reduced churn weight (see _CONTENT_CHURN_TAGS)."""
     b_root = parse_html(baseline.html)
     c_root = parse_html(current.html)
     b = _tree_stats(b_root)
@@ -443,6 +549,16 @@ def layer2_dom_structure(baseline: PageData, current: PageData) -> dict:
     # Baseline structural churn, saturating: half the tree changed -> ~1.0.
     churn_score = min(1.0, churn / (0.5 * total))
 
+    # Content-aware weighting: only churn made up ENTIRELY of content tags
+    # (added or removed) is treated as publishing churn; any infrastructure,
+    # interactive, or unknown tag in the delta keeps the full weight. With no
+    # churn the weight is irrelevant (churn_score is 0).
+    non_content_churn = any(
+        tag not in _CONTENT_CHURN_TAGS for tag in (*added, *removed)
+    )
+    content_only_churn = churn > 0 and not non_content_churn
+    churn_weight = _CONTENT_CHURN_WEIGHT if content_only_churn else _CHURN_WEIGHT
+
     # Sensitive-tag deltas get a dedicated boost — one injected <script>
     # on a 1000-element page is tiny churn but a big signal.
     new_scripts = max(0, c["script_count"] - b["script_count"])
@@ -453,10 +569,12 @@ def layer2_dom_structure(baseline: PageData, current: PageData) -> dict:
 
     depth_delta = abs(c["max_depth"] - b["max_depth"])
 
-    score = max(churn_score * 0.6, sensitive_score)
+    score = max(churn_score * churn_weight, sensitive_score)
     evidence = {
         "baseline_elements": b["total_elements"],
         "current_elements": c["total_elements"],
+        "churn_class": ("content" if content_only_churn else "infrastructure") if churn else "none",
+        "churn_weight": churn_weight,
         "tags_added": dict(sorted(added.items(), key=lambda kv: -kv[1])[:MAX_EVIDENCE_ITEMS]),
         "tags_removed": dict(sorted(removed.items(), key=lambda kv: -kv[1])[:MAX_EVIDENCE_ITEMS]),
         "script_count": {"baseline": b["script_count"], "current": c["script_count"]},
