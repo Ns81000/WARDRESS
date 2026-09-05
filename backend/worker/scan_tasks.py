@@ -41,6 +41,23 @@ from worker.probe import probe_site
 
 logger = logging.getLogger(__name__)
 
+# --- Verdict noise floor (PROMPT-002 Phase 11) ---
+# `changed` used to fire on ANY nonzero layer score from a non-skipped
+# layer, so a benign dynamic site whose layer scores never fully zero out
+# (a rounding-tracked timestamp here, a metadata residue there) read
+# "changed" on every scan at near-zero fused risk (~0.03) — the classic
+# operator-trust killer. At or below this floor a layer is verdict
+# silence. Verdict-only by construction:
+# - fusion risk is computed from raw layer scores and is untouched;
+# - `flagged` (risk >= site.flag_threshold) is evaluated independently
+#   and checked first, so the floor can never un-flag anything;
+# - unambiguous attack evidence cannot hide behind it: the rule-based
+#   floors (fusion._RULE_FLOORS: layer 5/7 >= 0.85 -> 0.90, layer 3
+#   >= 0.55 -> 0.40) bypass the floor, and every attack scenario in the
+#   fusion training dataset re-measured during Phase 11 scores > 0.02 on
+#   at least one non-skipped layer (min observed: 0.0518).
+NOISE_FLOOR = 0.02
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -282,8 +299,10 @@ async def _run_scan(scan_id: uuid.UUID) -> str:
 
         fusion = results["layer9_fusion"]
         risk = float(fusion["score"] or 0.0)
+        # Sub-noise layer scores are verdict silence (NOISE_FLOOR above);
+        # `flagged` below stays independent of this rule.
         changed = any(
-            (r.get("score") or 0.0) > 0.0
+            (r.get("score") or 0.0) > NOISE_FLOOR
             for k, r in results.items()
             if k != "layer9_fusion" and not r.get("skipped")
         )

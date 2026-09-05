@@ -75,6 +75,16 @@ The pipeline uses gating rules to preserve resources and suppress false alarms f
   **Input scope** matters. Layers 2, 3, 5, and 8 receive the *suppression-filtered* and *volatility-normalized* copy of both pages (user rules first, then the automatic volatile-text pass — so a rule written against literal raw text still matches); Layer 4 gets bbox-masked screenshots; Layer 1 always hashes the *original* content so tampering is never hidden. Layers 6 and 7 read transport and per-UA data, not the primary DOM.
 </Note>
 
+## Verdicts
+
+Each completed scan gets one of three verdicts:
+
+- **flagged** — fused risk ≥ the site's flag threshold. Creates an alert and (for ready hooks) remediation executions.
+- **changed** — at least one non-skipped layer scored above the verdict noise floor (`NOISE_FLOOR = 0.02`, `worker/scan_tasks.py`). Residue that individual layers cannot fully normalize away (a tracked timestamp, a metadata rounding) no longer keeps a stable site in permanent "changed".
+- **clean** — everything else.
+
+The noise floor is verdict-only: it never touches the fused risk score and never affects flagging. Unambiguous attack evidence cannot hide behind it — the rule-based minimum-risk floors (layer 5/7 ≥ 0.85 → floor 0.90, layer 3 ≥ 0.55 → floor 0.40) bypass the verdict floor entirely.
+
 ## Adaptive cadence scanning
 
 Wardress scales monitoring frequency by the fused risk score, so real changes are watched closely without wasting resources on stable sites.
@@ -93,7 +103,7 @@ flowchart LR
     class T hot;
 ```
 
-- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.40` — deliberately below the default flag threshold (so real change is watched before it becomes alarming), aligned with the LLM escalation floor, and above the fused risk that pure dynamic-content noise produces under the deployed fusion model (measured on held-out benign scenarios after the post-emission-fix regeneration: ~0.14–0.37).
+- **Material-change threshold:** `MATERIAL_CHANGE_RISK = 0.40` — deliberately below the default flag threshold (so real change is watched before it becomes alarming), aligned with the LLM escalation floor, and above the fused risk that pure dynamic-content noise produces under the deployed fusion model (re-measured with the current layer code after the volatile-text normalization + churn-weighting passes: rotating ads, timestamps/counters, cache-busting refs, CSS churn and mixed noise fuse to ~0.14–0.15, editorial rewrites to ~0.30; A/B hero swaps are genuine content deltas and can reach ~0.44 via the semantics layer).
 - **Tighten:** a detected change sets the next interval to `base ÷ 4`.
 - **Relax:** each subsequent clean scan multiplies the interval by `1.5`, walking back up to the site's configured base.
 - **Clamp:** every interval is bounded to `[5 minutes, 24 hours]`.

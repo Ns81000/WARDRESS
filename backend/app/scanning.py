@@ -41,13 +41,18 @@ RELAX_FACTOR = 1.5  # each clean scan -> current*1.5 (capped at base)
 # llm_escalation.ESCALATION_LOW): "the local layers want a second opinion"
 # is the same bar as "worth watching more closely". It must sit ABOVE the
 # fused risk that pure dynamic-content noise produces under the deployed
-# fusion model — re-measured on held-out benign scenarios after the
-# post-emission-fix dataset/model regeneration (Phases 20-23+36 changed
-# layer emissions; the regenerated artifacts moved the benign-dynamic
-# distribution up): rotating ads, timestamps/counters and cache-busting
-# refs fuse to ~0.14-0.15, A/B variants to ~0.36, editorial churn to
-# ~0.37 — so those pages still relax back to base cadence instead of
-# being "adaptive" into permanently tightened scanning. (Heavy legitimate
+# fusion model — re-measured on the full benign-dynamic corpus with the
+# CURRENT layer code after PROMPT-002 Phases 8-10 (volatile-text + CSP
+# nonce normalization, layer-2 content-aware churn weighting; Phase 11
+# session): rotating ads, timestamps/counters, cache-busting refs, CSS
+# churn and mixed noise fuse to ~0.14-0.15 (unchanged-or-lower vs the
+# post-regeneration measurements), editorial rewrites to ~0.30. The one
+# axis that moved UP is A/B hero swaps: normalization made layer 8's
+# semantic comparison more honest on the swapped content, pushing 3/22
+# rows to ~0.43-0.44 — genuine content deltas that legitimately tighten
+# cadence briefly (a same-variant rescan reads clean and relaxes back),
+# not enough to justify decoupling this bar from the 0.40 escalation
+# floor and the new-domain-infrastructure rule floor. (Heavy legitimate
 # restructuring — site redesigns, vendor script additions — legitimately
 # crosses this bar; something big DID happen.)
 MATERIAL_CHANGE_RISK = 0.40

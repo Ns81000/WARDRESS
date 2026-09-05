@@ -1670,3 +1670,153 @@ measured number above is the reference for every later phase.
   churn weighting for layer 2
 - **Next phase kickoff prompt**: (delivered in chat only — never written to
   this log)
+
+### [DONE] PROMPT-002 Phase 11 — Verdict Noise Floor & Adaptive Cadence Tuning
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
+- **Session date**: 2026-09-05
+- **Goal**: Stop the `changed` verdict from firing on capture/normalize residue:
+  it previously fired on ANY nonzero layer score from a non-skipped layer, so a
+  site with timestamp churn + CSP nonce reads (or any sub-noise leftovers)
+  read "changed" every scan at fused risk ~0.03. Add `NOISE_FLOOR = 0.02` to
+  the changed-rule (verdict-only), and re-verify the adaptive-cadence
+  sensitivity claim (`MATERIAL_CHANGE_RISK = 0.40`) against the deployed
+  fusion artifact with the CURRENT post-Phase-8/9/10 layer code (Rule 12:
+  measure, don't assume).
+- **Files changed**: `backend/worker/scan_tasks.py` (NOISE_FLOOR constant
+  :44-59, changed-rule :299-309), `backend/app/scanning.py` (comment refreshed
+  with Phase-11 re-measurement; constant itself UNCHANGED at 0.40),
+  `docs/detection-layers.mdx` (new "Verdicts" section :78-86; cadence
+  material-change bullet re-measured range :106),
+  `backend/tests/test_noise_floor.py` (new, 8 tests), this log.
+- **Key design decisions**:
+  - **Verdict-only floor**: `changed` now reads `(r.get("score") or 0.0) >
+    NOISE_FLOOR` (strict `>`; a score exactly AT the floor is silence). The
+    floor deliberately does NOT touch: (a) fused risk — layer 9 reads raw
+    layer scores and `scan.risk_score` stores the fusion output verbatim;
+    (b) `flagged` — computed from `risk >= site.flag_threshold` independently
+    and checked first, so a threshold-0 site still flags on an all-sub-noise
+    scan; (c) LLM-escalation gating semantics — `should_escalate(risk,
+    changed)` is unchanged, and a re-measurement over all 646 dataset rows
+    found ZERO scenarios with risk in [0.40, 0.75) and every layer <= 0.02,
+    so no escalatable scan can be silenced by the floor.
+  - **Spec 2 verdict — KEEP 0.40 (measured, documented either way)**: full
+    re-measurement of the 646-sample fusion training corpus via
+    `tools/build_fusion_dataset.py` (deterministic regeneration of every
+    row's inputs; `measure_sample`/`build_sanity_*` run the REAL current
+    pipeline; fusion via the DEPLOYED artifact — no refit, no artifact
+    writes; all scratch work in %TEMP%, deleted post-session). Fresh data:
+    pure dynamic-content noise axes (rotating ads, timestamps/counters,
+    cache-busting refs, CSS churn, mixed noise) fuse to ~0.137-0.153,
+    editorial rewrites max ~0.298 (DOWN from ~0.371) — the margin vs 0.40
+    widened exactly as the spec predicted. ONE axis moved UP: A/B hero swaps
+    (3/22 rows, max 0.4393) because normalization made layer 8's semantic
+    comparison more honest on the swapped hero content — those are genuine
+    content deltas that legitimately tighten cadence briefly (a same-variant
+    rescan reads clean and relaxes back). Raising the bar above ~0.44 would
+    decouple it from ESCALATION_LOW = 0.40 and from the
+    new-sensitive-infrastructure rule floor (0.40), whose cadence-visibility
+    property is documented in fusion.py/llm_escalation.py — a worse trade
+    for 3/646 rows. Constant, README pin (`fused_risk >= 0.40`) and both
+    test_phase34 pins therefore stay valid; `app/scanning.py`'s comment and
+    the docs cadence bullet were refreshed with the new measured numbers in
+    THIS commit (verifiable-copy discipline).
+  - **Failing-before discipline**: the new test file was written and run
+    against the UNMODIFIED tree first. Result: 4 failed / 4 passed —
+    `test_all_layers_at_or_below_floor_reads_clean` failed with the exact
+    root-cause symptom (`AssertionError: assert 'changed' == 'clean'`),
+    `test_layer_score_exactly_at_floor_is_silence` and
+    `test_layer_score_just_above_floor_reads_changed` failed on the
+    not-yet-existing `NOISE_FLOOR` constant, and the docs pin failed on the
+    missing import/doc mention (by design for a pin). Behavior guards that
+    pass both before and after are marked N/A failing-before in their
+    docstrings (0.03->changed; layer5=0.90->flagged; threshold-0->flagged;
+    skipped-layers-excluded; degraded-0.0-silent).
+- **Constraints honored**: fusion model artifact untouched (no refit — only
+  measurement); rule-based floors, individual layer scoring, suppression
+  mechanism untouched; Phases 8-10 code (`normalize.py`, `metadata.py`,
+  layer-2 churn weighting) untouched; zero frontend files touched (frontend
+  gate is a re-run, below); lint exit 0; scratch files outside the repo
+  (deleted); no docs/constants pinned in prose without a pin test (the new
+  docs pin lives in test_noise_floor.py and pins both `NOISE_FLOOR = 0.02`
+  and `MATERIAL_CHANGE_RISK = 0.40` against their modules).
+- **Edge cases handled (Gauntlet Step 3)**:
+  - Floor must not hide real attacks: re-measured all 323 attack rows with
+    current layer code — ZERO have max non-skipped layer <= 0.02 (min
+    observed 0.0518, `combined_subthreshold` axis); plus the rule floors
+    (layer 5/7 >= 0.85 -> 0.90, layer 3 >= 0.55 -> 0.40) bypass the verdict
+    floor structurally. Pinned by
+    `test_conclusive_signature_flagged_regardless_of_floor`.
+  - Floor must not affect risk-score calculation: fusion reads raw layer
+    scores; `scan.risk_score` asserted equal to the fusion output in both
+    the clean and flagged tests.
+  - Floor must not affect `flagged`: pinned by
+    `test_floor_never_affects_flagging` (threshold-0 site flags on an
+    all-sub-noise scan) and by the flagged-first ordering in `_run_scan`.
+  - Skipped layers: excluded from the changed-rule regardless of nominal
+    score (structural gate = proof of zero); pinned.
+  - Degraded layers: score 0.0 must not manufacture "changed"; the
+    uncertainty uplift lives in fusion risk only (capped at 0.30 < 0.40
+    material bar); pinned.
+  - Escalation-band interaction: zero dataset rows with risk in
+    [0.40, 0.75) and all layers <= 0.02 — the floor cannot silence an
+    escalatable scan (measured, not assumed).
+- **Tests added**: `backend/tests/test_noise_floor.py` — 8 tests:
+  test_all_layers_at_or_below_floor_reads_clean (failing-before: 'changed'
+  == 'clean' symptom), test_layer_score_exactly_at_floor_is_silence
+  (boundary, strict >; failing-before via missing constant + old rule),
+  test_layer_score_just_above_floor_reads_changed (guard, N/A),
+  test_conclusive_signature_flagged_regardless_of_floor (guard, N/A),
+  test_floor_never_affects_flagging (guard, N/A),
+  test_skipped_layers_never_contribute_to_changed (guard, N/A),
+  test_degraded_layers_do_not_manufacture_changed (guard, N/A),
+  test_detection_layers_doc_noise_floor_matches_module (docs pin;
+  failing-before until the doc landed in this same commit).
+- **Full regression results**:
+  - Backend (targeted, pre-implementation failing-before run of the new file
+    against the UNMODIFIED tree): `uv run --frozen pytest
+    tests/test_noise_floor.py -q` → **4 failed / 4 passed** (failure modes
+    above). Post-implementation re-run: **8 passed in 6.34s**.
+  - Backend (targeted post-implementation): `tests/test_noise_floor.py
+    tests/test_phase34_docs_sync.py tests/test_scan_tasks.py
+    tests/test_scheduler.py` → **64 passed in 34.62s** (1 failure was the
+    docs pin's own float-repr bug — `0.40` formatted as `0.4` — fixed before
+    commit; clean re-run 8/8 and full-suite green).
+  - Backend (full): `cd backend && uv run --frozen pytest -q` → **1257
+    passed, 1 warning in 1300.27s (0:21:40)**. Baseline was 1249 passed +
+    1 warning: +8 = exactly the new test file; the single warning is the
+    pre-existing `apprise/utils/pgp.py:48 DeprecationWarning: 'imghdr'`
+    (verified in the run log) — at or above the Rule-4 baseline.
+  - Backend lint: `cd backend && uv run --frozen ruff check .` → "All checks
+    passed!" (exit 0).
+  - Frontend (no frontend files touched — Rule-4 re-run): `pnpm test` →
+    **21 files / 133 passed** (18.94s); `pnpm exec tsc -b --noEmit` → exit 0;
+    `pnpm exec oxlint src` → **0 errors, 12 warnings** (≤12 baseline holds).
+- **Manual verification performed**: none required — no live-site surfaces
+  touched; the measurement job (646 pipeline re-runs) is the phase's manual
+  verification equivalent, executed detached with a log per session ops.
+- **Residual risk / follow-ups**: (1) The training corpus features are now
+  stale relative to the current layer code in the OTHER direction (they no
+  longer match what production layers emit); the dataset/model were NOT
+  regenerated (explicitly out of scope, no-refit constraint) — a future
+  regeneration phase should re-run `build_fusion_dataset.py` +
+  `refit_fusion_model.py` and re-reconcile ESCALATION_LOW/
+  MATERIAL_CHANGE_RISK/NOISE_FLOOR exactly as Phase 11 did.
+  (2) A/B-variant sites whose served variant alternates per scan will
+  oscillate tighten/relax around the 0.40 bar for genuine hero swaps —
+  accepted, bounded, and documented in the scanning.py comment.
+- **New leads observed**: (1) `sanity_benign_quiet` (visitors-counter text
+  swap) fuses to 0.6583 with only layer4_visual_diff = 0.095 — the deployed
+  model's layer-4 coefficient dominates small visual deltas; benign
+  sanity row, excluded from val/test, but worth a look at the next refit.
+  (2) `app/explain.py` could surface `churn_class` (pre-existing additive
+  nicety, out of scope). (3) The `sanity_benign_quiet` row is also the only
+  benign row whose verdict flips flagged@0.5 — flagged verdicts are
+  threshold-driven, so this only matters if an operator's site actually
+  renders counter text into pixels; layer 6's metadata and layer 4's mask
+  story unchanged.
+- **Commit**: this commit — a commit cannot contain its own hash; see
+  `git log --oneline -1` (feat(detection11): verdict noise floor + cadence
+  re-measurement).
+- **Next phase kickoff prompt**: (delivered in chat only — never written to
+  this log)
