@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, update
 
+from app.capture import CAPTURE_METHOD_VERSION
 from app.models import (
     Alert,
     Baseline,
@@ -122,6 +123,15 @@ async def _capture_baseline(baseline_id: uuid.UUID) -> str:
             "final_url": result.final_url,
             "http_status": result.http_status,
             "headers": result.headers,
+            # PROMPT-002 Phase 7 migration gate: which capture flow built
+            # this baseline — the re-baseline hint compares it against the
+            # current capture's. Evidence wins (records what actually
+            # happened); the constant is the honest fallback for evidence
+            # predating the field, since that capture used this flow.
+            "capture_method_version": (
+                (result.capture_evidence or {}).get("capture_method_version")
+                or CAPTURE_METHOD_VERSION
+            ),
             # Phase 2 layer-6 anchors:
             "probe_headers": probe.headers,
             "tls": probe.tls,

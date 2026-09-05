@@ -248,6 +248,7 @@ export interface HealthDetails {
   last_dispatch_tick_at: string | null
   components: Record<string, HealthComponent>
   sites_with_degraded_scans: number
+  capture_quality_summary: Record<string, number>
 }
 
 export interface BulkImportRowResult {
@@ -293,6 +294,12 @@ export interface Site {
   baseline_status: BaselineStatus | null
   baseline_captured_at: string | null
   baseline_error: string | null
+  // PROMPT-002 Phase 7 re-baseline hint. Populated by the site-detail
+  // endpoint; the sites-list endpoint does not compute it (optional here,
+  // never assumed present).
+  baseline_capture_method_version?: number | null
+  current_capture_method_version?: number
+  needs_rebaseline?: boolean
 }
 
 export interface Scan {

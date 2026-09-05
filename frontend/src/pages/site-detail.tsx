@@ -612,6 +612,23 @@ export function SiteDetailPage() {
                   </p>
                 )}
 
+                {/* PROMPT-002 Phase 7 re-baseline hint: the active baseline was
+                    captured by an older capture method, so the first scans against
+                    it can flag one-time structural deltas (scroll depth, banner
+                    state) as changes. Both versions come from the API payload. */}
+                {baselineReady && s.needs_rebaseline && (
+                  <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5">
+                    <p className="text-caption font-medium text-ink">Capture method updated</p>
+                    <p className="mt-1 text-caption text-mute">
+                      This baseline was captured by capture method{" "}
+                      {s.baseline_capture_method_version ?? "unknown"}; the current method is{" "}
+                      {s.current_capture_method_version}. Run a rebaseline so scans compare against
+                      a capture of the same method — otherwise the first scans may flag one-time
+                      structural differences.
+                    </p>
+                  </div>
+                )}
+
                 {/* Metadata summary list to fill empty card space */}
                 {baselineReady && (
                   <div className="mt-4 border-t border-hairline-strong pt-4 text-caption text-mute space-y-2.5 font-mono">

@@ -325,6 +325,34 @@ try {
 
 $output += ""
 
+# --- Capture Readiness ----------------------------------------------------
+
+$output += Write-Section "CAPTURE READINESS"
+
+try {
+    $ver = docker compose exec -T worker python -c "from app.capture import CAPTURE_METHOD_VERSION; print(CAPTURE_METHOD_VERSION)" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $output += "Worker capture-method version: $ver"
+    } else {
+        $output += "Worker capture-method version: UNAVAILABLE (is the worker container running?)"
+    }
+} catch {
+    $output += "Worker capture-readiness check failed: $($_.Exception.Message)"
+}
+
+try {
+    $pwver = docker compose exec -T worker python -c "import playwright; print(playwright.__version__)" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $output += "Worker Playwright: $pwver (browsers are baked into the worker base image)"
+    } else {
+        $output += "Worker Playwright: UNAVAILABLE (captures cannot run)"
+    }
+} catch {
+    $output += "Worker Playwright check failed: $($_.Exception.Message)"
+}
+
+$output += ""
+
 # --- Disk Space ----------------------------------------------------------
 
 $output += Write-Section "DISK SPACE"

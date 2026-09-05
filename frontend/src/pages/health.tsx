@@ -100,6 +100,17 @@ function fmtAgo(iso: string | null): string {
   return h < 48 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`
 }
 
+// PROMPT-002 Phase 7 capture health summary. Renders exactly the buckets
+// the API counted — rows predating capture evidence are absent from the
+// payload and stay absent here (never invented as zeros).
+function formatCaptureQuality(summary: Record<string, number> | undefined): string {
+  if (!summary || Object.keys(summary).length === 0) return "no capture evidence yet"
+  return Object.entries(summary)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([quality, count]) => `${quality} ${count}`)
+    .join(" · ")
+}
+
 const COMPONENT_LABELS: Record<string, string> = {
   database: "PostgreSQL Database",
   redis: "Redis Message Queue",
@@ -1029,6 +1040,22 @@ export function HealthPage() {
                   </dd>
                   <p className="mt-1 text-[10px] leading-snug text-mute">
                     sites whose latest scan ran with failed capture/probe layers
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
+                  <dt className="text-caption uppercase tracking-wider text-mute">Capture Quality (24h)</dt>
+                  <dd className="mt-1.5 text-body-sm font-medium text-ink">
+                    {isLoading ? (
+                      <span className="inline-block h-4 w-24 animate-pulse rounded bg-hairline-strong" />
+                    ) : isError ? (
+                      "n/a"
+                    ) : (
+                      formatCaptureQuality(h?.capture_quality_summary)
+                    )}
+                  </dd>
+                  <p className="mt-1 text-[10px] leading-snug text-mute">
+                    completed scans by their capture_quality label
                   </p>
                 </div>
 

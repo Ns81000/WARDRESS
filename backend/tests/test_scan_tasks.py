@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from app.capture import CAPTURE_METHOD_VERSION
 from app.models import Baseline, BaselineStatus, Scan, ScanFinding, ScanStatus, Site
 from worker import scan_tasks
 from worker.detection.pipeline import LAYERS
@@ -125,6 +126,42 @@ async def test_capture_success(db_factory, fetch_calls) -> None:
     assert row.captured_at is not None
     assert row.error is None
     assert fetch_calls == ["https://example.com/"]
+
+
+async def test_capture_stamps_capture_method_version_fallback(db_factory, fetch_calls) -> None:
+    """A fetch result predating capture evidence (None) still stamps the
+    current flow's version into capture_meta — that capture used this
+    flow, so the fallback constant is the honest value (PROMPT-002
+    Phase 7; the re-baseline hint compares against this)."""
+    site = await _make_site(db_factory)
+    baseline = await _make_baseline(db_factory, site.id)
+
+    assert await scan_tasks._capture_baseline(baseline.id) == "ready"
+
+    row = await _get(db_factory, Baseline, baseline.id)
+    assert row.capture_meta["capture_method_version"] == CAPTURE_METHOD_VERSION
+
+
+async def test_capture_prefers_evidence_capture_method_version(db_factory, monkeypatch) -> None:
+    """When the fetch result carries capture evidence, the version it
+    recorded wins over the fallback constant — the baseline records what
+    actually happened, not what the worker is running now."""
+    from worker.fetcher import FetchResult as _FetchResult
+
+    async def fake_fetch(url: str, *, allow_private_networks: bool = False) -> _FetchResult:
+        result = _fetch_result()
+        result.capture_evidence = {"capture_method_version": 99}
+        return result
+
+    monkeypatch.setattr(scan_tasks, "fetch_page", fake_fetch)
+
+    site = await _make_site(db_factory)
+    baseline = await _make_baseline(db_factory, site.id)
+
+    assert await scan_tasks._capture_baseline(baseline.id) == "ready"
+
+    row = await _get(db_factory, Baseline, baseline.id)
+    assert row.capture_meta["capture_method_version"] == 99
 
 
 async def test_capture_demotes_previous_current(db_factory, fetch_calls) -> None:

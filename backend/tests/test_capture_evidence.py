@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import worker.fetcher as fetcher_mod
+from app.capture import CAPTURE_METHOD_VERSION
 from worker.fetcher import BROWSER_LAUNCH_ARGS, FetchResult, _classify_capture_quality, fetch_page
 from worker.page_prepare import auto_scroll_page
 
@@ -189,6 +190,14 @@ async def test_fetch_page_assembles_capture_evidence(evidence_target, fast_settl
     # Health label — informational only.
     assert evidence["capture_quality"] == "full"
     assert result.screenshot.startswith(b"\x89PNG")
+    # PROMPT-002 Phase 7 final assembly: migration-gate version, honest
+    # stealth status, challenge-gate outcome, attempt wall clock.
+    assert evidence["capture_method_version"] == CAPTURE_METHOD_VERSION
+    assert evidence["stealth_applied"] is True
+    assert evidence["cloudflare_challenge_detected"] is False
+    assert evidence["cloudflare_challenge_resolved"] is False
+    assert isinstance(evidence["capture_wall_clock_ms"], int)
+    assert evidence["capture_wall_clock_ms"] >= 0
 
 
 async def test_page_prepare_evidence_keys_unchanged(browser, evidence_target) -> None:

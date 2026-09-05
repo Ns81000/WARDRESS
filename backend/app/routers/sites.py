@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import services
 from app.audit import record_audit
+from app.capture import CAPTURE_METHOD_VERSION
 from app.db import get_db
 from app.deps import AnalystUser, CurrentUser
 from app.explain import ExplainError, explain_scan
@@ -92,6 +93,21 @@ async def _consecutive_degraded_scans(db: AsyncSession, site_id: uuid.UUID) -> i
     return count
 
 
+def _rebaseline_hint(baseline: Baseline | None) -> tuple[int | None, bool]:
+    """(baseline capture-method version, needs-rebaseline) for the
+    site-detail hint (PROMPT-002 Phase 7). A baseline that predates
+    versioning reports None and never hints — absence is unknown, not
+    old; only a recorded version strictly below the current capture
+    flow's version means the next scans can flag one-time structural
+    deltas."""
+    if baseline is None:
+        return None, False
+    version = (baseline.capture_meta or {}).get("capture_method_version")
+    if not isinstance(version, int):
+        return None, False
+    return version, version < CAPTURE_METHOD_VERSION
+
+
 @router.post("", response_model=SiteDetailOut, status_code=status.HTTP_201_CREATED)
 async def create_site(
     body: SiteCreate,
@@ -116,6 +132,7 @@ async def create_site(
         **SiteOut.model_validate(site).model_dump(),
         baseline_id=baseline.id,
         baseline_status=baseline.status,
+        current_capture_method_version=CAPTURE_METHOD_VERSION,
     )
 
 
@@ -169,6 +186,11 @@ async def list_sites(
     out = []
     for site in sites:
         baseline = current_by_site.get(site.id) or newest_by_site.get(site.id)
+        # The list surface carries the re-baseline hint fields too, so the
+        # sites page and the detail page agree (Phase 7): the current flow
+        # version always; the baseline's version via the same helper the
+        # detail endpoint uses (absence = unknown, never old).
+        baseline_version, needs_rebaseline = _rebaseline_hint(baseline)
         out.append(
             SiteDetailOut(
                 **SiteOut.model_validate(site).model_dump(),
@@ -176,6 +198,9 @@ async def list_sites(
                 baseline_status=baseline.status if baseline else None,
                 baseline_captured_at=baseline.captured_at if baseline else None,
                 baseline_error=baseline.error if baseline else None,
+                baseline_capture_method_version=baseline_version,
+                current_capture_method_version=CAPTURE_METHOD_VERSION,
+                needs_rebaseline=needs_rebaseline,
             )
         )
     return out
@@ -196,6 +221,7 @@ async def get_site(
             .order_by(Baseline.created_at.desc())
             .limit(1)
         )
+    baseline_version, needs_rebaseline = _rebaseline_hint(baseline)
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
         baseline_id=baseline.id if baseline else None,
@@ -203,6 +229,9 @@ async def get_site(
         baseline_captured_at=baseline.captured_at if baseline else None,
         baseline_error=baseline.error if baseline else None,
         consecutive_degraded_scans=await _consecutive_degraded_scans(db, site.id),
+        baseline_capture_method_version=baseline_version,
+        current_capture_method_version=CAPTURE_METHOD_VERSION,
+        needs_rebaseline=needs_rebaseline,
     )
 
 
@@ -263,12 +292,16 @@ async def update_site(
             .order_by(Baseline.created_at.desc())
             .limit(1)
         )
+    baseline_version, needs_rebaseline = _rebaseline_hint(baseline)
     return SiteDetailOut(
         **SiteOut.model_validate(site).model_dump(),
         baseline_id=baseline.id if baseline else None,
         baseline_status=baseline.status if baseline else None,
         baseline_captured_at=baseline.captured_at if baseline else None,
         baseline_error=baseline.error if baseline else None,
+        baseline_capture_method_version=baseline_version,
+        current_capture_method_version=CAPTURE_METHOD_VERSION,
+        needs_rebaseline=needs_rebaseline,
     )
 
 

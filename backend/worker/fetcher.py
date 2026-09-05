@@ -39,6 +39,13 @@ transient errors. Every attempt builds a fresh browser/context/page
 with its own stealth patches, consent cookies and SSRF route guard;
 nothing from a failed attempt survives except the retry count, which
 rides in capture_evidence.
+
+The final evidence assembly (PROMPT-002 Phase 7): every attempt also
+records `capture_method_version` (the app/capture.py migration gate),
+`stealth_applied` (honest stealth_available() status — not assumed),
+`cloudflare_challenge_detected`/`_resolved` from the Phase-2 gate, and
+`capture_wall_clock_ms` for the attempt, alongside the Phase 3-6 facts
+and the informational `capture_quality` label.
 """
 
 import asyncio
@@ -52,6 +59,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, Route, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from app.capture import CAPTURE_METHOD_VERSION
 from app.ssrf import SSRFBlockedError, assert_url_allowed
 from worker.banner_dismiss import dismiss_banners, inject_consent_cookies
 from worker.page_prepare import auto_scroll_page, wait_for_content_stable
@@ -69,6 +77,7 @@ from worker.stealth import (
     RETRY_PAUSE_MS,
     SETTLE_MS,
     apply_stealth,
+    stealth_available,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,13 +230,19 @@ async def _wait_out_challenge(
     fallback_response: Response | None,
     deadline: float,
     wait_ms: int = CHALLENGE_WAIT_MS,
-) -> None:
+) -> dict:
     """Detect a Cloudflare challenge after the initial settle and wait for
     it to auto-solve within `wait_ms` (bounded by the navigation budget
     deadline), re-checking at CHALLENGE_POLL_MS. A persistent challenge
     raises _ChallengeUnsolvedError (is-a FetchError) — a hard capture
     failure, never challenge HTML stored as content. Phase 6 passes the
     longer CHALLENGE_RETRY_WAIT_MS on the challenge retry.
+
+    Returns the challenge evidence for capture_evidence (PROMPT-002
+    Phase 7): `{"cloudflare_challenge_detected": bool,
+    "cloudflare_challenge_resolved": bool}`. `resolved` is only ever True
+    when detected was — and a persistent challenge raises instead of
+    returning, so the failing path stores no evidence at all.
 
     Every re-check combines the CURRENT document's markers with the latest
     main-frame response: a challenge that solves reloads the page, and
@@ -241,7 +256,7 @@ async def _wait_out_challenge(
         http_status=http_status,
         headers=headers,
     ):
-        return
+        return {"cloudflare_challenge_detected": False, "cloudflare_challenge_resolved": False}
 
     logger.info("Cloudflare challenge detected; waiting for auto-solve")
     remaining_ms = min(wait_ms, int((deadline - time.monotonic()) * 1000))
@@ -256,7 +271,10 @@ async def _wait_out_challenge(
             headers=headers,
         ):
             logger.info("Cloudflare challenge cleared during wait")
-            return
+            return {
+                "cloudflare_challenge_detected": True,
+                "cloudflare_challenge_resolved": True,
+            }
         remaining_ms = min(wait_ms, int((deadline - time.monotonic()) * 1000))
 
     raise _ChallengeUnsolvedError(BOT_PROTECTION_ERROR)
@@ -488,6 +506,7 @@ async def _capture_attempt(
     context, page, stealth patches, consent cookies and SSRF route guard,
     ending in the assembled FetchResult. Everything is attempt-local, so a
     retried attempt can never double-count the previous attempt's state."""
+    attempt_started = time.monotonic()
     async with async_playwright() as pw:
         # Blink's AutomationControlled feature is the single loudest
         # "this is a bot" signal Chromium ships; disable it at launch
@@ -585,8 +604,9 @@ async def _capture_attempt(
             # Cloudflare challenge page? Wait out a solvable one, or fail
             # the capture hard (rule: never store challenge HTML).
             # Phase 6 passes the longer CHALLENGE_RETRY_WAIT_MS on the
-            # challenge retry.
-            await _wait_out_challenge(
+            # challenge retry. Phase 7 keeps the returned challenge
+            # evidence (detected/resolved) for capture_evidence.
+            challenge_evidence = await _wait_out_challenge(
                 page,
                 nav_responses,
                 fallback_response=response,
@@ -658,11 +678,20 @@ async def _capture_attempt(
             # detection reads it. Phase 6 adds the retry count (the
             # Phase-7 final assembly expects this exact key name).
             capture_evidence = {
+                # Phase 7 (final assembly): the migration-gate version,
+                # honest stealth status, the challenge gate's outcome, and
+                # the attempt's wall clock, alongside every prior phase's
+                # evidence. Consumers treat missing keys as "unknown" —
+                # pre-Phase-7 evidence dicts never crash them.
+                "capture_method_version": CAPTURE_METHOD_VERSION,
+                "stealth_applied": stealth_available(),
+                **challenge_evidence,
                 **scroll_evidence,
                 **stability_evidence,
                 **screenshot_evidence,
                 **banner_evidence,
                 "retry_count": retry_count,
+                "capture_wall_clock_ms": int((time.monotonic() - attempt_started) * 1000),
                 "capture_quality": _classify_capture_quality(
                     {**scroll_evidence, **stability_evidence, **screenshot_evidence}
                 ),

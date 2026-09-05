@@ -198,23 +198,35 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
     # detection layer. A systematic capture failure otherwise completes
     # scans that look perfectly clean — this is the visible trace.
     sites_with_degraded_scans = 0
+    capture_quality_summary: dict[str, int] = {}
     if db_up:
         recent = (
             await db.execute(
-                select(Scan.site_id, Scan.layer_scores)
+                select(Scan.site_id, Scan.layer_scores, Scan.capture_evidence)
                 .where(Scan.status == ScanStatus.completed, Scan.created_at >= day_ago)
                 .order_by(Scan.created_at.desc())
                 .limit(2000)
             )
         ).all()
         latest_degraded: dict = {}
-        for site_id, layer_scores in recent:
+        quality_counts: dict[str, int] = {}
+        for site_id, layer_scores, capture_evidence in recent:
+            # Capture health summary (PROMPT-002 Phase 7): every completed
+            # scan in the window contributes its capture_quality label when
+            # it has one; rows predating capture evidence stay uncounted
+            # (unknown) rather than being zeroed into a bucket. This runs
+            # BEFORE the latest-per-site dedup below — the summary counts
+            # scans, the degraded fleet view counts sites.
+            quality = (capture_evidence or {}).get("capture_quality")
+            if isinstance(quality, str) and quality:
+                quality_counts[quality] = quality_counts.get(quality, 0) + 1
             if site_id in latest_degraded:
                 continue
             latest_degraded[site_id] = any(
                 (entry or {}).get("degraded") for entry in (layer_scores or {}).values()
             )
         sites_with_degraded_scans = sum(1 for degraded in latest_degraded.values() if degraded)
+        capture_quality_summary = quality_counts
 
     components: dict[str, HealthComponent] = {
         "database": HealthComponent(status="ok" if db_up else "down"),
@@ -245,4 +257,5 @@ async def health_details(user: CurrentUser, db: DB) -> HealthDetails:
         last_dispatch_tick_at=last_dispatch_tick_at,
         components=components,
         sites_with_degraded_scans=sites_with_degraded_scans,
+        capture_quality_summary=capture_quality_summary,
     )

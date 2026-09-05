@@ -114,6 +114,15 @@ class SiteDetailOut(SiteOut):
     # detection ran with at least one degraded (capture/probe-failed)
     # layer. Populated on GET /sites/{id}; None where not computed.
     consecutive_degraded_scans: int | None = None
+    # PROMPT-002 Phase 7 re-baseline hint: the capture-method version the
+    # current baseline was captured with (None = predates versioning —
+    # unknown, never treated as old), the version the running capture flow
+    # stamps, and whether the baseline is older than it. True means the
+    # first scans against this baseline can flag one-time structural
+    # deltas (scroll depth, banner state) as changes; rebaseline to clear.
+    baseline_capture_method_version: int | None = None
+    current_capture_method_version: int = 0
+    needs_rebaseline: bool = False
 
 
 # --- Baselines / scans ---
@@ -999,3 +1008,8 @@ class HealthDetails(BaseModel):
     # one degraded (capture/probe-failed) detection layer — the fleet-wide
     # view of systematic capture failures.
     sites_with_degraded_scans: int = 0
+    # PROMPT-002 Phase 7 capture health summary: counts of completed
+    # scans' capture_quality labels over the same 24h window. Only scans
+    # that carry capture evidence are counted — rows predating the field
+    # are absent (unknown), never zeroed into a bucket.
+    capture_quality_summary: dict[str, int] = {}

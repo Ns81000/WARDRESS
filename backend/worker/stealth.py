@@ -241,3 +241,12 @@ async def apply_stealth(context: BrowserContext) -> None:
     await stealth.apply_stealth_async(context)
     await context.add_init_script(_SUPPLEMENTARY_INIT_JS)
     logger.debug("Stealth patches applied to capture context")
+
+
+def stealth_available() -> bool:
+    """True when playwright-stealth is importable, i.e. `apply_stealth`
+    actually applies the evasion set. Honesty surface for capture
+    evidence's `stealth_applied` field (PROMPT-002 Phase 7): the fail-open
+    contract above is unchanged — when False the capture still works, just
+    unhardened, and the evidence records that fact instead of hiding it."""
+    return Stealth is not None

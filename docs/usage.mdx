@@ -67,6 +67,14 @@ Captures use a fresh browser with no stored cookies, so many sites greet every c
   If you upgraded Wardress from a version without banner dismissal, the **first scan** after the update may flag the now-missing banner elements as a change: baselines captured earlier contain the banner. This is a one-time difference that self-heals after the next rebaseline — force a re-baseline from the site detail panel to refresh immediately.
 </Info>
 
+### Capture-Method Versions & Re-Baselining
+
+Every capture records *how* it was made: which capture-method version built it, whether the anti-bot stealth patches were actually applied, whether a bot-protection challenge was detected (and resolved), how the scroll and stability passes went, whether the screenshot was height-capped, and how long the capture took. This capture evidence is stored with each scan, and the capture-method version is also stamped on the baseline it produced.
+
+When a Wardress update changes the capture flow — a new preparation pass, different screenshot semantics — captures made by the new method are not directly comparable with baselines made by the old one. The site detail panel shows a **"Capture method updated"** notice when a site's current baseline was captured by an older capture method, because the first scans against such a baseline can flag one-time structural differences (scroll depth, banner state, page height) as changes. Run a rebaseline from that notice (or the existing rebaseline action) to refresh the trusted capture; the notice clears once the baseline matches the current method. Baselines that predate capture-method versioning report no version and never trigger the notice — Wardress does not guess.
+
+The stealth patches are hardening, not a guarantee: a site whose bot protection still blocks the capture fails with a clear error rather than storing a challenge page, and captures report honestly when the stealth library could not be applied.
+
 ## Scan Reports
 
 When a scan is completed, a detailed report is generated.

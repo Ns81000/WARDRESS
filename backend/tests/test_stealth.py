@@ -111,6 +111,26 @@ async def test_apply_stealth_missing_package_degrades_gracefully(
     assert any("WITHOUT stealth" in r.message for r in caplog.records)
 
 
+def test_stealth_available_tracks_library_presence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Honesty surface for capture evidence's stealth_applied (PROMPT-002
+    Phase 7): True when playwright-stealth is importable, False when
+    absent. The fail-open capture contract is pinned by the degradation
+    test above and is unchanged."""
+    assert stealth_mod.stealth_available() is True
+    monkeypatch.setattr(stealth_mod, "Stealth", None)
+    assert stealth_mod.stealth_available() is False
+
+
+def test_capture_evidence_derives_stealth_applied_from_availability() -> None:
+    """The Phase-7 evidence assembly must DERIVE stealth_applied from
+    stealth_available() — hardcoding True would make a dev install
+    without the library lie in every capture's evidence. Seam pinned
+    across both capture-flow functions (Phase 6 split the flow)."""
+    src = inspect.getsource(fetch_page) + inspect.getsource(_capture_attempt)
+    assert "stealth_applied" in src
+    assert "stealth_available()" in src
+
+
 def test_capture_user_agent_no_longer_self_identifies() -> None:
     """FAILED-before: the old fetcher shipped
     'Mozilla/5.0 ... Wardress/0.1 SiteMonitor' — a self-identifying monitor
