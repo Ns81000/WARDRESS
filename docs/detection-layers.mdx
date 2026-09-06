@@ -85,6 +85,10 @@ Each completed scan gets one of three verdicts:
 
 The noise floor is verdict-only: it never touches the fused risk score and never affects flagging. Unambiguous attack evidence cannot hide behind it — the rule-based minimum-risk floors (layer 5/7 ≥ 0.85 → floor 0.90, layer 3 ≥ 0.55 → floor 0.40) bypass the verdict floor entirely.
 
+## Regression corpus
+
+A compact, deterministic regression corpus (`backend/worker/detection/training/regression_corpus.json`, built by `backend/tools/build_regression_corpus.py` from the same scenario builders as the fusion training dataset) re-measures a strict subset of attack and benign-dynamic axes through the real pipeline on every deliberate regeneration. `backend/tests/test_detection_regression.py` pins the detectors' aggregate behavior against the committed artifact — every attack scenario still reads "changed" with a content layer above the verdict noise floor, attack axes keep a minimum detection strength (or their channel is covered by a rule floor), benign-dynamic churn stays below the material-change band, and each stored fused risk reproduces from the stored features through the deployed fusion layer. The test also rebuilds the corpus in-process and requires a row-for-row match with the committed artifact, so a detector or scenario-builder change that alters any measured row fails loudly instead of drifting silently. Regenerate the artifact deliberately (with the tool in `backend/tools/`) whenever detector behavior changes on purpose, and re-verify the pinned invariants as part of that change.
+
 ## Adaptive cadence scanning
 
 Wardress scales monitoring frequency by the fused risk score, so real changes are watched closely without wasting resources on stable sites.

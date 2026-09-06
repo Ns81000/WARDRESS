@@ -1820,3 +1820,271 @@ measured number above is the reference for every later phase.
   re-measurement).
 - **Next phase kickoff prompt**: (delivered in chat only — never written to
   this log)
+### [DONE] PROMPT-002 Phase 12 — Detector Regression Harness
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md (as
+  amended by the Phase 12 kickoff prompt, which superseded the file's stale
+  Phase-12 draft; see the deviation note below)
+- **Session date**: 2026-09-06
+- **Goal**: Make the detectors' aggregate behavior mechanically re-verified
+  (it had been hand-built fixtures only + one ad-hoc 646-row measurement):
+  build a deterministic, COMPACT regression corpus (~120-200 rows, strict
+  subset of the fusion dataset's axes, exact per-axis counts pinned as
+  constants) that IMPORTS and reuses `tools/build_fusion_dataset.py`'s
+  scenario builders, emit it atomically to
+  `worker/detection/training/regression_corpus.json`, and pin per-axis
+  invariants + determinism in a new test file so a detector regression
+  fails loudly in CI.
+- **Files changed**:
+  - `backend/tools/build_regression_corpus.py` — NEW (340 lines): builds an
+    in-memory dict and writes it atomically (tmp + `os.replace`, the fusion
+    dataset builder's mechanism); `build_corpus(out_path=None)` is the
+    in-memory rebuild the drift tests use and NEVER touches the artifact.
+  - `backend/worker/detection/training/regression_corpus.json` — NEW
+    artifact: 152 rows = 12 attack + 7 benign-dynamic axes × 8 rows/axis,
+    `embedder.mode=real-local-cache`, generated via the tool with
+    HF_HUB_OFFLINE=1 (no network).
+  - `backend/tests/test_detection_regression.py` — NEW (10 tests):
+    meta/schema pins, structural validity, per-axis invariants (attack
+    changed / attack ≥0.10-or-rule-floor / benign < MATERIAL_CHANGE_RISK),
+    fused-risk self-consistency, two-rebuild determinism, committed-vs-
+    rebuild drift pin, docs pin.
+  - `docs/detection-layers.mdx` — new "Regression corpus" section between
+    "Verdicts" and "Adaptive cadence scanning" (no constants pinned in
+    prose — the names of the artifact/tool/test are the pins, enforced by
+    the docs pin test).
+  - This log.
+  - Phase 12 touched NO frontend files (frontend gates are Rule-4 re-runs).
+- **Key design decisions**:
+  - **Import surface**: `build_fusion_dataset.py` is already importable
+    standalone (it inserts `backend/` into `sys.path` and forces
+    `HF_HUB_OFFLINE=1` at module import; verified pre-existing) and exports
+    everything the corpus needs (`measure_sample`, `ATTACK_AXES`/
+    `BENIGN_AXES`, `FEATURE_KEYS`, `LANGS`, `SEED`). The corpus imports
+    those names — zero scenario logic is duplicated. The module import
+    works outside pytest too (proven live: the artifact was generated via
+    `uv run --frozen python -m tools.build_regression_corpus` with no env
+    vars set).
+  - **Strict subset + exact per-axis counts**: 20 axes × 8 rows = 160
+    candidates → 152 after `seo_spam_early` was excluded (see edge cases).
+    8 rows/axis gives per-axis language coverage (4 langs for normal axes,
+    ar/ru/zh for `nonnative_editorial`) with a compact corpus; the count is
+    a pinned constant (`ROWS_PER_AXIS`) asserted by the meta pin.
+  - **Axis selection** (documented in the tool + meta notes):
+    - sanity_* EXCLUDED: fit-time guardrails already pinned by
+      `test_fusion_dataset` against the committed dataset, and
+      `sanity_benign_quiet` fuses 0.6583 under the deployed model's
+      dominant layer-4 coefficient (Phase 11's refit-time lead) — it would
+      false-trip the benign material-change invariant.
+    - `ab_test_variant`, `site_redesign`, `vendor_script_added`,
+      `cert_header_rotation` EXCLUDED: legitimate heavy content deltas
+      that legitimately fuse to/above the 0.40 material bar (scanning.py's
+      own comment) — the uniform benign invariant cannot hold for them.
+    - `seo_spam_early` EXCLUDED on measured grounds: its weakest rows
+      measure content peaks at/below the verdict noise floor (min 0.0200 in
+      this phase's axis survey; the dataset keeps the axis — the harness's
+      build-time validation FAILED on it first, which is the harness doing
+      its job).
+    - `combined_subthreshold` KEPT as the deliberately-sub-threshold
+      weakest case (min content peak 0.0400 — under the 0.10 floor, so it
+      is the documented `SUBTHRESHOLD_EXCEPTION_AXES` member; it is
+      covered by the changed-verdict invariant, which it would otherwise
+      never exercise).
+    - `iframe_new_domain`, `profanity_burst`, `cloaking_partial`,
+      `nonnative_full_rewrite`/`nonnative_partial_inject` (one kept),
+      `seo_spam_beyond_cap`, `visual_hue_recolor` dropped as
+      channel-adjacent duplicates.
+  - **Invariant definitions**: `_content_peak` excludes `layer1_hash`
+    (a byte-flip flag that reads 1.0 for ANY content change and pins
+    nothing about the content detectors — matching Phase 11's
+    re-measurement convention and the dataset's own sanity invariants);
+    skipped layers (hash-gate proofs of zero) are excluded from the peak.
+    Attack ≥ 0.10 per-axis "or rule-floor covered" — the floors
+    (layer 5/7 ≥ 0.85 → 0.90, layer 3 ≥ 0.55 → 0.40) are model-independent
+    safety nets, so a row must either measure ≥ 0.10 on some content layer
+    or have its channel pinned by a floor trigger.
+  - **Fused risk storage**: each row's `fused_risk` is computed from the
+    stored ROUNDED features (not the raw measurement) through the deployed
+    `layer9_fusion`, so the artifact is exactly self-consistent and the
+    self-consistency test is an exact-equality (not approx) pin. vs
+    production fusion on raw scores the difference is rounding-only
+    (≤5e-5), documented.
+  - **Build-time validation fails the build**: regenerate → if any attack
+    row's content peak ≤ NOISE_FLOOR or any benign row fuses ≥
+    MATERIAL_CHANGE_RISK, the tool raises before writing a byte. A
+    regressed corpus cannot be generated into the artifact silently.
+  - **The rebuild is cheap**: measured ~0.22 s/sample (after the one-time
+    ~8 s MiniLM load) → ~30-35 s per full build via the tool and ~40 s per
+    in-process pair after load. The drift check therefore runs in the
+    normal suite (module-scoped fixture building twice, ~80-90 s total),
+    and the committed artifact remains the CI-fast path for the invariant
+    pins. Measured BEFORE finalizing the design, per the spec's "minutes,
+    not tens" budget.
+  - **Determinism mechanics**: identical to the fusion dataset (fixed SEED,
+    per-locale faker re-seeding in `_reset_faker_state`, `measure_sample`'s
+    own seeded RNGs). The corpus walks axes in sorted order × idx within
+    each axis exactly as the dataset builder's `generate()` does, so the
+    same idx→language map holds at every scale.
+- **Prompt-claim deviations (Rule 12)**: the prompt file's in-file Phase 12
+    draft ("Detection Pipeline Integration Verification") is stale relative
+    to the 14-phase plan; the Phase 12 kickoff prompt (Detector Regression
+    Harness) is the governing spec this phase implemented — new tool + new
+    test + docs pin, no `pipeline.py`/`dom.py`/`metadata.py`/`scan_tasks.py`
+    integration edits, exactly as delivered here.
+- **Constraints honored**: fusion model artifact untouched (no refit — the
+  corpus is measurement-only via the deployed `layer9_fusion`); the
+  646-sample `fusion_dataset.json` NOT regenerated; rule floors, individual
+  layer scoring, suppression, normalization, metadata layer-2 churn
+  weighting, NOISE_FLOOR all untouched; no frontend files touched (frontend
+  gates are Rule-4 re-runs); lint exit 0 (repo-wide `ruff check .` green);
+  scratch files outside the repo (deleted); docs in the SAME commit as the
+  code with a pin test (Rule 13); SSRF policy untouched (pure local
+  comparison/measurement, zero request paths).
+- **Edge cases handled (Gauntlet Step 3)**:
+  - Embedder offline availability: `build_fusion_dataset.py` already forces
+    `HF_HUB_OFFLINE=1` at import (verified); `build_corpus` refuses to run
+    with `embed_text` returning None and tells the operator the committed
+    artifact is the CI-fast path. The rebuild-in-suite drift check runs
+    offline against the local MiniLM cache (present on this host; the
+    module-scoped fixture measured ~115 s total for the full new file — the
+    committed artifact keeps the invariant pins fast ~40 s, the rebuild runs
+    once per session). CLI runs with no env vars set worked live (proven).
+  - Float-rounding determinism: features stored at `round(v, 4)` (asserted
+    by the structural test); fused_risk stored at `round(..., 4)` from the
+    ROUNDED features; the self-consistency pin is exact-equality against the
+    stored artifact (any layer change shifts the fused risk and fails).
+    Cross-process byte-identical rebuild proven live via
+    `python -m tools.build_regression_corpus --out <tmp>` (SHA-256 equal).
+  - Skipped-layer handling: skipped layers (hash-gate proofs of zero) are
+    excluded from `_content_peak` and reconstructed as `skip_result`s for
+    the fusion repro — a skipped layer is never treated as sub-noise.
+  - layer1 exclusion: `_content_peak` drops `layer1_hash` (byte-flip flag,
+    1.0 for ANY change) per Phase 11's convention — documented in the tool,
+    meta notes, and test docs.
+  - Sanity-axis inclusion/exclusion: EXCLUDED, documented (fit-time
+    guardrails already pinned by test_fusion_dataset; `sanity_benign_quiet`
+    fuses 0.6583 → would false-trip the benign material invariant).
+  - `seo_spam_early` boundary: axis survey measured min content peak 0.0200
+    (= NOISE_FLOOR) — the build-time validation failed first (the harness
+    doing its job); the axis is EXCLUDED from the corpus with the measured
+    reason documented; kept in the fusion dataset. This is the "failing
+    before" of the build-time validator.
+  - Per-axis language coverage: 8 rows spread across 4 langs (normal axes)
+    or ar/ru/zh (`nonnative_editorial`); the `_plan_language` stagger
+    matches the dataset builder's `generate()` offset scheme.
+  - Atomic artifact write: tmp + `os.replace` (identity with the dataset
+    builder); no partial artifact can ever be committed.
+  - Build runtime budget: measured ~0.22 s/row after load → ~34 s full CLI
+    build, ~115 s for the 10-test file including the two in-process rebuilds
+    (module-scoped, shared) — well inside the spec's minutes-not-tens.
+  - Material-change sensitivity: the benign invariant is `fused_risk <
+    MATERIAL_CHANGE_RISK` via the deployed model — a coefficient/detector
+    change that pushes churn over the bar fails both the artifact pins and
+    the build-time validation.
+- **Tests added** (`backend/tests/test_detection_regression.py`, 10 tests):
+  - `test_meta_schema_pins` — schema_version, generator, feature_keys,
+    embedder mode real-local-cache, `rows_per_axis`, axes dicts, notes.
+  - `test_meta_counts_match_samples` — total/attack/benign vs the sample
+    list, `by_axis` vs the pinned constants, row-count algebra per
+    axis, strict-subset of the fusion dataset (imports the real
+    `ATTACK_AXES`/`BENIGN_AXES`), disjoint attack/benign.
+  - `test_every_row_is_structurally_valid` — required keys, label/axis
+    consistency, feature width/range/finite, features stored rounded to 4
+    dp, skipped-layer feature 0.0, id prefix, duplicate-id check,
+    fused_risk range + stored-rounded.
+  - `test_every_attack_row_still_reads_changed` — content peak (non-
+    skipped, excluding layer1) strictly > NOISE_FLOOR per row. This is
+    the Phase-11 guarantee made standing.
+  - `test_every_attack_axis_meets_the_detection_floor` — per-axis weakest
+    row ≥ 0.10 on some non-skipped content layer, OR the axis is
+    rule-floor-covered on every row (any layer-3 ≥ 0.55 / layer-5/7 ≥ 0.85
+    trigger); `combined_subthreshold` is the documented exception.
+  - `test_benign_dynamic_rows_stay_below_the_material_change_band` —
+    fused_risk < MATERIAL_CHANGE_RISK for every benign-dynamic row
+    (imports the real constant).
+  - `test_stored_fused_risk_reproduces_from_stored_features` —
+    self-consistency: deployed `layer9_fusion` over the stored rounded
+    features + stored skip state reproduces the stored risk exactly
+    (round, 4dp equality) — refit/fusion changes fail loudly.
+  - `test_two_rebuilds_are_identical` — two in-process `build_corpus()`
+    calls (module-scoped fixture) dict-equal (the rebuild made ~40 s each).
+  - `test_committed_artifact_matches_a_fresh_rebuild` — the drift pin:
+    row-for-row (plus meta) equality between the committed artifact and a
+    fresh rebuild; a detector/scenario-builder change that alters any row
+    fails here.
+  - `test_detection_layers_doc_documents_the_regression_corpus` — docs
+    pin (Rule 13): exact names `regression_corpus.json`,
+    `build_regression_corpus.py`, `test_detection_regression.py` must be
+    present in `docs/detection-layers.mdx`.
+  - **Failing-before proof (Rule 3)**: the file was run against the
+    UNMODIFIED tree (before the tool + artifact existed): collection
+    `ModuleNotFoundError: No module named 'tools.build_regression_corpus'`
+    (log `%TEMP%\p12_fb.log`). The docs pin also failed before the doc
+    edit (observed in the mid-session run: `1 failed, 9 passed` — the
+    failure was the missing "Regression corpus" section). The behavioral
+    invariant pins are artifact guards (same epistemic status as
+    test_fusion_dataset's guards — they describe committed reality, so
+    failing-before is N/A for them); the genuinely-new executable
+    behaviors (rebuild determinism, docs pin) carried the proof as
+    described.
+- **Full regression results**:
+  - Focused pre-suite: `tests/test_noise_floor.py test_fusion_dataset.py
+    test_fusion_refit.py test_fusion_integration.py
+    test_phase34_docs_sync.py test_detection_regression.py` → **73 passed
+    in 119.43s** (docs edit + new file compose with the existing detection/
+    docs-sync pins).
+  - Backend (full): `cd backend && uv run --frozen pytest -q` → **1267
+    passed, 1 warning in 1417.13s (0:23:37)** — baseline 1257 + exactly the
+    10 new tests; the single warning is the pre-existing apprise
+    `imghdr` DeprecationWarning (verified in the run log). At/above
+    baseline: PASS.
+  - Backend lint: `cd backend && uv run --frozen ruff check .` → "All
+    checks passed!" (exit 0).
+  - Frontend (no frontend files touched — Rule-4 re-run): `pnpm test` →
+    **21 files / 133 passed** (15.97s); `pnpm exec tsc -b --noEmit` →
+    exit 0; `pnpm exec oxlint src` → **0 errors, 12 warnings** (= ≤12
+    baseline).
+  - Final post-lint green proof: `tests/test_detection_regression.py`
+    re-run on the committed state (after the import-order ruff fix) → **10
+    passed in 115.95s**.
+- **Manual verification performed**: the measurement economy was verified
+  live before finalizing the design — a scratch timing probe (outside the
+  repo, deleted) measured 8.23 s first sample (MiniLM load) then ~0.22 s
+  per sample; cross-process determinism proven live via two
+  `python -m tools.build_regression_corpus` runs whose output files had
+  identical SHA-256 (committed artifact vs a temp copy); the tool's
+  build-time validation was exercised end-to-end when `seo_spam_early`
+  tripped it (see edge cases) — the harness correctly refused to ship a
+  row whose content peak sat at the noise floor.
+- **Residual risk / follow-ups**:
+  - The corpus is a STRICT SUBSET of axes; excluded axes (per the
+    documented selection) are not covered by the aggregate pins — they
+    remain covered by test_fusion_dataset / test_fusion_integration
+    against the committed 646-sample dataset and model artifact.
+  - The drift pin compares committed artifact vs fresh rebuild in-process
+    (~115 s for the pair over a session); the committed artifact remains
+    the rule-4-fast path for the invariant pins, and a future detector
+    change will fail the drift pin until the artifact is deliberately
+    regenerated (the expected workflow).
+  - `combined_subthreshold` is by design the sub-floor exception (min
+    content peak 0.0400, below `NOISE_FLOOR` only on the WEAKEST rows —
+    its match relies on the changed-verdict content peak > NOISE_FLOOR
+    invariant, which does hold for its rows: min 0.0400 > 0.02).
+  - The corpus is one more artifact that must be deliberately regenerated
+    when detector behavior changes intentionally (documented in the tool
+    docs, meta notes, and the docs section).
+- **New leads observed**:
+  - `seo_spam_early` measuring content peaks at/below the noise floor on
+    some rows is a real (pre-existing) detector-behavior fact worth
+    reviewing in a future noise-floor/emission pass — the corpus exists
+    precisely to surface these.
+  - The layer-2 content-churn weighting (Phase 10) makes pure-content
+    attack rows like `combined_subthreshold`'s weakest members score far
+    below the 0.10 floor — recorded as the documented exception rather
+    than a regression; the fusion dataset's own minimum was 0.0518 in
+    Phase 11's re-measurement, consistent with this.
+- **Commit**: this commit — a commit cannot contain its own hash; see
+  `git log --oneline -1` after landing — feat(detection12): detector
+  regression harness & standing corpus
+- **Next phase kickoff prompt**: (delivered in chat only — never written
+  to this log)
