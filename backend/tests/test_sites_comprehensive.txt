@@ -1,0 +1,131 @@
+# =============================================================================
+# Wardress PROMPT-002 Phase 13 — end-to-end capture validation site list.
+#
+# Extends `wardress-test-sites (1).txt` (the 88-URL seed) with additions aimed
+# at the failure modes the Phase-13 gate must stress (SPA JS rendering,
+# Cloudflare WAFs, lazy/infinite scroll, consent banners, non-Latin text,
+# government/high-security hardening, e-commerce churn) AND keeps the strongest
+# carries from that seed.
+#
+# Format contract (parsed by tests/test_capture_e2e.py — do not break it):
+#   - Section headers are exactly `# SPA/JS Heavy`, `# Cloudflare`,
+#     `# Lazy Loading`, `# Cookie Banner`, `# Non-Latin`, `# Gov/Security`,
+#     `# Static Control`, `# E-commerce` (the reporting-table categories).
+#   - Every non-comment, non-blank line under a header is a URL belonging to
+#     that category. No inline comments on URL lines.
+#   - Each site is classified by its PRIMARY stress axis for this validation;
+#     many sites legitimately fit more than one category (a news site with a
+#     consent banner is both "news" and "cookie banner" — it is listed where
+#     the gate needs it). That is intentional.
+#   - Counts must meet the Phase-13 minimums (10 SPA / 5 Cloudflare /
+#     10 lazy-loading / 10 cookie-banner / 5 non-Latin / 5 gov / 5 static /
+#     5 e-commerce); the e2e gate asserts them and collection fails if a
+#     section name is misspelled.
+# =============================================================================
+
+# SPA/JS Heavy
+# React/Angular/Vue/Svelte/Next apps: JS-rendered DOM, client-side routing.
+https://quietude-one.vercel.app/
+https://github.com/
+https://developer.mozilla.org/
+https://react.dev/
+https://vuejs.org/
+https://angular.io/
+https://nextjs.org/
+https://svelte.dev/
+https://www.netflix.com/
+https://www.spotify.com/
+https://openai.com/
+https://vercel.com/
+
+# Cloudflare
+# Sites fronted by Cloudflare (Free JS challenge through Turnstile/managed
+# challenge). The gate's contract: a correctly DETECTED challenge counts as
+# a PASS — recognizing a block, not defeating every WAF.
+https://medium.com/
+https://discord.com/
+https://www.cloudflare.com/
+https://www.mozilla.org/
+https://nowsecure.nl/
+https://www.bleepingcomputer.com/
+
+# Lazy Loading
+# Image-heavy sites that lazy-load below-the-fold content on scroll events /
+# IntersectionObserver; several are effectively infinite-scroll.
+https://unsplash.com/
+https://www.pexels.com/
+https://pixabay.com/
+https://www.flickr.com/
+https://dribbble.com/
+https://www.nationalgeographic.com/
+https://www.gettyimages.com/
+https://www.istockphoto.com/
+https://www.shutterstock.com/
+https://www.dreamstime.com/
+https://www.smashingmagazine.com/
+
+# Cookie Banner
+# First-visit consent-banner sites (OneTrust/Cookiebot/CookieYes/Quantcast/GDPR
+# custom). The gate asserts dismissal was ATTEMPTED (evidence.attempts) and
+# notes whether the click landed or the banner was pre-empted by cookie
+# injection.
+https://www.bbc.co.uk/news
+https://www.bbc.com/news
+https://www.theguardian.com/
+https://www.aajtak.in/
+https://edition.cnn.com/
+https://www.lemonde.fr/
+https://www.dw.com/
+https://www.irishtimes.com/
+https://www.sky.com/
+https://www.france24.com/
+https://www.tagesschau.de/
+https://www.euronews.com/
+
+# Non-Latin
+# Arabic/Japanese/Chinese/Russian/Bengali/Devanagari text — catches charset /
+# encoding / font-subset rendering regressions.
+https://ar.wikipedia.org/
+https://ja.wikipedia.org/
+https://zh.wikipedia.org/
+https://ru.wikipedia.org/
+https://bn.wikipedia.org/
+https://www.aljazeera.net/
+https://www.bbc.com/russian
+
+# Gov/Security
+# Government and high-security sites: strict TLS, security headers, regional
+# egress, occasional IP geo-blocking.
+https://www.gov.uk/
+https://www.whitehouse.gov/
+https://www.usa.gov/
+https://www.canada.ca/
+https://www.noaa.gov/
+https://www.cdc.gov/
+https://www.who.int/
+https://europa.eu/
+https://www.nhs.uk/
+https://www.un.org/
+
+# Static Control
+# Stable, low-JS control pages — the "it must never regress" set.
+https://example.com/
+https://www.w3.org/
+https://www.ietf.org/
+https://tools.ietf.org/
+https://www.rfc-editor.org/
+https://lite.cnn.com/
+https://en.wikipedia.org/wiki/Main_Page
+https://www.python.org/
+https://www.gutenberg.org/
+https://archive.org/
+
+# E-commerce
+# High-churn retail pages with aggressive WAF/anti-bot layers, A/B variants
+# and dynamic recommendation slots.
+https://www.amazon.com/
+https://www.ebay.com/
+https://www.etsy.com/
+https://www.walmart.com/
+https://www.target.com/
+https://www.bestbuy.com/

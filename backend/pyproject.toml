@@ -112,6 +112,9 @@ ignore = ["S101"]  # allow asserts in tests
 "tests/test_phase29_ops_robustness.py" = ["S603"]
 # Phase 39 reuses the same sandbox methodology for the ops/config sweep.
 "tests/test_phase39_ops_config.py" = ["S603"]
+# Phase-13 e2e gate force-kills a wedged capture child via taskkill — the
+# argv is fully trusted/literal (the PID is the subprocess WE spawned).
+"tests/test_capture_e2e.py" = ["S603"]
 # Dataset builder seeds random.Random for synthetic-content variety only —
 # no security surface consumes these values.
 "tools/*" = ["S311"]
@@ -126,6 +129,12 @@ ignore = ["S101"]  # allow asserts in tests
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# PROMPT-002 Phase 13: the live-network e2e gate (tests/test_capture_e2e.py)
+# must be OPT-OUT by default, not opt-in by agent discipline. `network`
+# tests run only when the operator explicitly asks for them
+# (`pytest -m network` overrides this addopts filter).
+markers = ["network: live-network e2e captures (skipped in CI; run manually as a validation gate)"]
+addopts = "-m 'not network'"
 
 [build-system]
 requires = ["hatchling"]
