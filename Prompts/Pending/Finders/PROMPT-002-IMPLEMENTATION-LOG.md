@@ -2090,6 +2090,7 @@ measured number above is the reference for every later phase.
   to this log)
 ### [DONE] PROMPT-002 Phase 13 — End-to-End Capture Validation
 
+
 - **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
 - **Session date**: 2026-09-06/07 (split-session gate run)
 - **Goal**: Prove the Phases 1-7 capture stack (stealth, Cloudflare challenge
@@ -2276,3 +2277,230 @@ measured number above is the reference for every later phase.
   capture validation gate & expanded site corpus
 - **Next phase kickoff prompt**: (delivered in chat only — never written
   to this log)
+
+### [DONE] PROMPT-002 Phase 14 — End-to-End Detection Validation & Final Hardening
+
+- **Prompt**: PROMPT-002-capture-hardening-and-detection-accuracy-v2.md
+- **Session date**: 2026-09-09
+- **Goal**: The final validation gate — drive the REAL nine-layer detection
+  pipeline through the REAL `_run_scan` task body over hermetic fixture
+  capture pairs modeled on Phase 13's captured categories, pin the
+  verdict/risk contracts the whole effort promised (benign churn never
+  flags; defacement/asset-swap/SEO-spam/non-Latin attacks still flag), re-pin
+  the fusion training corpus's attack vectors through the deployed fusion
+  surface, prove backward compatibility with pre-Phase-7 baseline rows, run
+  the full Rule-4 regression battery, verify infrastructure/docs consistency,
+  and produce the final comprehensive report.
+- **Files changed**: `backend/tests/test_detection_e2e.py` (NEW, 11 tests,
+  all hermetic — no live network), this log. NOTHING else (git-diff
+  verified: no production file, no frontend file, no `app/ssrf.py`, no
+  `worker/detection/`, no fusion artifact).
+- **Key design decisions**:
+  - **Real pipeline, stubbed capture seams only**: unlike test_noise_floor.py
+    (which stubs `run_detection`), this suite runs the shipped
+    `run_detection` + `_run_scan` end to end; the only mocks are the same
+    task-body seams every suite uses (`task_session`, artifact store,
+    `fetch_page`, `probe_site`) plus the real-vector embedding stub from
+    test_end_to_end_flagging.py so layer 8's cosine math executes without
+    the MiniLM cache.
+  - **Fixture pairs replicate Phase 13's consistency experiment**: a
+    corporate page carrying ISO timestamp / request UUID / cache-busted
+    asset refs / CSP nonce attribute / CSRF token field, and a "second
+    capture" differing ONLY in those volatile values — the dynamic-site
+    churn pair, deterministic and offline. Static pair = byte-identical.
+  - **Chosen over** run_detection-only units (the spec's contract is
+    verdicts, persisted findings, and alerts, which only the task body
+    produces) and over Celery-wrapper invocation (already covered by
+    test_scan_tasks.py).
+
+- **Constraints honored**:
+  - `app/ssrf.py` untouched (the phase has zero request paths — pure
+    fixture-driven task-body tests); SSRF policy sacred.
+  - Individual layer implementations, the fusion model artifact, the rule
+    floors, NOISE_FLOOR, MATERIAL_CHANGE_RISK, and the Phase-12 regression
+    harness + corpus all untouched — consumed as shipped (git-diff
+    verified).
+  - Honest separation kept: the three below-bar Phase-13 capture
+    categories (Lazy/Cloudflare/E-commerce, 87.8% aggregate) remain
+    documented CAPTURE-side findings; NO detection threshold was touched
+    to compensate.
+  - Rule 13 verified N/A with evidence: test-file-only change — no new
+    dependency, env var, service, volume, timeout, or runtime behavior;
+    docker-compose.yml / .env.example / scripts/ / docs/ checked and need
+    no change (docs/detection-layers.mdx's corpus section already names
+    the artifact/tool/test accurately).
+  - Rule 10 backward compatibility pinned by test (see below).
+  - Lint: `uv run --frozen ruff check .` → "All checks passed!" (exit 0).
+  - Scratch work kept outside the repo and deleted (rule 9).
+- **Edge cases handled (Gauntlet Step 3)**:
+  - Site categories / bot-protection tiers / consent banners / content
+    loading patterns: N/A for live capture this phase — hermetic fixtures
+    represent the Phase-13 categories at the detection layer (live
+    capture validation was Phase 13's gate); no capture code touched.
+  - Failure modes: degraded channels exercised — a bare-probe scan leaves
+    layer 6 dark (degraded, never a trusted zero) and the scan completes
+    with an honest verdict instead of crashing.
+  - Concurrency: N/A — sequential task-body tests on a per-test truncated
+    DB; no cross-test state beyond the existing seams.
+  - Backward compatibility: pinned (`test_phase1_era_baseline_still_scans`).
+  - Performance: measured (see the report below).
+- **Tests added** (`backend/tests/test_detection_e2e.py`, 11 tests):
+  - `test_benign_dynamic_capture_pair_reads_clean_risk_below_0_10` — the
+    churn pair reads at most "changed", never flagged/alerting, risk <
+    MATERIAL_CHANGE_RISK, with layers 2/3/5 AND 6 exactly 0.0 and the
+    normalization audit trail present (`iso_datetimes`,
+    `cache_bust_query_values`, `token_attribute_values` counts).
+    Failing-before: collection error (new file — same convention as the
+    Phase-12/13 additions).
+  - `test_csp_nonce_only_change_scores_zero_in_layer_6` — direct
+    `run_detection` row: nonce-only CSP churn scores 0.0 AND is fully
+    silent (all five directional header buckets empty — Phase 9's pinned
+    behavior).
+  - `test_injected_defacement_signature_flags_risk_above_0_5` — flagged,
+    risk > 0.5, layer 5 >= 0.85, `conclusive_signature_text` in the
+    persisted fusion rule-floor evidence, alert created + delivery
+    enqueued.
+  - `test_asset_swap_same_html_different_screenshot_layer4_nonzero` —
+    identical HTML (hash gate closes 2/3/5/8), real PIL PNGs, layer 4
+    runs unconditionally (Fix-Phase-6 gate removal) and scores nonzero.
+  - `test_hidden_seo_spam_link_farm_detected_by_layers_2_and_3` — 30
+    display:none links on fresh domains: layers 2 AND 3 both > 0,
+    flagged, risk > 0.5.
+  - `test_non_latin_defacement_rewrite_flags_via_script_flip` — Arabic
+    takeover: flagged via layer 5's dominance-flip channel, risk > 0.5.
+  - `test_capture_consistency_static_pair_reads_clean_risk_below_0_05` —
+    byte-identical capture pair: clean, risk < 0.05, layer 4 exactly 0.0.
+  - `test_capture_consistency_dynamic_pair_at_most_changed_risk_below_0_15`
+    — churn pair through the task body: at most "changed", risk < the
+    material bar, no alert (see Rule-12 deviation 2 on the literal 0.15).
+  - `test_fusion_training_dataset_attack_vectors_still_score_appropriately`
+    — the committed 152-row regression corpus re-pinned through the
+    deployed `layer9_fusion`: every attack row risk >= 0.10 or
+    rule-floor-covered (Phase 12's documented `combined_subthreshold`
+    exception held to its content-peak > NOISE_FLOOR contract), every
+    benign row < the material bar, each stored fused risk reproduces
+    exactly. Fast JSON path; the deep rebuild/drift pin stays in
+    test_detection_regression.py.
+  - `test_phase1_era_baseline_still_scans` — a baseline row without
+    `capture_meta` (pre-Phase-7 shape) still scans: completed, honest
+    verdict, layer 6 degraded-dark, risk below the material bar.
+  - `test_churn_pair_is_discriminating` — fixture validity guard: both
+    captures normalize to the SAME text, so the benign pins cannot
+    silently absorb an unmodeled delta if normalization ever regresses.
+
+- **Full regression results** (all Rule-4 suites):
+  - Focused: `cd backend && uv run --frozen pytest -q
+    tests/test_detection_e2e.py` → **11 passed in 79.60s**.
+  - Backend: `cd backend && uv run --frozen pytest -q` → **1278 passed,
+    10 deselected, 1 warning in 1468.19s (0:24:28)** — the Rule-4 baseline
+    of 1267 + exactly the 11 new tests; the single warning is the
+    pre-existing apprise `imghdr` DeprecationWarning; the 10 deselected
+    are the Phase-13 network gate (structural `addopts` filter).
+  - Backend lint: `uv run --frozen ruff check .` → "All checks passed!"
+    (exit 0).
+  - Frontend: `pnpm test` → **21 files / 133 passed**; `pnpm exec tsc -b
+    --noEmit` → exit 0 (no output); `pnpm exec oxlint src` → **0 errors,
+    12 warnings** (= baseline). NOTE: the first full frontend run had ONE
+    timing flake (tests/capture-health.test.tsx "no hint when the baseline
+    matches the current capture method" hit its timeout at 11.8s under
+    full-suite load); the file passes 4/4 in isolation (2.86s) and the
+    full-suite re-run was all green. Pre-existing sensitivity; frontend
+    untouched by this phase.
+- **Final comprehensive report** (spec item 3):
+  - Capture success rates (Phase 13's live 74-site gate, unchanged this
+    phase): SPA 12/12, Cloudflare 5/6 (discord = 10MB HTML guard), Lazy
+    8/11 (unsplash 401; shutterstock/dreamstime 403), Cookie-banner 11/12
+    (tagesschau wedged-transition kill), Non-Latin 7/7, Gov 10/10, Static
+    9/10 (rfc-editor = correctly-detected block), E-commerce 3/6
+    (ebay/etsy WARP DNS; walmart WAF timeout) → 65/74 = **87.8%** vs the
+    90% target; three categories honestly below bar and kept that way.
+  - Capture performance (Phase 13): median 20.2s (<30s ✓), P95 47.8s
+    (<60s ✓).
+  - Detection false-positive rate (this phase, hermetic fixtures): benign
+    churn pair — verdict "changed" at measured ~0.30 fused risk (the
+    Phase-24 uncertainty ceiling), NEVER flagged, no alert, no cadence
+    tightening; static pair — "clean" at < 0.05; nonce-only CSP churn —
+    layer 6 exactly 0.0, fully silent. All content layers measure exactly
+    0.0 on the churn pair — the Phase-8/9/10 false-positive elimination
+    holds end to end.
+  - Attack detection rate (this phase): 4/4 attack classes flag end to
+    end (defacement signature via rule floor; SEO-spam link farm via
+    layers 2+3; non-Latin takeover via script flip; asset swap via layer 4
+    unconditionally), and all 152 corpus rows re-pin through the deployed
+    fusion surface.
+  - Detection performance (measured this session, REAL MiniLM embedder,
+    warm, 3 runs each): churn pair 122/123/148ms (min/med/max); static
+    pair 70/89/97ms; import + one-time model load ~5.6s.
+  - Comparison with pre-change baselines: capture times unchanged (no
+    capture code touched in Phases 8-14); detection FP behavior improved
+    from the pre-effort "any nonzero score = changed on every scan" to
+    content-layers-zero with "changed" only when bytes actually change;
+    attack detection unchanged (every pre-existing attack pin green in
+    the full suite).
+  - Infrastructure verification (spec item 4): docker-compose.yml,
+    .env.example, scripts/, docs/ verified consistent — the phase changes
+    no runtime behavior, so no sync was required (Rule 13 N/A, checked
+    not assumed). Backward compatibility verified by test and by the full
+    suite (all Phase-4/7 storage-shape tests green).
+
+- **Prompt-claim deviations (Rule 12)**:
+  1. The briefing names `tests/test_fusion_pipeline.py`; the actual file
+     is `tests/test_detection_fusion_pipeline.py` (with
+     `test_fusion_integration.py` alongside). Fixture idioms mirrored from
+     it and from test_detection_regression.py as intended.
+  2. The Phase-14 fixture row "benign dynamic content → verdict clean,
+     risk < 0.10" is UNACHIEVABLE for any byte-differing pair by design:
+     layer 1 hashes the ORIGINAL content (normalize.py's contract —
+     "bytes changed is a fact, not noise"), so the churn pair scores
+     layer1_hash = 1.0, which the deployed model weights to ~0.30 fused
+     (with the Phase-24 uncertainty ceiling on the degraded layer-7
+     channel). Measured, not assumed: all content layers + layer 6
+     exactly 0.0; layer 1 = 1.0; fused 0.30 capped; Phase 11 already
+     measured benign churn at 0.14-0.37 (why MATERIAL_CHANGE_RISK is
+     0.40). Pinned the honest equivalent: at most "changed", never
+     flagged/alerting, risk < MATERIAL_CHANGE_RISK, every content channel
+     0.0. The same deviation applies to the dynamic consistency bound
+     (< 0.15 → < MATERIAL_CHANGE_RISK, measured 0.30). No threshold was
+     weakened — the prompt's intent (benign churn must not alert, flag,
+     or tighten cadence) holds exactly.
+  3. The Phase-14 CSP-nonce row expected raw nonce values recorded in
+     evidence; the actual Phase-9 behavior (already pinned by
+     test_csp_nonce_normalization.py) is full SILENCE — every directional
+     bucket empty, score 0.0. The test asserts the shipped behavior.
+  4. The regression corpus artifact stores skips as `layers_skipped` (a
+     list of layer keys), and its attack invariant carries the documented
+     `combined_subthreshold` exception — both consumed per Phase 12's
+     harness rather than the shape imagined in the prompt.
+- **Manual verification performed**: Rule-13 consistency check across
+  docker-compose.yml / .env.example / scripts/ / docs/ (no runtime change
+  → N/A, verified not assumed); the focused-suite iterate loop (5 → 2 → 0
+  failures) including a live diagnostic run of `run_detection` on the
+  churn pair to root-cause the "changed"-not-"clean" result (scratch
+  script in %TEMP%, deleted) — that measurement IS the deviation-2
+  evidence.
+- **Residual risk / follow-ups**:
+  - Benign byte-churning sites will persistently read "changed" at ~0.30
+    fused risk (never flag/alert/tighten). If operators later want a
+    quieter signal, a "churn-only" verdict refinement or a per-site
+    hash-normalization opt-in is a deliberate design change — out of
+    scope here.
+  - The frontend capture-health test is timing-sensitive under heavy
+    machine load (one flake observed; green in isolation and on re-run) —
+    pre-existing, untouched, noted for a future timeout/await hardening.
+  - The e2e fixtures' probes carry no UA variants, so layer 7 is degraded
+    in them (honest dark channel; production probes populate variants).
+    Cloaking coverage stays in test_end_to_end_flagging.py's
+    `_probe_with_variants` tests.
+- **New leads observed**:
+  - `ScanFinding` rows do not carry the degraded flag (only the scan
+    row's `layer_scores` summary does) — consumers reading findings rows
+    alone cannot see degradation; possible API nicety, out of scope.
+  - `baseline.capture_meta["headers"]` (the fetcher's curated subset) is
+    stored but unused by detection (only `probe_headers` is compared) —
+    kept for debugging; harmless, noted.
+- **Commit**: this commit — a commit cannot contain its own hash; see
+  `git log --oneline -1` after landing — feat(validation14): end-to-end
+  detection validation suite & final hardening report
+- **Next phase kickoff prompt**: (delivered in chat only — never written
+  to this log; Phase 14 is the final phase — there is no next phase)
+
