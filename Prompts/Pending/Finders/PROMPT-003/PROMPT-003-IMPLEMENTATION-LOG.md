@@ -662,3 +662,151 @@ No test files or code were added or modified this phase (log-file-only change), 
 
 
 
+### [DONE] PROMPT-003 Audit Phase 4 — Detection-Pipeline Fresh-Eyes Audit (layers 1-9 + suppress + normalize + fusion + llm_escalation)
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-11
+- **Assigned subsystem**: §4 Audit Phase 4 — detection pipeline: `worker/detection/*` (pipeline, types, suppress, normalize, dom, signatures, semantics, metadata, cloaking, visual, fusion, training artifacts), `worker/llm_escalation.py`, `worker/hashing.py` as layer-1 input contract (built on AUDIT-3-7, not re-derived), the `scan_tasks.py` capture→detection seam, and the detection-owned test files (read for intent, never treated as evidence).
+
+## Method
+
+Every layer module was read end-to-end cold (caller/callee traced through `pipeline.run_detection` → `scan_tasks._run_scan` → verdict/escalation/scheduling), then every suspicious claim was verified empirically in the running Docker install (`wardress-worker-1`): 12 hermetic probes + a committed characterization suite. No production code was touched (Rule 1).
+
+## Findings
+
+- **ID**: AUDIT-4-1
+- **Title**: `_new_text` granularity collapses for unpunctuated pages — the "new-text-only" lexicons silently become whole-page lexicons, and a benign edit FLAGGED at risk ≈0.86
+- **Severity**: Critical
+- **Subsystem / file(s)**: `worker/detection/signatures.py:197-211` (`_new_text` piece splitter), consumed by `worker/detection/semantics.py:120-123` (`_new_visible_text`); feeds `layer5_signatures` (:248-334) and `layer8_semantics` (:235-303); verdict path `worker/scan_tasks.py:309` (`flagged = risk >= site.flag_threshold`, default 0.5)
+- **Reproduction** (all verified live in `wardress-worker-1` + pinned in `backend/tests/test_phase4_fresh_eyes_finding_repros.py::TestAUDIT4x1NewTextGranularity`):
+  1. `extract_visible_text` returns one joined line; `_new_text` splits it into pieces by lines ∪ sentence boundaries (`(?<=[.!?])\s+`). A page without `[.!?]` is ONE piece, so any edit anywhere makes the ENTIRE current text "new" (probe: `new_text == extract_visible_text(current)` verbatim).
+  2. Unpunctuated page containing the word "fuck" in its baseline nav; benign edit elsewhere ("ship quality" → "ship premium quality"): `layer5_signatures` scores 0.25 (profanity that was ALWAYS there), `layer8` same shape with aggression lexicon (0.568 from "corruption"/"regime"/"war on" — all baseline-present).
+  3. Full `run_detection`: fused risk **0.857** → verdict `flagged` at the default threshold → alert + remediation created. Punctuated control of the same page: layer5 0.0.
+- **Root cause**: the piece-set subtraction is only as fine-grained as the sentence-boundary density of the page. Layer 5's and layer 8's core FP defense ("run on new text only, so pages that always contained a term don't flag") has an unstated precondition — pages must punctuate. `test_phase20_semantics_drift.py::test_lexicon_stays_new_text_only` pins the claim only on an identical-html fixture, so the unguarded shape never surfaced.
+- **Proposed remedy category**: detection-pipeline semantics change — make `_new_text` granularity boundary-independent (e.g. token/shingle set subtraction, or line-window fallback when a piece exceeds a length bound), PLUS a regression gate on unpunctuated pages carrying baseline-present lexicon vocabulary end-to-end asserting `clean`. Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (text/semantic layers — new-text extraction failure modes)
+
+- **ID**: AUDIT-4-2
+- **Title**: Layer 6 reads CURRENT-side probe transients as measured evidence-of-change (inverse of the degraded-channel design): a TLS probe failure scores 0.6, pushing a benign scan into the LLM escalation band and MATERIAL_CHANGE_RISK
+- **Severity**: High
+- **Subsystem / file(s)**: `worker/detection/metadata.py:178-182` (`_tls_diff`: baseline-TLS-present + current-None → 0.6, measured, never degraded); `worker/detection/metadata.py:265-278` (`_robots_diff`: baseline None + current content → 0.15 on every scan after a baseline-side robots probe transient); `worker/probe.py:78-139` (`probe_tls` returns None for BOTH "plain http" and ANY handshake failure — indistinguishable); `worker/detection/training/fusion_model.json` (layer6 coefficient 2.588)
+- **Reproduction** (live + pinned `::TestAUDIT4x2MetadataProbeTransient`): unchanged site, `baseline.tls` set, scan's `probe_tls` transiently fails (timeout/handshake error — indistinguishable from a scheme change): `layer6` = 0.6, `degraded` absent. Fused with ordinary byte churn (layer1 = 1.0, content layers normalized-silent): risk **0.429** → `should_escalate` True (LLM second opinion) AND ≥ MATERIAL_CHANGE_RISK 0.40 → cadence tightened on a healthy site. Verdict is at minimum `changed`. Asymmetric: the reverse transient (baseline-side TLS probe failed, every scan has TLS) scores 0.0 forever ("newly available").
+- **Root cause**: `probe_tls`'s contract collapses three different facts (plain-HTTP site, handshake failed, transport torn down) into one `None`, and layer 6 then treats the single most failure-prone probe channel as a certificate-change observation. Layer 6 is the only content-independent layer without a probe-failure degraded path for this case (layer 4 degrades on unreadable screenshots; layer 7 degrades on a dead reference fetch; fusion's unmeasured machinery never engages because 0.6 is a *measured* score).
+- **Proposed remedy category**: probe-contract extension (structured absence reason on `tls`/`robots_txt`: scheme-absent vs probe-failed) + layer 6 semantics change (degrade on probe-failed reasons; keep 0.6 only for genuine scheme/absence observations; make the baseline/current asymmetry symmetric). Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (dark channels read as trusted/attack values; capture-completeness flags)
+
+- **ID**: AUDIT-4-3
+- **Title**: A statically expired certificate scores 0.5 on layer 6 on EVERY scan — a permanent `changed` verdict for a static property
+- **Severity**: Medium
+- **Subsystem / file(s)**: `worker/detection/metadata.py:209-211` (`_tls_diff`: `current_tls["expired"]` → `max(score, 0.5)` with no baseline comparison)
+- **Reproduction** (live + pinned): identical unchanged pair, both sides `expired=True`: layer6 = 0.5 on every scan → verdict `changed` every scan, forever (risk stays ~0.01 — no alert — but the site never reads `clean` again and `layer_scores` shows a phantom delta on every row).
+- **Root cause**: expiry is treated as a per-scan change event although it is a persistent state; the layer's own compare-baseline-vs-current semantics are abandoned for this one field.
+- **Proposed remedy category**: layer 6 semantics change — score the *transition* into expired (baseline not-expired → current expired), or emit expiry as structured static-condition evidence rather than score. Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (layer-by-layer promise vs emission)
+
+- **ID**: AUDIT-4-4
+- **Title**: A regex suppression rule that times out mid-document is applied to a DIFFERENT element range on each side — the suppression itself manufactures the delta it was meant to silence (and the scan pays up to the full per-call timeout budget per text node)
+- **Severity**: Medium
+- **Subsystem / file(s)**: `worker/detection/suppress.py:143-163` (`_apply_to_html`: `TimeoutError` aborts the element loop at whatever node the side happened to reach; per-call `timeout=_REGEX_TIMEOUT_SECONDS` (2.0 s) bounds one `sub()`, not the rule; `supp.unusable` accumulates one duplicate entry per side)
+- **Reproduction** (live + pinned `::TestAUDIT4x4SuppressionTimeoutAsymmetry`): rule `(a|aa)+b|Session id: \d+` (a genuine `regex`-module time-bomb — `(a+)+b`-class patterns are optimized away, this one is not), page pair where the pathological node sits FIRST on baseline and LAST on current: baseline's loop times out on node 1 → NO substitution anywhere ("Session id: 12345" kept); current's loop applies node 1 then times out on node 2 ("Session id: 12345" removed). Full pipeline on the pair: layer8 similarity drops to 0.773 → drift 0.354, fused risk **0.417** → LLM escalation band + MATERIAL_CHANGE_RISK cadence tightening, from a user rule whose entire purpose was silence. Evidence records `unusable_rules` twice (once per side) — the audit trail shows the timeout but not the asymmetry it caused.
+- **Root cause**: partial application is accepted per side independently; nothing requires the two sides to receive the SAME subset of rewrites, and the 2 s budget is per `sub()` call so a rule that times out only on long nodes can burn nodes×2 s before its first timeout (and its first-timeout abort point is document-order-dependent, which is exactly what differs between sides).
+- **Proposed remedy category**: suppress.py semantics change — all-or-nothing per rule (pre-flight the rule over both sides' text nodes; if ANY side times out, apply on NEITHER and record unusable once), plus a per-rule total time budget. Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (suppression interplay — can a suppression rule manufacture/mask attack evidence)
+
+- **ID**: AUDIT-4-5
+- **Title**: An unparseable/empty side is a MEASURED 1.0 in layer 2 (and layer 5/8/3 silently degrade their text inputs) — the current-side equivalent of `baseline_html_missing` has no guard
+- **Severity**: Medium
+- **Subsystem / file(s)**: `worker/detection/dom.py:528-541` (`layer2_dom_structure` parse-differential branch); `worker/detection/pipeline.py:129-166` (the degraded guard exists for the BASELINE side only; `current.html` empty from a "successful" fetch diffed as real page content); `worker/fetcher.py:649-655` (no lower bound on captured html)
+- **Reproduction** (live + pinned `::TestAUDIT4x5EmptyCurrentCapture`): baseline real, current `""`: layer2 returns score **1.0** ("one side failed to parse as HTML"), no `degraded` flag — a full structural-annihilation reading from a capture accident, treated by fusion as measured evidence. Mirror case (both sides unparseable) returns a measured 0.0 — the same "trusted zero from measurement failure" shape the degraded_result design was built to prevent.
+- **Root cause**: the pipeline's degraded-input guard is asymmetric (baseline side only), and layer 2 collapses "no DOM on one side" (a capture/parse fact) with "the page's structure changed" (a content fact) into one measured score.
+- **Proposed remedy category**: pipeline/layer semantics change — emit `degraded_result` when either side is unparseable-empty (or, for the both-unparseable case, degrade rather than measured-zero), with a fetcher lower-bound guard as defense in depth. Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (silent None/empty field assumptions)
+
+- **ID**: AUDIT-4-6
+- **Title**: Layer 3 is blind to removal-only reference changes — an attacker stripping the page's scripts/links/forms reads as a measured 0.0
+- **Severity**: Medium
+- **Subsystem / file(s)**: `worker/detection/dom.py:704-730` (`layer3_link_audit`: `weights` and `churn_score` are computed over ADDED refs only; `removed` is evidence-only)
+- **Reproduction** (live + pinned `::TestAUDIT4x6Layer3RemovalBlind`): baseline with `<script src="https://cdn.vendor.com/x.js">`, current without: layer3 = 0.0, `removed_count: 1` in evidence. Removal-only defacement (vandalism-by-deletion, ripping out a site's own scripts/forms) scores nothing on the one layer whose job is reference sets (layer 6 scores robots deletion; layer 3 doesn't score reference deletion).
+- **Root cause**: the score model was built for the injection signal class (new external domains) and never weighted the removal direction; a measured 0.0 is indistinguishable from "references unchanged" downstream.
+- **Proposed remedy category**: layer 3 semantics change — weight sensitive-kind removals (scripts/iframes/forms) at a conservative fraction of the additive weights so removal-only tampering is visible without punishing legitimate cleanups into alerts. Implementation in a remediation prompt.
+- **Source**: fresh-eyes hunt list (layer-by-layer promise vs emission)
+
+- **ID**: AUDIT-4-7
+- **Title**: Detection half of AUDIT-3-5 (owned per Phase 3 handoff): how layers should consume capture-completeness flags — specification
+- **Severity**: Medium (same axis as the Phase 3 capture-half finding)
+- **Subsystem / file(s)**: `worker/scan_tasks.py:139-156` (baseline `capture_meta` stores NO completeness facts — not even `screenshot_capped`/`capture_quality`, which existed on `FetchResult` at capture time and were dropped except `capture_method_version`); `worker/scan_tasks.py:334-339` (scan-side `capture_evidence` stored on the scan row, explicitly unread by detection); `worker/detection/types.py:12-43` (`PageData`/`ScanPageData` carry no completeness flags); `worker/detection/visual.py` (compares screenshots as if complete)
+- **Detection-half specification** (what the remediation prompt should implement once the capture half delivers the flags into both sides of `PageData`): (1) layer 4 must read `screenshot_capped` from EITHER side and, when exactly one side was capped, crop both to the capped extent (preferred — the compared region becomes "top N pixels"); when both capped, mask/annotate the below-cap region as unmeasured rather than diffing pHash/dHash across different page tails; (2) unstable-DOM / scroll-incomplete captures should flow into fusion as a partial-confidence input (a content-completeness scalar, not the full `_UNMEASURED_RISK_CEIL` path), so a silently truncated capture cannot read as a complete diff in either direction; (3) the BASELINE side is the critical gap: a baseline captured capped/unstable permanently poisons every future visual diff against it, and nothing can ever know — `capture_meta` must record the same facts at baseline capture time.
+- **Reproduction**: code-trace, verified: `run_detection(baseline_page, current_page)` receives none of `screenshot_capped`/`stable`/`scroll_completed`/`capture_quality`; a capped-vs-uncapped screenshot pair is today compared via `_common_size` top-crop (SSIM) while pHash/dHash see different tails (`visual.py:162-172` computes hashes on the WHOLE images).
+- **Proposed remedy category**: contract extension (capture half per AUDIT-3-5) + layer-4/fusion weighting change (this specification). Implementation in a remediation prompt.
+- **Source**: Phase 3 handoff obligation (AUDIT-3-5 detection half) + fresh-eyes verification
+
+- **ID**: AUDIT-4-8
+- **Title**: Detection half of AUDIT-2B-1 (owned per Phase 3 handoff): which layers consume linked-stylesheet bytes and how — specification
+- **Severity**: Medium (same axis as the Phase 2B capture-half finding)
+- **Subsystem / file(s)**: `worker/detection/dom.py:13-14` (disclosure: only embedded `<style>` resolvable), `worker/detection/dom.py:163-263` (`_HiddenContext` resolver — the consumer), `worker/detection/signatures.py:110-126` (`extract_visible_text` — adjacent consumer, see Opportunities)
+- **Detection-half specification**: (1) primary consumer is layer 2's `_HiddenContext`: once the capture half (AUDIT-2B-1) fetches linked same-origin CSS through the SSRF-safe transport and stores it on `PageData` (e.g. `stylesheets: list[str]`), the resolver's existing conservative subject machinery (last-compound selectors, skip pseudo-classes/@-blocks, document-order cascade, inline overrides) should run over the concatenated sheet bytes exactly as it does over inline `<style>` text, with a per-sheet size cap mirroring `_STYLE_TEXT_CAP`; (2) hidden-state resolution must run on BOTH sides symmetrically so a site that moves rules from inline to linked stylesheets mid-stream does not manufacture a hidden-count delta (today an inline→external refactor silently drops the hidden count on the current side — same fact class as AUDIT-2B-1 itself); (3) `stylesheet_chars` evidence should report per-source counts (inline vs linked) so coverage is auditable.
+- **Reproduction**: code-trace (verified against AUDIT-2B-1): no stylesheet fetch exists anywhere in `worker/`; `_stylesheet_rules` runs only on `<style>` inner text; content hidden purely by linked-CSS rules passes the hidden-count channel.
+- **Proposed remedy category**: contract extension (capture half per AUDIT-2B-1) + `dom.py` resolver extension (this specification), or an explicitly re-documented accepted boundary. Implementation in a remediation prompt.
+- **Source**: Phase 3 handoff obligation (AUDIT-2B-1 detection half) + fresh-eyes verification
+
+## Log-vs-reality discrepancies
+
+- `backend/tests/test_phase20_semantics_drift.py::test_lexicon_stays_new_text_only` — its docstring claims "a page that ALWAYS contained the phrases must not flag", but its fixture runs layer 8 on an *identical* html pair (new_text = ∅ by construction), so the claim is only pinned for identical text, not for "always contained + any edit". The Phase 4 probe (AUDIT-4-1 repro 2) shows the claim's stated scope does not hold on unpunctuated pages. Both behaviors stated: identical-html → 0.0 (as the test asserts); edited unpunctuated html → 0.568 with all three phrases in the baseline (as the probe measured).
+- No PROMPT-002/PROMPT-003-log detection claims were contradicted in this phase's scope; the Phase 2B/3 findings I built on (AUDIT-2B-1, AUDIT-3-5, AUDIT-3-7) re-verified as described.
+
+## New hermetic tests added this phase
+
+- `backend/tests/test_phase4_fresh_eyes_finding_repros.py` — 10 tests across 5 classes (AUDIT-4-1, -4-2, -4-3, -4-4, -4-5, -4-6 repros). Characterization tests: they assert the CURRENT (finding) behavior deterministically so the remediation prompt can flip each assertion after fixing. **Committed-passing** (10/10 in 18.4 s). The two heavier ones run the full pipeline/MiniLM (already required by test_phase20/test_phase22 in the same suite). Scratch probe scripts used during verification were removed after their results were recorded here.
+
+## Opportunities / Innovation ideas observed (Rule 17)
+
+- **Idea**: boundary-independent new-text diffing (char-shingle / token-set subtraction with a length-capped piece fallback).
+  **Why it would help**: removes the unpunctuated-page cliff (AUDIT-4-1) at the root instead of patching lexicon weights, and makes `_new_text` robust to any future extraction change.
+  **Where it touches**: `worker/detection/signatures.py` (`_new_text`), shared by `semantics.py` and `scan_tasks._escalation_new_text`.
+  **Rough shape**: subtract multisets of bounded-length shingles/tokens instead of sentence pieces; keep a span-reconstruction step so evidence quotes stay verbatim.
+
+- **Idea**: hidden-aware visible-text extraction.
+  **Why it would help**: `extract_visible_text` currently scores text hidden by CSS (inline or, per AUDIT-2B-1, linked sheets) as visible; a hidden-state-aware extractor (consuming `_HiddenContext`) would make layers 5/7/8's token sets match what a visitor actually sees, and give the sheet-bytes work a second consumer.
+  **Where it touches**: `worker/detection/signatures.py` (`extract_visible_text`), `worker/detection/dom.py` (`_HiddenContext`), `worker/detection/cloaking.py`.
+  **Rough shape**: reuse the hidden reasons layer 2 already computes; exclude hidden-subtree text from 5/8 while keeping a separate evidence counter for "hidden text changed" so hiding cannot become a masking vector.
+
+- **Idea**: structured absence reasons for all probe channels (tls/robots/headers/ua_variants).
+  **Why it would help**: one contract change fixes the whole AUDIT-4-2/AUDIT-4-3 class — every layer could then distinguish "observed absent" from "probe failed" and degrade honestly instead of scoring transients.
+  **Where it touches**: `worker/probe.py`, `worker/detection/types.py` (`PageData` probe fields), `worker/detection/metadata.py`.
+  **Rough shape**: `{"value": ..., "absence": "http-scheme" | "probe-failed(<detail>)"}` wrappers (or a parallel `probe_status` dict) carried on `PageData`.
+
+- **Idea**: layer 7's added/removed tie-break uses the more sensitive additive ramp.
+  **Why it would help**: `added == removed > grace` currently routes to the additive channel (ramp from 0.15) even though the pair is balanced — a conservative tie-break (removal ramp) would lower churn noise by a hair without losing injection sensitivity (additive still wins whenever added > removed).
+  **Where it touches**: `worker/detection/cloaking.py:117`.
+  **Rough shape**: `score = s_removed if added <= removed else s_added` plus a regression pin.
+
+## Full regression results (commands + counts)
+
+All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), production code untouched (test/log files only), so deep rebuild pins (`test_detection_regression.py`, `test_detection_e2e.py` corpus rebuild) were not re-executed:
+
+| Suite | Result |
+|---|---|
+| `test_phase4_fresh_eyes_finding_repros.py` (new) | 10 passed (18.40 s) |
+| `test_rule_floors.py` + `test_csp_nonce_normalization.py` | 48 passed (16.50 s) |
+| `test_dom_content_churn.py` + `test_pipeline_visual_gate.py` | 14 passed (1.13 s) |
+| `test_suppression.py` + `test_detection_normalize.py` | 45 passed (19.15 s) |
+| `test_noise_floor.py` + `test_llm_keypool.py` | 19 passed (16.77 s) |
+| `test_fusion_integration.py` + `test_fusion_refit.py` + `test_detection_fusion_pipeline.py` | 65 passed (18.92 s) |
+| `test_phase21_cloaking_grade.py` + `test_phase22_signatures_coverage.py` + `test_phase23_dom_hidden.py` + `test_phase36_detection_low.py` | 115 passed (18.91 s) |
+| `test_phase24_degradation_signaling.py` + `test_phase20_semantics_drift.py` | 51 passed (18.17 s) |
+| **Total** | **367 passed, 0 failed** |
+
+## Findings out of phase scope
+
+- AUDIT-4-2's root cause lives partly in `probe.py` (shared with the Phase 3 capture-fresh-eyes subsystem, which already logged probe-side findings); only the layer-6 consumption half is specified here.
+- Escalation-prompt new-text quality (`scan_tasks.py:66-75` passes RAW un-suppressed/un-normalized html to `_escalation_new_text`, so the LLM prompt can contain volatile timestamps the layers already normalized away) — cosmetic, noted as an opportunity-adjacent observation for the remediation prompt; no severity scored.
+- Orchestration/scheduling mechanics (`_schedule_next`, beat dispatch, stale-inflight) untouched here — Phase 4B.
+
+## Commit
+
+(pending — test/log files only, not pushed)
+
+
+
+
+
