@@ -552,3 +552,113 @@ No test files or code were added or modified this phase (log-file-only change), 
 
 5d7ac7f — docs(audit-2b): full repository inventory, blast-radius mapping and prior-history sweep
 
+### [DONE] PROMPT-003 Audit Phase 3 — Capture Fresh-Eyes Audit (code-cold, diagnosis only)
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-11
+- **Assigned subsystem**: §4 Audit Phase 3 — capture stack read cold: `worker/hashing.py` (never independently reviewed — the layer-1 building block), `worker/stealth.py`, `worker/fetcher.py`, `worker/probe.py`, `worker/page_prepare.py`, `worker/banner_dismiss.py`, `worker/artifacts.py`, `app/capture.py`, `app/scanning.py` (lifecycle), `app/models.py` + alembic `o9q1r2s3t4u5` (capture columns only), the seams (`worker/scan_tasks.py` capture paths, `app/tasks.py`, `worker/celery_app.py` queue/retry config, `worker/beat_tasks.py` dispatcher/janitor as capture-adjacent), and every test suite those modules own (intent only, never evidence of correctness).
+
+- **Method note (§3 fresh-eyes protocol)**: every suspicious claim was probed empirically before logging — four scratch probes under `Prompts/Pending/Finders/PROMPT-003/scratch/` (real Chromium via the local pinned Playwright install; no production file touched), one live end-to-end capture through the running Docker worker (`docker exec wardress-worker-1` → `fetch_page('https://example.com')`: evidence matched this reading exactly — 30 selector attempts on a one-frame page, `capture_quality=full`, 10.6 s wall clock), and a 12-pass green run of `tests/test_hashing.py` as the spot baseline for the never-reviewed module.
+
+- **Findings**:
+
+    - **ID**: AUDIT-3-1
+    - **Title**: Banner dismissal can store the WRONG page: a generic fallback selector clicks a non-banner control, the click navigates the main frame, and nothing after the click re-validates what is being captured
+    - **Severity**: Medium
+    - **Subsystem / file(s)**: `worker/banner_dismiss.py:227-236` (generic fallbacks: `button[aria-label*='Accept'/'accept'/'Agree']`, `.cookie-accept`, `.js-cookie-accept`, `#accept-cookies`, …) and `:342-367` (`_find_and_click`); capture ordering in `worker/fetcher.py:592-649` (challenge gate and final-URL SSRF recheck both run BEFORE the click; scroll → stability → `page.content()` all run after)
+    - **Reproduction**: `scratch/probe_banner_click_navigation.py` (real Chromium, production `dismiss_banners` unmodified): a content-management dialog button with `aria-label="Accept changes"` and an `onclick` navigation is clicked via `button[aria-label*='Accept']` (evidence `{dismissed: True, selector: "button[aria-label*='Accept']", attempts: 23}`); one second later `page.content()` contains the policy page and no longer the real content — exactly what the capture pipeline would persist as site HTML
+    - **Root cause**: `_find_and_click` clicks the first visible element matching the selector list in any frame, with no verification that the element is a consent control; the pipeline treats "clicked something" as safe and never re-checks page identity (URL / challenge state / navigation) after dismissal. A post-click navigation also makes the 250 ms settle + scroll pass race the navigation, so the stored DOM is nondeterministically old-page or new-page
+    - **Proposed remedy category**: capture verification — post-dismissal main-frame check (URL + navigation counter + challenge re-probe); if a click navigated, discard the click (re-navigate to the pre-click final URL or mark the capture degraded and skip banner use); optionally narrow the generic fallback selectors to consent-context containers
+    - **Source**: fresh-eyes hunt list (banner false-dismiss), scratch probe 2
+
+    - **ID**: AUDIT-3-2
+    - **Title**: Late-attaching consent IFRAME banners are never dismissed: `dismiss_banners` snapshots the frame list once before its late-banner wait, and the combined wait is frame-blind
+    - **Severity**: Medium
+    - **Subsystem / file(s)**: `worker/banner_dismiss.py:393` (frames snapshotted once at entry), `:404` (page-level `wait_for_selector` — main frame only by Playwright semantics), `:407` (final pass reuses the stale snapshot)
+    - **Reproduction**: `scratch/probe_frame_wait_budget.py` (real Chromium): control with an iframe banner visible from load → 2 frames at first pass, banner clicked (Phase 5's tested shape). Late variant (iframe revealed 2.5 s after load): `page.wait_for_selector(combined)` times out (3000 ms, frame-blind), and the final `_find_and_click` pass records 60 attempts = 30 selectors × 2 passes × 1 frame while `len(page.frames)` is 2 — banner never clicked, full 3 s budget burned
+    - **Root cause**: `_frames(page)` is computed once before the bounded wait; a CMP iframe that attaches during the 3 s budget is invisible to both the wait and the final pass. For such sites the overlay stays up (frequently with a body scroll-lock that no-ops `scrollBy`, so the scroll pass loads no lazy content) while the capture can still be labeled `full`
+    - **Proposed remedy category**: local fix — re-snapshot frames before the final pass and/or wait frame-aware (per-frame selector wait, or wait for frame attach)
+    - **Source**: fresh-eyes hunt list (banner/scroll interplay under slow origins), scratch probes 3/3b
+
+    - **ID**: AUDIT-3-3
+    - **Title**: The browser capture path still has an open DNS-rebinding window — the route guard's per-host verdict cache widens it page-wide, and `probe_tls` resolves independently of the pinning transport
+    - **Severity**: Medium
+    - **Subsystem / file(s)**: `worker/fetcher.py:287-340` (`_make_ssrf_route_guard`: verdict cache keyed `scheme://host` per fetch; `route.continue_()` lets Chromium resolve DNS independently at connect); `app/ssrf.py:11-20` (docstring concedes the class for "Playwright navigation" only); `worker/probe.py:93-94` (`asyncio.open_connection(host, …)` — raw-socket TLS probe never pinned; `SSRFPinningTransport` covers only the httpx probe client)
+    - **Reproduction**: `scratch/probe_ssrf_verdict_cache.py` (production guard, counting stub): 5 requests to the same host → exactly 1 `assert_url_allowed` invocation; the cache never re-validates and is never invalidated for the life of the fetch. Code trace: nothing pins the address Chromium connects to, so validation and connection are separate resolutions; `probe_tls` is a third, unpinned network path (validated in `probe_site`, connected in `probe_tls`)
+    - **Root cause**: the guard delivers *validation*, not *pinning*; Phase 5 closed the rebinding window for the httpx probe path only. The verdict cache (documented as an optimization) extends the unvalidated window from one request to the whole page load — every subresource from a once-allowed host is trusted for the page's lifetime although each is resolved afresh by Chromium
+    - **Proposed remedy category**: architectural — extend DNS pinning to the browser path (proxy subresource fetches through an `SSRFPinningTransport`-backed fulfiller, or pre-resolve and connect by validated literal IP), and pin `probe_tls` to a pre-validated address
+    - **Source**: fresh-eyes hunt list (capture→network contract); the *class* is documented, but the subresource-cache widening and the unpinned TLS-probe path are not
+
+    - **ID**: AUDIT-3-4
+    - **Title**: Artifacts of failed/aborted captures are never cleaned, and concurrent duplicate execution can overwrite a committed scan's artifacts (non-atomic writes, no fencing)
+    - **Severity**: Low
+    - **Subsystem / file(s)**: `worker/scan_tasks.py` (`store_artifacts` runs before the DB commit; `_run_scan`'s running-status guard deliberately permits re-execution under acks_late redelivery); `worker/artifacts.py:21-24` (direct `write_text`/`write_bytes`, no tmp+rename); `worker/beat_tasks.py:271-291` (janitor removes dirs only when the DB row is GONE)
+    - **Reproduction**: code-trace (no probe needed): a soft-time-limit kill after `store_artifacts` leaves the row failed-but-present → the janitor skips it forever; a broker-redelivery duplicate (connection loss while the original still runs) has two writers to `scans/<id>/page.html` — the loser can overwrite artifacts after the winner's commit, breaking the row's artifact ↔ `content_hash` correspondence
+    - **Root cause**: artifact lifecycle is tied to row existence, not row state/age; writes are non-atomic and unfenced
+    - **Proposed remedy category**: retention/lifecycle — state- and age-aware janitor scope; atomic artifact writes (tmp+rename); optional capture fencing (generation token) for the duplicate window
+    - **Source**: fresh-eyes hunt list (partial-write/crash-consistency, stale reuse)
+
+    - **ID**: AUDIT-3-5
+    - **Title**: Capture-completeness facts never reach detection: a silently truncated capture (scroll time-cap, screenshot cap, unstable DOM) is compared against the baseline as if complete
+    - **Severity**: Medium
+    - **Subsystem / file(s)**: `worker/scan_tasks.py:339` (`capture_evidence` stored on the scan row only); `worker/detection/types.py:12-24` (`PageData` has html/screenshot/headers/tls/robots/hash — no completeness flags); `worker/page_prepare.py` (20 s scroll cap, 5 s stability cap); `worker/fetcher.py:377-416` (16 384 px screenshot cap)
+    - **Reproduction**: code-trace: `run_detection(baseline_page, current_page)` receives none of `capped` / `stable` / `screenshot_capped` / `capture_quality`; a baseline captured full vs a scan capped at 20 s on an infinite-scroll site produces a text/structure/visual diff of the truncation, not of the site (and truncation can hide below-fold injected content — a miss path)
+    - **Root cause**: `capture_evidence` was designed "debugging metadata only" (Phase 4/7) and no later consumer bridges capture completeness into the detection inputs; the layers' only degradation knowledge is empty-artifact presence
+    - **Proposed remedy category**: contract extension — carry capture-quality flags in `ScanPageData`/`PageData` (capture half); how layers weight them is Phase 4's detection half. Same axis as AUDIT-2B-1 (absent stylesheet bytes): both are things the capture promises detection nothing about
+    - **Source**: fresh-eyes hunt list (capture→detection contract)
+
+    - **ID**: AUDIT-3-6
+    - **Title**: Per-scan request multiplication × adaptive cadence = a WAF-escalation feedback loop with no per-host request budget
+    - **Severity**: Low
+    - **Subsystem / file(s)**: `worker/probe.py:216-235` (robots + 3 sequential raw UA fetches per capture, including a `googlebot` UA from a non-Google IP — a classic WAF tripwire); `worker/fetcher.py` (1-2 Playwright loads via the Phase-6 retry); `app/scanning.py:36` (change → cadence base/4, min 5 min); `worker/celery_app.py:37-45` (limits sized for the composition)
+    - **Reproduction**: arithmetic trace: one scan ≈ 1-2 browser loads + 4 raw fetches + TLS handshake ≈ 6-7 requests; on a WAF-protected site a detected (or false) change tightens cadence to ≥ every 5 min → ~6-7 requests/5 min → rising block probability → challenge-failed scans → operator noise; the fixed 3 s single retry (no jitter/backoff) re-hits a soft block at full rate
+    - **Root cause**: a request budget per site per time is nowhere capped or cooled down; the UA rotation is deliberately unstealthed (design) but its WAF-escalation interaction with the tightened cadence was never examined
+    - **Proposed remedy category**: operational policy — per-host request budget/cooldown after repeated bot-protection failures; consider gating the `googlebot` UA variant
+    - **Source**: fresh-eyes hunt list (WAF-block escalation through repeated probes)
+
+    - **ID**: AUDIT-3-7
+    - **Title**: `hashing.py` (never independently reviewed): sound — with one latent hardening note
+    - **Severity**: Low
+    - **Subsystem / file(s)**: `worker/hashing.py`
+    - **Reproduction**: `scratch/probe_hashing_edges.py`: normalization is deterministic and conservative exactly as documented — CRLF/CR equal to LF, trailing NBSP/narrow-NBSP/tab stripped (Unicode whitespace), interior NBSP preserved as content, blank-line strip exact, lone-surrogate encode stable across runs (errors="replace"), hash = sha256(normalized UTF-8) verified against a manual computation; `tests/test_hashing.py` 12/12 green
+    - **Root cause (of the note)**: `content_sha256(None)` raises `AttributeError` (`'NoneType' object has no attribute 'replace'`). Current callers always pass `str`, so this is latent, not live
+    - **Proposed remedy category**: hardening — guard or assert the `str` invariant at the one shared entry point so a future degraded path cannot turn a capture gap into a task crash
+    - **Source**: fresh-eyes cold read of the never-touched layer-1 module (hunt list)
+
+    - **ID**: AUDIT-3-8
+    - **Title**: `auto_scroll_page` counts a SHRINKING page height as "stable" and can end the walk early
+    - **Severity**: Low
+    - **Subsystem / file(s)**: `worker/page_prepare.py:119` (`stable_steps = stable_steps + 1 if height <= last_height else 0`)
+    - **Reproduction**: code-trace: two consecutive steps with a shrinking height (lazy placeholders collapsing, dynamic sections unloading) plus `at_bottom` satisfy the break condition while below-fold lazy content may still be pending; the capture is not flagged partial (`capture_quality` only flags `capped`/unstable/screenshot-cap)
+    - **Root cause**: "stopped growing" was implemented as `<=`, conflating shrink with settle
+    - **Proposed remedy category**: local heuristic fix — treat shrink beyond an epsilon as churn (reset `stable_steps`) or require strictly non-shrinking stability
+    - **Source**: fresh-eyes hunt list (infinite-scroll kill criteria)
+
+
+- **Log-vs-reality discrepancies**: none. The live Docker capture's evidence dict matched the documented Phase-7 assembly key-for-key; no PROMPT-002 log claim was re-verified (out of scope for this phase — that was Audit Phase 1).
+
+- **New hermetic tests added this phase**: none committed. Four scratch probes live under `Prompts/Pending/Finders/PROMPT-003/scratch/` (documented-as-scratch per Rule 5/10): `probe_hashing_edges.py`, `probe_banner_click_navigation.py`, `probe_frame_wait_budget.py` (plus the HTML fixtures it writes), `probe_ssrf_verdict_cache.py`. None assert against changed production behavior (Rule 1 — diagnosis only); the remedy phases for AUDIT-3-1/3-2/3-3 should convert the relevant probes into hermetic FAILED-before tests.
+
+- **Opportunities / Innovation ideas observed** (Rule 17):
+    - **Idea**: record the main-frame navigation count during the dismissal window in `capture_evidence` (the `nav_responses` list already tracks it) — a one-line invariant signal that a banner click navigated, making AUDIT-3-1's failure mode visible in evidence even before any fix.
+    - **Why it would help**: turns a silent wrong-page capture into an observable capture-health event.
+    - **Where it touches**: `worker/fetcher.py` (evidence assembly), `worker/banner_dismiss.py` (return shape).
+    - **Rough shape of the change**: pass the `nav_responses` length in/out of `dismiss_banners`; add `main_frame_navigations_during_dismissal` to banner evidence.
+    - **Idea**: run `probe_site`'s three raw UA fetches concurrently (bounded by the existing `max_connections=4`).
+    - **Why it would help**: cuts the documented ~90 s worst-case probe tail roughly 3×, shrinking the capture wall clock the Celery soft-limit budget and the stale-inflight margin must absorb.
+    - **Where it touches**: `worker/probe.py` (`probe_site`'s loop over `USER_AGENTS`).
+    - **Rough shape of the change**: `asyncio.gather` over `_fetch_raw`, with the desktop-Chrome reference's headers still assigned to `result.headers`.
+    - **Idea**: inventory captured CSS assets now (`link[rel=stylesheet]` URLs + sha256 of their bytes, recorded in `capture_evidence`) as a cheap, detection-free first step toward AUDIT-2B-1's capture half.
+    - **Why it would help**: defacements increasingly live in linked stylesheets; the inventory creates the data axis without touching any layer.
+    - **Where it touches**: `worker/fetcher.py` (response hook filtering `text/css`), `capture_evidence` schema, `CAPTURE_METHOD_VERSION` bump consideration.
+    - **Rough shape of the change**: a response listener keyed on main-frame stylesheet requests; hashes into evidence (bytes storage can follow in the remediation phase).
+
+- **Full regression results**: no production code was edited (Rule 1), so no full regression was owed; spot check: `backend\.venv\Scripts\python.exe -m pytest tests/test_hashing.py -q` → **12 passed** (the never-reviewed module's own suite, confirming the green baseline my probes measured against). Docker stack healthy throughout (app/worker/beat/db/redis up; live `fetch_page('https://example.com')` through the worker container returned a complete evidence dict).
+
+- **Findings out of phase scope**: the detection half of AUDIT-3-5 (how layers weight capture-completeness flags) → Phase 4; the detection half of AUDIT-2B-1 (stylesheet bytes) → Phase 4; the API artifacts-surface implications of AUDIT-3-4 → Phase 4C; orchestration/scheduling depth (stale-supersede arbitration and beat claim mechanics were read and verified sound, not re-audited) → Phase 4B.
+
+- **Commit**: (filled after commit)
+- **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
+
+
+

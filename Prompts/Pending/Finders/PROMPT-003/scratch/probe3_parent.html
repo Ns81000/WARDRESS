@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><title>Parent</title></head>
+<body>
+  <h1>Parent content</h1>
+  <iframe id="consent" src="frame_child.html"></iframe>
+  <script>
+    document.getElementById('consent').style.display = 'none';
+    setTimeout(() => {
+      document.getElementById('consent').style.display = 'block';
+    }, 2500);
+  </script>
+</body></html>
