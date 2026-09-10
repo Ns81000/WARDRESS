@@ -412,3 +412,145 @@ None committed (Rule 5/10) — this is a diagnosis phase; no production file was
 
 <!-- AUDIT2-CONT -->
 
+### [DONE] PROMPT-003 Audit Phase 2B — Full Codebase Inventory, Blast-Radius Mapping & Prior-History Sweep
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-11
+- **Assigned subsystem**: §4 Audit Phase 2B — entire repository for classification, plus targeted grep (never full reads) of `Prompts/Done/Loogers/WARDRESS_AUDIT_FINDINGS.md` (268KB) and `WARDRESS_FIX_LOG.md` (790KB).
+
+#### Method (Rule 13 — empirical, not doc-trusted)
+
+- Repo walk via `git ls-files` (587 tracked files; working tree clean at `167c152`). Grouped per directory; ambiguous files classified by reading their module docstrings/head lines directly (e.g. `worker/hashing.py`, `app/reporting.py`, `app/explain.py`, `app/tasks.py`), not by name inference.
+- **PROMPT-002 touched-file set**: derived empirically by full-text grep of `PROMPT-002-IMPLEMENTATION-LOG.md` for both full paths (`backend/...py`, `frontend/src/...`) and bare module names (`visual\.py`, `hashing\.py`, `alerting\.py`, ...). Hit counts distinguish "named/targeted" from "merely mentioned in passing". This set is log-derived (a self-reported claim) — used only to *prioritize* fresh-eyes reads, never to *excuse* a file from audit (§3.6: this Phase 2B inventory, not PROMPT-002's own lists, is the authoritative target source).
+- **Prior-history sweep**: `Select-String` targeted grep for the six mandated terms; hit counts + line-context reads only, no full reads of the 790KB/268KB files. Counts: `TODO` 0/0, `deferred` 1/5, `not implemented` 1/3, `residual` 2/149, `known issue` 0/0, `unresolved` 0/1 (FINDINGS/FIXLOG). ~120 of the 149 FIXLOG "residual" hits are per-phase `Residual risk / follow-ups` headers inside `[FIXED]` entries (disclosed hand-offs), not open defects; the ones intersecting the blast radius are dispositioned below.
+
+#### 1. Repository inventory & blast-radius mapping (grouped, per §4 formatting discipline)
+
+| # | Bucket | Files (count) | Classification |
+|---|---|---|---|
+| 1 | **Capture/detection core** (Audit Phases 1, 3, 4 targets) | 29 | `worker/`: `stealth.py`, `fetcher.py`, `probe.py`, `page_prepare.py`, `banner_dismiss.py`, `artifacts.py`, `hashing.py` (7); `app/capture.py`, `app/scanning.py` (2); `worker/detection/`: `__init__.py`, `types.py`, `normalize.py`, `dom.py`, `signatures.py`, `visual.py`, `metadata.py`, `cloaking.py`, `semantics.py`, `suppress.py`, `fusion.py`, `pipeline.py` (12) + `training/fusion_dataset.json`, `training/fusion_model.json`, `training/regression_corpus.json` (3 deployed/training artifacts); `tools/`: `build_fusion_dataset.py`, `build_regression_corpus.py`, `refit_fusion_model.py` (3) + `run_stress_catalog.py` (1, Phase-5A/5B harness) |
+| 2 | **Orchestration, data & scheduling** (Phase 4B/4D) | 30 | `worker/scan_tasks.py`, `remediation_tasks.py`, `alert_tasks.py`, `beat_tasks.py`, `celery_app.py`, `worker/db.py` (6); `app/models.py`, `schemas.py`, `db.py`, `tasks.py`, `services.py`, `config.py`, `settings_store.py`, `main.py` (8); `alembic/` 16 version migrations + `alembic.ini`, `env.py`, `script.py.mako`, `README` |
+| 3 | **API routers, auth & RBAC** (Phase 4C) | 19 | `app/routers/*.py` 13 in-scope (of 14; `agent.py` excluded, bucket 8): `alerts`, `apikeys`, `artifacts`, `audit`, `auth`, `health`, `imports`, `remediation`, `reports`, `settings`, `sites`, `users`, `__init__`; plus `app/deps.py`, `ratelimit.py`, `security.py`, `apikeys.py`, `audit.py`, `seed_admin.py` |
+| 4 | **Alert & remediation delivery** (Phase 4D) | 7 | `app/alerting.py`, `remediation.py`, `explain.py`, `reporting.py`; `app/templates/email/alert.html`, `templates/email/test.html`, `templates/report/report.html` |
+| 5 | **AI provider integration** (Phase 4E) | 9 | `app/llm.py`, `ai_config.py`, `ai_catalog.py`, `ai_ollama.py`, `ai_startup.py`, `ai_migration.py`; `worker/llm_escalation.py` (in scope per §0 — detection's second-opinion mechanism); `app/crypto.py` (Fernet-at-rest for AI keys); `app/data/models_dev_catalog.json` |
+| 6 | **Frontend capture/detection surfaces** (Phase 4F) | 34 src + 21 tests | pages: `health.tsx`, `site-detail.tsx`, `scan-detail.tsx`, `alerts.tsx`, `remediation.tsx`, `sites.tsx`, `settings.tsx`, `audit.tsx`, `login.tsx`, `assistant.tsx`, `App.tsx`, `main.tsx` (12); components: `finding-card`, `dom-diff-tree`, `risk-gauge`, `incident-timeline`, `visual-diff-slider`, `suppression-panel`, `remediation-hooks-panel`, `status-dot`, `ai-settings-card`, `api-keys-card`, `users-card`, `favicon-card`, `bulk-import-dialog`, `app-shell`, `site-avatar`, `site-favicon`, `spark-icon`, `markdown-message`, `wardress-mark` + `ui/` (10 shadcn primitives); lib: `api.ts`, `auth.tsx`, `use-artifact.ts`, `use-site-icon.ts`, `use-reduced-motion.ts`, `site-icon-state.ts`, `site-avatar.ts`, `ai-task-assignment.ts`, `bbox.ts`, `listbox-keys.ts`, `numeric-inputs.ts`, `provider-logos.ts`, `utils.ts` (13); `frontend/tests/` 21 files |
+| 7 | **Dependencies / config / supply-chain** (Phase 4E, 9) | 24 | `backend/pyproject.toml`, `uv.lock`, `Dockerfile.app`, `Dockerfile.worker`, `tools/check_torch_osv.py`; `frontend/package.json`, `pnpm-lock.yaml`, `vite.config.ts`, `tsconfig*.json` (3), `.oxlintrc.json`, `components.json`, `index.html`; repo root: `docker-compose.yml`, `.env.example`, `.dockerignore`; `.github/workflows/ci.yml`, `static.yml`; `scripts/` 7 (install/uninstall/validate/update/diagnostics/`lib.ps1`, `generate_structure.py`) |
+| 8 | **Excluded operations agent** (per §0 exception) | 8 | `app/agent/{__init__,context,engine,guard,tools}.py` (5), `routers/agent.py`, `docs/agent.mdx`, `docs/agent-skill.mdx` + `worker/telegram_bot.py` (boundary check in §2 below) |
+| 9 | **Out of blast radius** | ~290 | `landing/` (26), `walkthrough/` (18), `assets/` (18), `frontend/src/assets/providers/` (160 static provider-logo SVGs, integrity-pinned by `svg-path-integrity.test.ts`), `docs/` non-agent docs + images/screenshots (38 — read for drift in Phase 9, not runtime), `Prompts/` (14, this effort's own state), `README.md` (Phase-9 docs-drift scope), `frontend/src/index.css`, `public/favicon.svg`, `frontend/src/assets/fabric-iq.svg`, `.gitignore`/`.gitattributes`, `frontend/.gitignore` |
+
+#### 2. `telegram_bot.py` scope determination (the §4-mandated crucial check) — **OUT of blast radius (interactive ops transport, NOT an alert channel)**
+
+Verified cold, not from its docstring alone:
+
+- **It does not deliver scan alerts.** `app/alerting.py:10-12` routes telegram alert pushes through Apprise `tgram://` built from the stored bot token + chat id (`alerting.py:177-180, 235-245`); `telegram_bot.py:7` states this and the code confirms it — the bot has no Apprise/sending path for alert content beyond replies to its own command chat.
+- **What it actually is**: dedicated optional container (`docker-compose.yml:136-142`, profile `telegram`, `python -m worker.telegram_bot`) running pull-commands `/start /status /sites /scan /ack /mute /help`. It reads `Scan`/`Alert`/`Site` via `worker.db.task_session` directly (:221-278) and triggers scans via `trigger_scan_now(db, site, actor=None, actor_label="telegram-bot", via="telegram")` (:313) — the same service layer the routers use.
+- **One narrow coupling to the in-scope alert path**: `/start` captures the chat id that `alerting.py:241` then *requires* for the telegram channel ("send /start to your bot"). The bot therefore provisions, but never delivers, the alert channel. Logged as a boundary note, not an escalation.
+- **Verdict**: excluded subsystem (ops-agent/interactive transport), consistent with the `app/agent/` exclusion. Its alert-channel provisioning dependency and direct-DB access are noted for Phase 4D's awareness without pulling the bot itself into scope.
+
+#### 3. Operations-agent data-access boundary check (escalation criterion: direct DB/scan-data access bypassing API/RBAC) — **no escalation fired**
+
+- `app/agent/tools.py` imports `Baseline`, `Scan`, `ScanFinding` directly from `app.models` (:36-42) and runs direct DB selects (e.g. `select(Site)` :205-212) — it touches scan/finding data *outside the HTTP API*.
+- But it does not bypass RBAC: tools carry `tier` (TIER_READ/SAFE/HIGH_IMPACT/DESTRUCTIVE, :67-70) and `min_role` floors (`_ROLE_RANK` :63-64; `tools_for_role` :169-174; `can_call` :177-178); tier ≥ 2 calls are frozen and re-checked by `guard.py` (confirm-before-execute, RBAC/ownership re-verified at confirm, :5-9); module docstring states executors call the same service code paths as routers (:6-10). This is the by-design architecture §0 already scoped out — **agent stays excluded**; each individual tool's account-scoping remains a legitimate cold-read target if Phase 4C wants one extra pass over `tools.py` reads (out of this phase's mandate to expand).
+
+#### 4. Highest-priority fresh-eyes targets: in-radius files NEVER touched by PROMPT-002
+
+Derived from the PROMPT-002 log full-text grep (×0 = never named in any PROMPT-002 phase). These have had no targeted remediation pass in either effort:
+
+**Capture/detection core — Phase 3/4 priorities (most important of the entire inventory):**
+- `worker/hashing.py` (×0) — layer-1 building block, never named by PROMPT-002 despite phases 8-14 overhauling detection.
+- `worker/detection/visual.py` (×0), `signatures.py` (×0), `semantics.py` (×0), `cloaking.py` (×0), `types.py` (×0) — **five of the twelve detection modules were never named in PROMPT-002's log at all**; only `dom/metadata/normalize/pipeline` were directly edited, with `suppress.py` (×2) and `fusion.py` (×1) mentioned in passing. The five ×0 modules carry layers 3/4/5/7/8's rule logic — exactly where rule floors and false-negative risk live.
+- `worker/artifacts.py` (×0) — capture artifact persistence.
+- The three `training/*.json` artifacts + `build_fusion_dataset.py`/`build_regression_corpus.py`/`refit_fusion_model.py` — generators were touched (Phases 11-14) but a fresh-eyes read of the deployed JSONs' binding/derivation metadata is warranted (Phase 2 already re-verified refit gates).
+
+**Everything else (Phase 4B-4F priorities):**
+- Orchestration: `remediation_tasks.py` (×0), `alert_tasks.py` (×0), `beat_tasks.py` (×0), `worker/db.py` (×0), `app/db.py` (×0), `config.py` (×0), `settings_store.py` (×0), `main.py` (×0), `services.py` (×0) — **the entire scheduling/alert/orchestration spine except `scan_tasks.py` and `celery_app.py` was never touched by PROMPT-002**, plus 15 of 16 alembic migrations (only `o9q1r2s3t4u5` capture_meta was a Phase 1 target).
+- API/RBAC: all routers except `sites.py` and `health.py` (×0): `alerts`, `apikeys`, `artifacts`, `audit`, `auth`, `imports`, `remediation`, `reports`, `settings`, `users` — plus `deps.py`, `ratelimit.py`, `security.py`, `apikeys.py`, `audit.py`, `seed_admin.py` (all ×0).
+- Alert delivery: `alerting.py` (×0), `remediation.py` (×0), `reporting.py` (×0), all 3 templates (×0). (`explain.py` ×3 mentions only.)
+- AI integration: every file in bucket 5 (×0) — `llm.py`, all `ai_*.py`, `llm_escalation.py`, `crypto.py`, catalog JSON.
+- Frontend: every page/component/lib file except `health.tsx` and `lib/api.ts` — notably `scan-detail.tsx`, `finding-card.tsx`, `dom-diff-tree.tsx`, `risk-gauge.tsx`, `incident-timeline.tsx`, `visual-diff-slider.tsx`, `alerts.tsx`, `remediation.tsx` (all ×0), and `auth.tsx`.
+
+This confirms PROMPT-003 §0's premise empirically: PROMPT-002's footprint was confined to capture + detection-normalization/fusion; the orchestration, alerting, RBAC, AI, and most frontend layers have had **zero** independent scrutiny in both efforts.
+
+#### 5. Prior-History Sweep — cross-checked dispositions (each re-verified against CURRENT code today, Rule 13)
+
+**CLOSED — verified fixed (no action):**
+- `[Low]` logout auth invariant missing (FINDINGS:458) → `[FIXED]` FIXLOG:1729.
+- `[Medium]` README "separate Celery queue" claim (FINDINGS:4480) → `[FIXED]` FIXLOG:1600 (docs corrected, no queue split shipped).
+- `[Low]` frontend type-check vacuously succeeding (FINDINGS:4621) → `[FIXED]` FIXLOG:2495 (`pnpm type-check` now real).
+- `[Low]` torch invisible to pip-audit (FIXLOG:198 "Phase 40's to close") → **closed today**: `.github/workflows/ci.yml:67-70` runs `tools/check_torch_osv.py` against the OSV endpoint; `pyproject.toml:121-123` bandits-scans it (S310 exemption).
+
+**STILL OPEN TODAY — confirmed on current code (become Findings AUDIT-2B-1 … AUDIT-2B-6 below).**
+
+- **AUDIT-2B-1 — External stylesheet bytes are never captured: stylesheet-hidden content (linked CSS only) is invisible to the DOM detection layers**
+  - **Severity**: Medium (a real hiding technique — content/links hidden purely by rules in a *linked* stylesheet — passes every DOM-based layer; not a regression, a documented coverage boundary left open)
+  - **Subsystem / file(s)**: `worker/detection/dom.py` (:13-17 comment discloses it), `worker/fetcher.py`, `worker/page_prepare.py`
+  - **Reproduction**: code inspection — no stylesheet fetch exists anywhere in `worker/` (grep: only `dom.py`'s inline `<style>` parsing `_stylesheet_rules` :278-290 and the conservative resolver :167-174, which operate on inline CSS text within the captured DOM string)
+  - **Root cause**: the capture contract stores only the rendered DOM string + artifacts; external stylesheet bytes were never added to `PageData` (first surfaced in FIXLOG:1027; PROMPT-002 never mentions "stylesheet" — 0 hits)
+  - **Proposed remedy category**: detection-coverage extension (fetch linked same-origin CSS through the SSRF-safe transport into `PageData`, extend `dom.py`'s hidden-content rules to sheet bytes) — or an explicitly re-documented accepted boundary
+  - **Source**: prior-history sweep (FIXLOG:1027) + cold re-verification
+- **AUDIT-2B-2 — Detection sub-threshold emission gaps persist and their corpus rows were dropped, so no standing guard covers them**
+  - **Severity**: Medium
+  - **Subsystem / file(s)**: `worker/detection/{signatures,semantics,visual}.py`, `tools/build_regression_corpus.py`
+  - **Reproduction**: PROMPT-002 log :1893-1896 — corpus axes `visual_hue_recolor`, `seo_spam_beyond_cap` (and one of `nonnative_*`) dropped as "channel-adjacent duplicates"; PROMPT-002 log and current code show no emission improvement for hue-only recolors, beyond-cap SEO spam, or partial non-Latin text
+  - **Root cause**: pre-PROMPT-002 documented emission gaps (FIXLOG:474, :595) were never closed; PROMPT-002's corpus re-pin *removed* their last standing representation instead of adding one
+  - **Proposed remedy category**: either emission-side detection work or explicit `accepted_gap` corpus entries (per O-4's standing report idea)
+  - **Source**: prior-history sweep + PROMPT-002 log line evidence
+- **AUDIT-2B-3 — Remediation claim "crash-after-claim" window: a won claim commits before execution; an executor crash leaves a terminal `confirmed` row that is never re-runnable (caller sees 409 forever)**
+  - **Severity**: Medium
+  - **Subsystem / file(s)**: `app/remediation.py`, `worker/remediation_tasks.py`, `app/routers/remediation.py`
+  - **Reproduction**: code-path reading (FIXLOG:1079 disclosed it as residual); PROMPT-002 has 0 hits for claim-race/crash-after-claim — untouched by both prior efforts
+  - **Root cause**: claim-wins-then-execute ordering with no terminal-row recovery/timeout path
+  - **Proposed remedy category**: recovery semantics (lease/timeout reclaim, or a surfaced terminal-state remediation action)
+  - **Source**: prior-history sweep
+
+- **AUDIT-2B-4 — `imports.py` still enqueues baseline captures synchronously on the event loop (blocking broker `send_task` per created baseline; `services.py:180` wraps the identical call in `asyncio.to_thread`)**
+  - **Severity**: Low (latency-bounded; no correctness defect at realistic scale — the old log's own disposition, re-confirmed today)
+  - **Subsystem / file(s)**: `app/routers/imports.py:404-410` vs `app/services.py:180`
+  - **Root cause**: inconsistency left from the service-layer deduplication phase (FIXLOG:226)
+  - **Proposed remedy category**: mechanical consistency fix for the remediation prompt
+  - **Source**: prior-history sweep + cold re-verification
+- **AUDIT-2B-5 — `risk-gauge.tsx:19` inline comment still asserts "the scheduler's material-change band"; the material-change band is 0.40 (`scanning.py:58`), the gauge threshold is 0.15**
+  - **Severity**: Low (comment/label drift that misleads an operator reading the component; flagged in FIXLOG:2745 and never fixed)
+  - **Proposed remedy category**: one-line comment fix + a Phase-9 docs-drift sweep item
+  - **Source**: prior-history sweep + cold re-verification
+- **AUDIT-2B-6 — Stale/unused dependency declarations: `aiosqlite==0.22.1` (pyproject:70) unused since the Postgres harness; `scikit-learn==1.9.0` runtime pin unused by runtime code (build-time only, pyproject:35)**
+  - **Severity**: Low (lockfile churn deferred twice; comment staleness)
+  - **Subsystem / file(s)**: `backend/pyproject.toml`, `backend/uv.lock`
+  - **Proposed remedy category**: dependency hygiene (regen `uv.lock`) in the Phase-4E supply-chain pass
+  - **Source**: prior-history sweep (FIXLOG:166, :458) + cold re-verification
+
+**Open-by-design residuals (re-confirmed, documented, not defects — surfaced for user accept/reject only):** case-variant URL dedup (`http://x` vs `http://x/` distinct); unbounded site-list (no pagination); agent cross-turn injection persistence (out-of-blast-radius subsystem); committed admin seed on air-gapped image builds; no Renovate/SHA-bump automation.
+
+#### Findings out of phase scope (logged for the correct future phase, not investigated here)
+
+- AUDIT-2B-1 → Audit Phase 4 (detection), with the capture-side fetch touching Phase 3's `PageData` contract.
+- AUDIT-2B-2 → Audit Phase 4 (+ Phase 8 adversarial fixtures should include one hue-recolor and one beyond-cap-SEO pair to measure the real miss rate).
+- AUDIT-2B-3, AUDIT-2B-4 → Audit Phase 4D (orchestration/delivery).
+- AUDIT-2B-5 → Audit Phase 4F (frontend) + Phase 9 docs sweep.
+- AUDIT-2B-6 → Audit Phase 4E (supply chain).
+- telegram-bot chat-id provisioning coupling → noted for Phase 4D's alert-idempotency read only.
+- Agent `tools.py` per-tool account-scoping cold pass → optional Phase 4C add-on.
+
+#### Opportunities / Innovation ideas observed (Rule 17 — not severity-scored)
+
+- **Idea O-7 — Machine-readable blast-radius manifest**: have Audit Phase 10 (or a CI step) emit this Phase 2B inventory as a machine-readable `subsystem → files` map (JSON/YAML) kept in the repo; future audits diff scope changes automatically instead of re-walking 587 files, and PR review gains a "what subsystem does this touch?" check.
+  - **Why**: PROMPT-002's blind spot was structural (scoping inherited from a previous effort); a manifest makes scope drift visible mechanically.
+  - **Where**: `Prompts/` tooling or `backend/tools/`; consumed by audit phases.
+  - **Rough shape**: static manifest + one test asserting manifest paths all exist.
+- **Idea O-8 — "Comment-asserts-constant" drift spot-check**: the `risk-gauge.tsx:19` stale band comment suggests a small Phase-9 script that greps comments for hardcoded numeric constants and cross-checks them against the named constant's current value; drift becomes a standing report instead of per-audit luck.
+  - **Why**: cheap; comment drift is exactly the class Rule 13 keeps re-finding.
+  - **Where**: Phase 9 infra/docs pass; `frontend/src/components/risk-gauge.tsx`, `app/scanning.py`.
+  - **Rough shape**: read-only checker script; no runtime coupling.
+
+#### Full regression results
+
+No test files or code were added or modified this phase (log-file-only change), so per Rule 5 no suite re-run was required; the last recorded baselines stand (Phase 2, this log: unit batch 110 passed / DB batch 29 passed). Working tree verified clean before and after the log edit; the commit below contains only this log file.
+
+#### Findings out of phase scope — none beyond those routed above.
+
+#### Commit
+
+*(filled after commit)*
+
+<!-- AUDIT2B-CONT -->
+
