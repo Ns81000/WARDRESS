@@ -198,7 +198,7 @@
   - O-3 (challenge-wait duration in evidence) would materially cheapen AUDIT-1-2's per-site work; flagged for Audit Phase 5A's attention in the catalog's logging format discussion.
   - PROMPT-002 Phase 13's `_capture_child_impl.py` subprocess isolation and `test_capture_e2e.py`'s 10 network-marked tests are structural (hermetic default deselects them — verified in `pyproject.toml` addopts) — no action, recorded as prior-art confirmation for Audit Phase 2B's inventory.
 
-- **Commit**: PENDING-HASH — audit(prompt-003): phase 1 capture traceability matrix
+- **Commit**: 084bd6c — audit(prompt-003): phase 1 capture traceability matrix (hash recorded in the follow-up one-line commit; both are log-only changes)
 
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
