@@ -408,7 +408,7 @@ None committed (Rule 5/10) — this is a diagnosis phase; no production file was
 
 #### Commit
 
-_placeholder_
+`11a5e54` — audit(prompt-003): phase 2 detection traceability matrix + taxonomy/overfitting findings (log-file-only change)
 
 <!-- AUDIT2-CONT -->
 
