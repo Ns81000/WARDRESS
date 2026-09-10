@@ -550,7 +550,5 @@ No test files or code were added or modified this phase (log-file-only change), 
 
 #### Commit
 
-*(filled after commit)*
-
-<!-- AUDIT2B-CONT -->
+5d7ac7f — docs(audit-2b): full repository inventory, blast-radius mapping and prior-history sweep
 
