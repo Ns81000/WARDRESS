@@ -203,5 +203,212 @@
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
 
-<!-- AUDIT1-CONT -->
+### [DONE] PROMPT-003 Audit Phase 2 — Traceability Matrix: Detection Phases (PROMPT-002 Phases 8–14)
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-10
+- **Assigned subsystem**: §4 Audit Phase 2 — detection stack: `worker/detection/{pipeline,normalize,dom,metadata,fusion,suppress,cloaking,semantics,signatures,visual,types}.py`, `worker/hashing.py`, the verdict/changed gate in `worker/scan_tasks.py`, the meta-generators `backend/tools/build_regression_corpus.py` + `refit_fusion_model.py` (+ their shared parent `build_fusion_dataset.py`), the generated artifacts `worker/detection/training/{regression_corpus,fusion_model}.json`, and every test file named in the Phase 8–14 log entries. AUDIT-1-1 (verdict-gate Gap) is carried forward in the Phase-11 matrix row per the Phase-1 handoff — re-confirmed in current code, not re-discovered.
+
+#### Directive 1 — Attack-technique taxonomy vs the 152-row regression corpus
+
+Corpus composition re-verified from the artifact itself (`regression_corpus.json` meta): 152 rows = 12 attack axes × 8 (sig_strong_banner, sig_leet, sig_medium_weak, script_new_domain, form_action_swap, hidden_spam_inline, hidden_spam_stealth, cloaking_heavy, visual_banner_deface, laundering_padded, multi_vector_screamer, combined_subthreshold) + 7 benign-dynamic axes × 8 (rotating_ad, timestamp_counter, cache_busting_refs, minor_css_churn, mixed_noise_combo, editorial_update, nonnative_editorial). Row spot-checks performed with PowerShell over the JSON (counts, per-row features, fused risks) — the meta's `by_axis` matches the pinned constants exactly.
+
+| # | Technique | Verdict in the 152-row corpus | Evidence |
+|---|---|---|---|
+| 1 | Defacement (banner/takeover) | **Represented** | `sig_strong_banner`/`sig_leet`/`sig_medium_weak` axes (+ heavy variants `multi_vector_screamer`, `laundering_padded`); mutators `build_fusion_dataset.py:639-667`; end-to-end flag pinned by `test_detection_e2e.py::test_injected_defacement_signature_flags_risk_above_0_5` (:426) |
+| 2 | Asset-swap (server-side, DOM untouched) | **Represented** | `visual_banner_deface` has a 50% pure asset-swap branch (`build_fusion_dataset.py:818-825`: `Outcome(html, …)` unchanged HTML + `shot_banner=True`); verified in corpus rows: visual_banner_deface-0000/0001/0002/0006 all have `layer1_hash=0.0` (hash-identical DOM) with `layer4≈0.66` and fused risk 1.0 — the hash-gate-removal contract (Fix Phase 6) is exercised, not just asserted |
+| 3 | SEO-spam link farm | **Represented** | `hidden_spam_inline`/`hidden_spam_stealth` axes (mutators :702-729, incl. opacity/font-size/offscreen/stylesheet variants); e2e `test_hidden_seo_spam_link_farm_detected_by_layers_2_and_3` (:470) |
+| 4 | Script-injection | **Represented** | `script_new_domain` axis (mutator :681-684); layer-3 rule floor (`fusion.py:185`, new-sensitive-infrastructure → 0.40) is axis-covered |
+| 5 | Non-Latin takeover | **Assumed-covered-by-similarity in the corpus; Represented one layer out** | The 152-row corpus contains only the BENIGN `nonnative_editorial` axis; the attack-side axes `nonnative_full_rewrite`/`nonnative_partial_inject` exist in the 646-row fusion dataset but were dropped from the corpus as "channel-adjacent duplicates" (Phase-12 log + meta notes). The script-flip/inflow channels are pinned by `test_detection_e2e.py::test_non_latin_defacement_rewrite_flags_via_script_flip` (:490) and layer-5 tests — but no standing corpus row guards non-Latin takeover specifically |
+| 6 | Credential-phishing overlay | **Assumed-covered-by-similarity (form-target slice) / Genuinely absent (visual-overlay slice)** | `form_action_swap` (mutator :696-699: `action="/login"` → evil domain) covers form-target hijack via layer 3's 1.0-weight form_action channel; but no axis models an injected fake-login OVERLAY (positioned/fake UI harvesting credentials) — that shape exists only insofar as its `<form>`/hidden-element fragments trip layers 2/3 |
+| 7 | Subtle single-word tampering | **Genuinely absent** | No axis mutates a single word of existing content; `sig_medium_weak` (:664-667) is still signature-shaped. Structural consequence (verified against the deployed model): a single-word content edit that trips no signature/lexicon leaves layers 2/3/5/8 ≈ 0 and fuses an l1-only profile to ≈0.14 (`sigmoid(4.408 − 6.247)` with the artifact's coefficients) — verdict "changed", never flagged, never escalated (< 0.40) |
+| 8 | Image-only tamper with unchanged DOM | **Represented** | Same `visual_banner_deface` pure-swap rows as #2 (l1=0, l4≈0.66, risk 1.0); e2e `test_asset_swap_same_html_different_screenshot_layer4_nonzero` (:450) |
+| 9 | Redirect-based cloaking | **Genuinely absent** | Zero `http-equiv`/meta-refresh handling anywhere in the backend (repo-wide search: no matches). Layer 7 compares raw no-JS fetch TEXT between UAs (`cloaking.py` design comment :16-17 + implementation :121-188); `probe.py:202` follows HTTP 3xx redirects only, and a served meta-refresh/JS redirect is never executed by the probe. Layer 3's ref audit (`dom.py:641-676`) collects only script/a/link/iframe/form — a `<meta http-equiv="refresh" content="0;url=…">` injection is invisible to every ref channel and scores only generic layer-2 tag churn. A UA-conditional client-side redirect cloak (identical raw HTML to all UAs, redirect target chosen client-side) reads 0.0 on layer 7 |
+| 10 | Staged/time-delayed payloads | **Genuinely absent (client-side delayed-render slice)** | No time-window mechanism exists in any layer or mutator (single-pair baseline→scan comparison). Server-side staged payloads ARE caught generically once materialized (they become ordinary content deltas); the uncovered slice is payload rendering that stays client-side/timed past the capture settle window |
+
+#### Directive-carry — Traceability matrix rows (claim | Verdict | evidence)
+
+**Phase 8 — Dynamic Content Normalization (text patterns)**
+
+| Claim (spec §PHASE 8) | Verdict | Evidence |
+|---|---|---|
+| New `worker/detection/normalize.py` normalizing volatile text before layers 2/3/5/8 | Verified | Module exists (~310 lines); conservative pattern set (ISO 8601 + date stamps, UUIDs, cache-bust query values with value-shape guard, UUID-shaped values in any query param, token-named attributes/inputs/metas); fixed word placeholders keep idempotence by construction |
+| Applied to BOTH sides, content layers only; layers 1/4/6/7 raw | Verified | `pipeline.py:142-150` — suppression first, then `normalized_copy` on both sides of the same pair; gated off entirely when hash identical or baseline HTML missing; spy test `test_detection_normalize.py::test_non_content_layers_receive_raw_pages` (:364) |
+| Suppression runs before normalization (user regexes match raw text) | Verified | `pipeline.py:145-149` order; pinned by `test_user_suppression_regex_runs_before_normalization` (:347) |
+| Idempotence; no HTML corruption; fail-open; evidence counts | Verified | `normalize_html` returns original untouched when no matches/parse failure/oversize (`_MAX_HTML_CHARS` :69); `test_idempotence` (:220), `test_empty_and_unparseable_fail_open` (:192), `test_oversized_document_skipped` (:205), summary/merge (:231); `normalization_applied` attached per content layer (`pipeline.py:174-175`) |
+| Documented decisions AGAINST normalizing headlines/image-URLs/ad-slots | Verified | Module docstring (:20-36) + `test_attack_evidence_around_volatile_tokens_survives` (:92), `test_script_and_style_text_untouched` (:102), `test_style_attribute_never_touched` (:179) |
+| 31 new tests, failing-before proof | Verified | Exactly 31 `test_` defs counted in `test_detection_normalize.py`; suite green in this session's unit batch |
+
+**Phase 9 — CSP & Header Normalization**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Verify Phase-36 comparator first; add normalization only if needed | Verified | The verify-branch applied: `_csp_directives` already collapsed nonces; the genuine gap found was case-sensitivity — fixed with `re.IGNORECASE` on `_CSP_NONCE_RE` (`metadata.py:44`, comment :45-48) |
+| Nonce-only CSP change → score 0.0; directive change still scores; direction untouched | Verified | `_NORMALIZED_NONCE = "'nonce-'"` (:49); scoring `min(0.8, 0.3*removed + 0.1*weakened)` (:255); 22 tests in `test_csp_nonce_normalization.py` (counted) covering every spec edge case: multi-directive nonce-only (:71), uppercase prefix (:101,:108), removal beside nonce churn (:123,:140,:154), addition (:172), wildcard (:191), hashes never collapsed (:205), quoting recorded-not-normalized (:255), CSP↔Report-Only switch (:274,:284,:292), formatting noise (:235,:247,:314-328), hardening beside churn (:337), HSTS downgrade (:360) |
+| E2E pin: nonce churn fully silent in a scan | Verified | `test_detection_e2e.py::test_csp_nonce_only_change_scores_zero_in_layer_6` (:382) — 0.0 AND all five directional buckets empty |
+
+**Phase 10 — DOM Churn Scoring Refinement**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Content-type-aware churn: content-only churn weighs less; infrastructure unchanged | Verified | `dom.py:45-95` (`_CONTENT_CHURN_TAGS` closed whitelist + decision comments), classification + binary weight at :552-560, `score = max(churn*weight, sensitive)` :572 |
+| Wrapped script still boosts (not gameable) | Verified | Sensitive boost from `script/iframe/hidden` counts :564-568; `test_wrapped_script_still_boosts_sensitive_score` (:166) |
+| Guard tests: content reduced, infra same-or-higher, mixed not weakened, no-churn unchanged | Verified | `test_dom_content_churn.py` 9 tests (counted): :70,:85,:95,:119,:135,:151 plus unknown-tags (:183) and hidden content farm (:194) beyond spec |
+
+**Phase 11 — Verdict Noise Floor & Cadence** — **carries AUDIT-1-1**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `NOISE_FLOOR = 0.02` on the `changed` rule; verdict-only | Verified as spec'd | `scan_tasks.py:44-59` (comment documents floor semantics), gate :304-308 strict `>` |
+| Floor never affects fused risk, `flagged`, or rule floors | Verified | Risk from raw scores via `layer9_fusion`; `flagged = risk >= site.flag_threshold` :309 checked first; floors compose in fusion (`_RULE_FLOORS` `fusion.py:182-186`); pins: `test_noise_floor.py` 8 tests (counted) :164,:189,:205,:217,:230,:242,:254 + docs pin :276 |
+| MATERIAL_CHANGE_RISK stays 0.40, decision documented with measured data | Verified | `scanning.py:58` + refreshed comment; Phase-11 re-measurement recorded in log (benign churn 0.137-0.153, editorial ≤0.298, A/B hero max 0.4393 documented as accepted 3/646) |
+| **CARried GAP — AUDIT-1-1 (re-confirmed in current code, per Phase-1 handoff)** | **Gap** | The `changed` rule iterates ALL non-skipped layers including `layer1_hash`, whose raw score is a byte-flip 1.0 for ANY byte difference — normalization/suppression neutralize churn in every content layer but the byte-hash channel's verdict contribution survives untouched, so benign live churn reads "changed" (never "clean") at fused ≈0.30 (Phase-14 deviation-2 measured; l1-only profile fuses ≈0.14-0.30 depending on layer-7 degradation). Remedy design (gate on normalization-aware evidence or exclude raw byte-hash when all content layers sub-noise, PLUS a live-churn end-to-end `clean` regression gate) belongs to the future remediation prompt — carried, not re-diagnosed |
+
+**Phase 12 — Detector Regression Harness (meta-verification of the generator — directive 4a)**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Corpus reuses `build_fusion_dataset.py` builders; zero duplicated scenario logic | Verified (generator sound) | `build_regression_corpus.py:76-94` imports `measure_sample`, `SEED`, `LANGS`, `FEATURE_KEYS`, axis tables; subset assertions :127-129 fail the import if tables drift apart |
+| 152 rows = strict subset; per-axis counts pinned; `ROWS_PER_AXIS=8` constant | Verified (generator sound) | Pinned constants :96-125; artifact meta re-verified against the constants via PowerShell JSON parse (`by_axis` exact match; 96 attack / 56 benign) |
+| Deterministic rebuilds (fixed seed, per-axis language plan) | Verified (generator sound) | `measure_sample` reseeds `random.Random(f"{SEED}|{axis}|{idx}")` per row (build_fusion_dataset.py:1145); language plan `_plan_language` (:167-176); determinism pinned by `test_detection_regression.py::test_two_rebuilds_are_identical` (:268) + `test_committed_artifact_matches_a_fresh_rebuild` (:273) |
+| Fused risk computed from ROUNDED features through the deployed `layer9_fusion` — exactly self-consistent | Verified (generator sound) | `_reconstructed_results`/`_fused_risk` (:179-194) rebuild skip-state skip results so degradation math cannot fire; exact-equality pin `test_stored_fused_risk_reproduces_from_stored_features` (:244) |
+| Build-time validation refuses a regressed corpus | Verified (generator sound) | `validate()` :212-247 — duplicate ids, axis-count divergence, skipped-nonzero, attack content peak ≤ NOISE_FLOOR, benign ≥ MATERIAL_CHANGE_RISK all raise before write; evidence recorded in artifact meta (`validation` block re-verified in the artifact) |
+| Atomic write (tmp + `os.replace`) | Verified (generator sound) | :322-327 |
+| Content peak excludes `layer1_hash` + skips | Verified (generator sound) | `_content_peak` :197-208; convention documented in meta notes |
+| **Generator finding — sub-invariant density (meta-verified consequence)** | **Note (no bug)** | Per-row `validate()` guarantees attack peak > NOISE_FLOOR per row, but the ROW is the unit: `combined_subthreshold` rows measured in this session span peak 0.0400-0.7534 and fused 0.0078-1.0 — subthreshold is genuinely heterogeneous (row -0002: l1=0,l4=0.0534,fused 0.0078 would fail the changed-invariant were its peak the corpus rule). The documented axis-level exception is the correct mechanism; no generator bug — but the axis-level strength floor is the only guard above the noise floor, which is exactly the overfitting note below |
+
+**Phase 13 — End-to-End Capture Validation (verified for its detection-side contracts only)**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `network` marker + `addopts = "-m 'not network'"` hermetic default | Verified | `pyproject.toml` (10 network tests deselected structurally; Phase-1 log re-verified addopts present) |
+| Below-target categories root-caused individually (Rule 19) | Verified (prior-art confirmation) | Phase-13 log carries per-site causes (unsplash 401, shutterstock/dreamstime 403, ebay/etsy WARP DNS, walmart WAF timeout, discord 10MB guard, rfc-editor detected block, tagesschau wedged-transition kill); deferred to Audit 5A/5C per AUDIT-1-2 — out of scope here |
+
+**Phase 14 — End-to-End Detection Validation (meta-verification of refit generator — directive 4b — + the corpus re-pin)**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `refit_fusion_model.py` produces the deployed model with box constraints ≥ 0, deterministic, fail-loud gates | Verified (generator sound) | `build()` :365-408: negative-coefficient escape check :385, monotonicity sweep :328-339 + gate :387-389, quality gates :402-408 (val AUC ≥ 0.80, brier ≤ 0.25, ece ≤ 0.20, train accuracy band 0.70-0.98), degenerate-sanity check :395-400, atomic write with `newline="\n"` :468-473; dataset binding by line-ending-insensitive sha256 (:424-427) — artifact re-verified: lambda 0.01, val AUC 0.9047, val ECE 0.1638, 646 = 454/96/96 |
+| Split discipline train/val/test; test untouched | Verified (generator sound) | `load_dataset` :150-195 validates splits non-empty/single-class-free; `assign_splits` (build_fusion_dataset.py:1363-1402) budgeted stratified 15%/15% per label; sanity rows forced train (:1371-1373) |
+| 152-row corpus re-pinned through deployed fusion in e2e | Verified | `test_detection_e2e.py::test_fusion_training_dataset_attack_vectors_still_score_appropriately` (:559, fast JSON path; deep rebuild/drift pin stays in test_detection_regression.py) |
+| Deviations honestly logged (Rule 12) — incl. benign-churn "clean" unachievable by design | Verified | Phase-14 log deviations 1-4: file name, the l1-byte-flip "changed-not-clean" deviation (measured ≈0.30, THE AUDIT-1-1 root), full silence vs nonce-value evidence, corpus shape — all re-confirmed against current code this session |
+| Backward compat with Phase-1-era baselines | Verified | `test_phase1_era_baseline_still_scans` (:604); `capture_meta` migration gate `capture_method_version` with CAPTURE_METHOD_VERSION fallback (scan_tasks.py:139-156) |
+
+#### Directive 2 — Re-verify both Phase-14 leads in current code + operator-facing impact
+
+**Lead 1 — `ScanFinding` rows do not carry the degraded flag**
+
+| Verdict | Evidence |
+|---|---|
+| **Confirmed in current code** — `ScanFinding` (`app/models.py:519-548`) has fields `layer`, `layer_key`, `score`, `skipped`, `evidence`, `created_at`; NO `degraded` column. Only the parent `Scan.layer_scores` JSON summary (:470-474) carries per-layer `degraded`. The e2e backward-compat pins (:604) store findings without it | `models.py:527-540` exact field list; `scan_tasks.py` finding-Writer writes only score/skipped/evidence |
+| **Operator-facing impact: Medium.** The `scan_findings` rows are what UI drill-down and API consumers read per layer; a degraded layer (lost screenshot, dead probe) appears there as `score=None, skipped=True, evidence.reason=…` — degradation is discoverable only by reading the evidence dict's free-text reason, not by a structured flag. Aggregators that key on the scan's `layer_scores` see it; any consumer reading only findings rows cannot distinguish "dark channel" from "gated skip". No PII/alert path is affected; it is a signal-shape gap, not a correctness break | audit reasoning over the two tables |
+
+**Lead 2 — stored `baseline.capture_meta["headers"]` is unused by detection**
+
+| Verdict | Evidence |
+|---|---|
+| **Confirmed in current code** — `capture_meta["headers"]` is stored by the baseline capture (`scan_tasks.py:142`), but `_baseline_page_data` builds layer-6 input from `probe_headers`/probe_store only (`scan_tasks.py:197`), never reading `capture_meta["headers"]`. Detection compares `probe_headers` against the scan's fresh probe | `scan_tasks.py:139-156` (capture_meta write) vs :197 (baseline PageData headers=probe-store); `metadata.py` consumes `PageData.headers` only |
+| **Operator-facing impact: Low.** `capture_meta` is the fetcher's CURATED subset selected for debugging (`fetcher.py:677` comment: "Debugging metadata only — nothing in …"); layer 6 deliberately diffs the prober's independent full header map, not reuses the fetcher's. Storing one redundant header map costs one JSONB column. No detection or verdict behavior depends on it | `fetcher.py:677`; `metadata.py:303-306` uses probe headers |
+
+#### Directive 3 — Do `MATERIAL_CHANGE_RISK` / `NOISE_FLOOR` have tests proving generalization beyond their derivation fixtures? **(overfitting risk)**
+
+**Verdict: NO — both constants are verified only against the exact generating family that calibrated them. Overfitting risk is real and structural, not hypothetical.**
+
+Evidence chain (each link verified this session):
+
+1. `NOISE_FLOOR = 0.02` and the `changed` gate are pinned by `test_noise_floor.py` (8 tests) — every one builds a `Site`/`Baseline` row and monkeypatches `run_detection` to return hand-picked layer-score dicts (verified: the 8 tests at :164/:189/:205/:217/:230/:242/:254/:276 do not import or instantiate any real page/capture). The constant is therefore proven ONLY against the fixture author's chosen dict shapes — same fixture family, no independent generator.
+2. `MATERIAL_CHANGE_RISK = 0.40`'s only standing guard is `test_benign_dynamic_rows_stay_below_the_material_change_band` (`test_detection_regression.py:232`), which asserts < 0.40 on the committed 152 rows — and those rows are the SAME `build_fusion_dataset.py` scenarios that produced the 646-row corpus whose measurements set 0.40 in the first place (Phase-11 documented derivation: "measured 0.137-0.153 … editorial ≤0.298 … A/B hero max 0.4393"). The guard circularly re-checks the calibration data.
+3. The one independent-ish real-world probe, Phase 14's hermetic churn pair (`test_detection_e2e.py:333,528`), pins only "≤ MATERIAL_CHANGE_RISK", never a generalization bound on unmodeled shapes; and its own "benign clean" assertion was re-specified as "changed" (deviation 2) because the raw byte-hash defeats it — a symptom, not a guard.
+4. No test anywhere draws an input from outside the `build_fusion_dataset.py` procedural family (no captured real-site pair, no ad-hoc adversarial HTML) and asserts a constant bound. The Phase-13 live network gate (the only real-world inputs) touched no detection constant.
+
+What that means: a hypothetical benign churn shape outside the 20-25 mutator axes — e.g. a stock ticker re-rendering its canvas, a reCAPTCHA iframe rotating its src, a lazy-loaded infinite-scroll div — could fuse ≥ 0.40 and permanently tighten cadence, or land between the floor and material bar and read "changed" forever, and NO standing test would fail. The benign invariants are both in-distribution by construction.
+
+#### Findings (each per §6.4 rubric; diagnosis only, no production edit — Rule 1)
+
+**AUDIT-2-1 — Stand-in corpora do not exercise the ten-technique taxonomy: 4 of 10 attack shapes have no standing corpus row**
+- **Severity**: Medium (per §6.4 — detection is not wrong on the covered vectors, but the Contract says the corpus shall be the standing re-measure; absent rows mean a regression in those channels fails silently)
+- **Subsystem / file(s)**: `tools/build_fusion_dataset.py` (mutators), `tools/build_regression_corpus.py` (axis selection constants), `worker/detection/training/regression_corpus.json`
+- **Reproduction**: enumerate the corpus `by_axis` (artifact meta) vs the 10-technique taxonomy; `nonnative_full_rewrite`, `nonnative_partial_inject`, `seo_spam_early`, `laundering_padded` (visual-overlay slice), and every staged/redirect shape have no 8-row axis
+- **Root cause**: Phase-12 axis selection deliberately trimmed "channel-adjacent duplicates" and made the corpus a strict subset of the fusion dataset's axes; the four attack-side missing shapes are those trims. The overfit stems from validating only in-distribution generator axes
+- **Proposed remedy category**: corpus-axis expansion (add non-Latin attack, visual-overlay, single-word, redirect, staged axes + forward their `build_time` validation as standing per-axis pins)
+- **Source**: this phase's taxonomy audit (directive 1)
+
+**AUDIT-2-2 — Credential-phishing overlay and subtle single-word tampering are genuinely absent from the corpus**
+- **Severity**: High per §6.4 — a documented, plausible, real attack family with NO corpus row and NO end-to-end pin; the one adjacent pin (`form_action_swap`) covers the form-target slice, not a phishing overlay
+- **Subsystem / file(s)**: corpus artifact + `test_detection_e2e.py` (+ any future remediation)
+- **Reproduction**: search the corpus for an axis containing the shape; none exists; single-word edits fuse only via l1 (≈0.14-0.30, changed-not-flagged) with no standing assertion
+- **Root cause**: same Phase-12 subset trimming + no attack family modeled as a visual-only/positioned overlay or single-token content mutation
+- **Proposed remedy category**: corpus-axis + e2e fixture addition (phishing overlay, single-word mutation), with a generalization bound on benign single-word edits
+- **Source**: taxonomy audit (directive 1)
+
+**AUDIT-2-3 — Redirect-based cloaking and staged/time-delayed payloads are genuinely absent (no mechanism)**
+- **Severity**: Medium (cloaking: layer 7 reads raw non-JS text; a client-side redirect cloak is 0.0 — real blind spot. Staged payloads: server-side ones are caught once materialized, so Medium)
+- **Subsystem / file(s)**: `worker/detection/cloaking.py`, `worker/probe.py`, `worker/detection/dom.py` (+ corpus)
+- **Reproduction**: repo search finds zero `http-equiv`/meta-refresh handling; `probe.py:202` follows HTTP 3xx only; layer 3's ref audit (`dom.py:641-676`) omits meta-refresh targets; a `<meta http-equiv="refresh" content="0;url=evil">` injected to selected UAs reads 0.0 on layer 7
+- **Root cause**: no mechanism to detect client-side/redirect-based delivery; the taxonomy's design assumes server-side content divergence
+- **Proposed remedy category**: detection-capability addition (meta-refresh parsing + redirect-loop detection in layer 3/7, or document as accepted-risk)
+- **Source**: taxonomy audit (directive 1)
+
+**AUDIT-2-4 — NOISE_FLOOR / MATERIAL_CHANGE_RISK have no generalization test (overfitting risk)**
+- **Severity**: High per §6.4 — a not-necessarily-wrong but unproven generalization bound; a benign out-of-family churn shape that fuses ≥ 0.40 would tighten cadence with no standing test failing
+- **Subsystem / file(s)**: `test_noise_floor.py` (definition fixtures), `test_detection_regression.py:232` (in-distribution only), `test_detection_e2e.py:333,528` (single pair)
+- **Reproduction**: read the three guards; none draws inputs outside `build_fusion_dataset.py`'s procedural axes
+- **Root cause**: constants calibrated on the generator family and verified only against the same family's outputs (circular guard)
+- **Proposed remedy category**: add generalization tests — ad-hoc adversarial benign HTML pairs (canvas/iframe/ticker) + at least one captured real-site pair asserting the constants hold out-of-distribution
+- **Source**: directive 3
+
+**AUDIT-2-5 — `ScanFinding` rows lack the degraded flag (Phase-14 lead 1, re-verified)**
+- **Severity**: Medium — confirmed in code; operator-facing signal-shape gap (findings-only consumers can't distinguish dark channels from gated skips)
+- **Subsystem / file(s)**: `app/models.py:519-548`
+- **Proposed remedy category**: schema addition (findings.degraded) + migration + writer + consumers — future remediation only (Rule 1)
+
+**AUDIT-2-6 — stored `capture_meta["headers"]` unused by detection (Phase-14 lead 2, re-verified)**
+- **Severity**: Low — confirmed in code; debugging-only curated subset, no detection/verdict impact
+- **Subsystem / file(s)**: `worker/scan_tasks.py:142` vs `_baseline_page_data:197`
+- **Proposed remedy category**: either document as intended (preferred) or drop the redundant write — decision for the remediation phase
+- **Source**: directive 2
+
+#### Log-vs-reality discrepancies (Rule 12 — PROMPT-002 claims this phase could not reproduce)
+
+None material. The Phase-14 log's deviation-2 measurement (benign churn pair fuses ≈0.30, verdict "changed" per the byte-hash design) was re-derived independently this session from the deployed model coefficients (`combine: sigmoid(4.408 − 6.247·w_ratio)` gives ≈0.14-0.30) — matches the logged number. No PROMPT-002 numeric claim (1278 passed / 133 frontend / val AUC 0.9047 / corpus 152 rows / 646=454/96/96) was contradicted by any file read or suite run this phase.
+
+#### New hermetic tests added this phase
+
+None committed (Rule 5/10) — this is a diagnosis phase; no production file was edited (Rule 1). Verification was performed by running the EXISTING committed suites in two batches (see below) plus read-only spot-checks of the artifacts.
+
+#### Full regression results
+
+- **Unit batch** (hermetic, no DB): `pytest tests/test_fusion_refit.py tests/test_detection_fusion_pipeline.py tests/test_dom_content_churn.py tests/test_detection_normalize.py tests/test_csp_nonce_normalization.py -q` → **110 passed in 33.69s**, 0 failed, 0 skipped.
+- **DB batch** (live `wardress-test-pg` on 127.0.0.1:5433): `pytest tests/test_noise_floor.py tests/test_detection_e2e.py tests/test_detection_regression.py -q` → **29 passed in 182.90s**, 0 failed, 0 skipped.
+- Both runs used the committed artifacts (`regression_corpus.json`/`fusion_model.json`); `test_detection_regression` exercised the in-suite rebuild drift check in-process.
+- The 8 named test files: 10+11+8+22+9+51+31+10 = all present and counted in the batches above.
+
+#### Opportunities / Innovation ideas observed (Rule 17 — not severity-scored)
+
+- **Idea O-4 — "Corpus completeness" standing report**: extend `test_detection_regression.py` with a meta-test that maps the ten-technique taxonomy to corpus axes and FAILS when a Represented-axis lacks ≥8 rows (making AUDIT-2-1 a standing red signal instead of a one-time finding).
+  - **Why**: the taxonomy gaps are exactly as dangerous when they silently reappear as when they were first shipped; a report gate keeps the corpus honest.
+  - **Where**: `tools/build_regression_corpus.py` axis constants + `test_detection_regression.py`.
+  - **Rough shape**: metadata table `TAXONOMY_AXIS_MAP`; a test asserts every taxonomy-tech has a mapped axis (or an explicit `accepted_gap` entry).
+
+- **Idea O-5 — Real-site churn capture into the corpus**: seed the benign invariants with 1-2 actual high-churn site pairs (e.g. a news homepage captured twice, Phase-13 style) pushed through `run_detection`, asserted < 0.40.
+  - **Why**: closes AUDIT-2-4's out-of-distribution hole with zero new machinery; the capture already exists.
+  - **Where**: `test_detection_e2e.py` / a new small scratch fixture; `build_regression_corpus.py` mutator reuse.
+  - **Rough shape**: a `real_churn_pairs/` fixture dir + one test asserting the fused-risk bound.
+
+- **Idea O-6 — `ScanFinding.degraded` + a findings-only health read**: fold AUDIT-2-5's flag into the same migration that adds findings rows (schema addition), then have the health aggregate read findings-only degradation.
+  - **Why**: makes dark channels first-class for consumers without touching PDF/alert paths.
+  - **Where**: `app/models.py`, `app/routers/health.py`, frontend site-detail.
+
+#### Findings out of phase scope (logged for the correct future phase, not investigated here)
+
+- AUDIT-2-1/2/3's **taxonomy axis-expansion** and AUDIT-2-4's **generalization tests** → Audit Phase 3 (fresh-eyes detection audit) is where the detailed gap-closure design belongs; implementation only in a future remediation prompt.
+- AUDIT-2-5 (findings degraded flag) → schema change; implementation only in remediation.
+- AUDIT-2-6 (capture_meta headers) → decision (document-as-intended vs drop write) in remediation.
+- AUDIT-1-2 (Phase-13 per-site root causes) remains with Audit Phases 5A/5C (stress catalog tiers A/B re-run those exact categories).
+
+#### Commit
+
+_placeholder_
+
+<!-- AUDIT2-CONT -->
 
