@@ -804,7 +804,8 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
 
 ## Commit
 
-(pending — test/log files only, not pushed)
+2928507 — test(audit-4): detection fresh-eyes audit — finding repros + Phase 4 log entry (recorded post-commit; not pushed)
+
 
 
 
