@@ -657,7 +657,7 @@ No test files or code were added or modified this phase (log-file-only change), 
 
 - **Findings out of phase scope**: the detection half of AUDIT-3-5 (how layers weight capture-completeness flags) → Phase 4; the detection half of AUDIT-2B-1 (stylesheet bytes) → Phase 4; the API artifacts-surface implications of AUDIT-3-4 → Phase 4C; orchestration/scheduling depth (stale-supersede arbitration and beat claim mechanics were read and verified sound, not re-audited) → Phase 4B.
 
-- **Commit**: (filled after commit)
+- **Commit**: 5b0a884 — docs(audit-3): capture fresh-eyes audit — wrong-page banner clicks, stale frame snapshot, rebinding-window widening, artifact janitor gaps
 - **Next phase kickoff prompt**: (delivered in chat only — never written to this log)
 
 
