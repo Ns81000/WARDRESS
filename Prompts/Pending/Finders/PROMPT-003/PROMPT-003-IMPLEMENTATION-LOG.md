@@ -961,7 +961,7 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
     - API-surface behaviors touched en passant (scan-now/rebaseline 409/202 shapes, health page semantics, mute) → Audit Phase 4C.
     - Ops agent + Telegram surfaces consume the shared `services.py` claim paths; those surfaces themselves remain excluded per §0.
 
-- **Commit**: (filled post-commit — test file + log entry only, not pushed)
+- **Commit**: ef5eb8c — test(audit-4b): orchestration & scheduling fresh-eyes audit — finding repros + Phase 4B log entry (recorded post-commit; not pushed)
 
 
     - TOTAL: 74 tests across the six subsystem-adjacent suites, 0 failures. (The full ~725-test suite was not repeated this phase — the session's command runner caps at 30 s per invocation; the six suites above cover every file the phase touched plus direct callers/callees. No production file was modified — zero production-edit risk by construction.)
