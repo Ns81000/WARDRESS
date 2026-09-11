@@ -806,8 +806,162 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
 
 2928507 — test(audit-4): detection fresh-eyes audit — finding repros + Phase 4 log entry (recorded post-commit; not pushed)
 
+---
+
+### [DONE] PROMPT-003 Audit Phase 4B — Orchestration & Scheduling Fresh-Eyes Audit (Celery app config, beat dispatcher, task enqueue/claim/dedup, retry-ack idempotency, adaptive cadence coupling)
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-11
+- **Assigned subsystem** (per kickoff; the main file's §4 map labels 4B "API surface" — per §3.6 the kickoff + Phase 2B inventory govern, and 4C will take the API surface): `backend/worker/celery_app.py`, `worker/scan_tasks.py`, `worker/beat_tasks.py`, `worker/db.py`, `worker/alert_tasks.py`, `worker/remediation_tasks.py`, `app/scanning.py`, `app/tasks.py`, the claim/supersede paths of `app/services.py`, the enqueue sites in `app/routers/*`, the in-flight arbiters in `app/models.py` + migrations `g1h2i3j4k5l6`/`k5l6m7n8p9q1`, `docker-compose.yml` (app/worker/beat/redis) and `Dockerfile.worker`. Detection layers NOT re-audited (Phase 4); build on AUDIT-4-* as upstream inputs only.
+
+- **Environment attestation (Rule 13, live-stack parity)**: the running Docker stack is NOT built from a single commit — container files hash-match HEAD for `celery_app.py`, `beat_tasks.py`, `models.py`, `services.py`, `tasks.py`, `alert_tasks.py`, `remediation_tasks.py`, but the deployed `scan_tasks.py` predates PROMPT-002 Phase 11 (NO `NOISE_FLOOR`; verdict `changed` fires on ANY nonzero score) and the deployed `scanning.py` differs comment-only (MATERIAL_CHANGE_RISK=0.40 identical, code identical). Consequence: live probes below attest HEAD orchestration mechanics exactly; verdict-path observations differ from HEAD only in `changed` semantics, which the cadence coupling does NOT consume (scheduling `changed` = `flagged or risk >= MATERIAL_CHANGE_RISK`, independent of the verdict noise floor). Recorded as AUDIT-4B-8 for the remediation prompt (rebuild before remediation-phase verification). The user-reported image commit `1eeea6b` is an ancestor of HEAD but is not what the containers actually contain (mixed build) — the hash diff above is the authoritative parity statement.
+
+- **Findings**:
+
+    - **ID**: AUDIT-4B-1
+    - **Title**: Alert/Remediation creation is unreachable on the redelivery path — a worker death in the post-commit handoff window silently and permanently loses the alert (and remediations) for a flagged scan
+    - **Severity**: High — justified: detection→notification is the system's core output; the loss is silent (no operator-visible trace, no retry, no recovery sweep covers it), and reaches beyond kill scenarios (a DB hiccup or SoftTimeLimitExceeded inside `_create_alert`'s commit propagates, the wrapper's `_mark_scan_failed` no-ops on the completed row, the task returns "error" and is ACKED — no redelivery). The window is small (sub-second typically) but non-zero on every flagged scan.
+    - **Subsystem / file(s)**: `worker/scan_tasks.py` `_run_scan` terminal flow (terminal `db.commit()` → `_create_alert` → `_create_remediations` → `_schedule_next`; `_create_alert` around :371-380; early idempotent return near :206-210). Sole creation sites proven by grep: `Alert(` only at `scan_tasks.py:380`, `RemediationExecution(` only at `app/remediation.py:144`. `worker/beat_tasks.py` `resweep_undelivered` (re-enqueues deliveries for EXISTING alerts with zero AlertDelivery rows and EXISTING queued executions — cannot create missing rows). Idempotency backstops `alerts.scan_id` UNIQUE and `uq_remediation_executions_hook_scan` (models.py:706 / migration f3c8d6a91b27) guard double-creation, not non-creation.
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4b_orchestration_repros.py::test_flagged_scan_redelivery_cannot_recover_missing_alert` — completed flagged scan (risk 0.9) with no alert row; `_run_scan` returns `"scan-already-completed"` without creating one; `_resweep_undelivered()` reports `alerts_reenqueued == 0` and still none exists. Contrast positive control `test_resweep_recovers_stranded_alert_enqueue` (alert exists → re-enqueued, send captured).
+    - **Root cause**: PROMPT-002 Phase 4's terminal-commit idempotency property (findings cleared-and-rewritten) was applied to the write-side but not the creation-side handoffs: alert/remediation rows are separate transactions AFTER the terminal commit, and no recovery primitive re-derives them from the persisted scan.
+    - **Proposed remedy category**: recovery-from-persisted-state — either fold Alert/RemediationExecution creation into the scan's terminal transaction, or extend `resweep_undelivered` to create missing Alert/RemediationExecution rows for completed flagged scans (fully derivable from the scan row + site/hook config, guarded by the existing unique indexes). Not implemented here (Rule 1).
+    - **Source**: kickoff hunt list "alert/remediation enqueue after commit vs crash windows"; Phase 4's cleared-and-rewritten observation generalized.
 
 
 
 
 
+
+
+    - **ID**: AUDIT-4B-2
+    - **Title**: Stale-inflight sweep treats legitimately-backlogged PENDING scans as lost enqueues; under sustained overload each tick replaces stale pending rows with fresh messages while the old messages stay queued — amplification, not load shedding
+    - **Severity**: Medium — justified: needs sustained overload (dispatch rate > drain rate; reachable when many sites tighten toward MIN cadence at once — which AUDIT-4B-3 makes more likely), but the mode is self-reinforcing: failed-scan history churn ("superseded" rows that were merely queued), unbounded no-op message growth (each supersede leaves the original broker message in place to be dequeued and no-op'd later), and no backpressure anywhere on the path.
+    - **Subsystem / file(s)**: `app/scanning.py` `is_stale` (:17-28; pending anchor = `created_at`), `worker/beat_tasks.py` supersede block ("Scan never completed — superseded by a scheduled scan"), `MAX_DISPATCH_PER_TICK = 50`/60 s (:46-49), `Dockerfile.worker` CMD (prefork; concurrency 12 verified live; per-scan hard limit 480 s → worst-case drain 12 scans/8 min vs enqueue up to 50/60 s).
+    - **Reproduction**: hermetic, committed-passing: `test_backlogged_pending_scan_superseded_by_dispatch_tick` — pending row aged 15 min is failed+superseded and a fresh scan enqueued; the old row's own redelivery no-ops (`"scan-already-failed"`). A live overload soak was deliberately NOT run (would saturate the shared stack for tens of minutes); the supersede path itself was verified live (AUDIT-4B-5 scenario).
+    - **Root cause**: DB state cannot distinguish "message lost" from "message queued behind a slow worker"; the sweep optimizes for the former and pays the latter. No queue-depth signal gates dispatch (the health router's `_queue_depth` exists but scheduling never reads it).
+    - **Proposed remedy category**: capacity-aware dispatch gating — bound enqueues per tick by observed queue depth / worker capacity (e.g., skip dispatch when broker queue depth exceeds workers × in-flight budget), and/or anchor pending-staleness to due-time rather than a fixed 10 min. Not implemented here.
+    - **Source**: resource/convoy hunt item; "pending rows whose task message was lost" timer/lifecycle item.
+
+
+
+
+    - **ID**: AUDIT-4B-3
+    - **Title**: Adaptive cadence consumes raw fused risk without the capture-degradation signal — AUDIT-4-2 transients pin a site at base/4 cadence while they recur, and every extra scan feeds AUDIT-4B-2's amplification
+    - **Severity**: Medium — justified: chronic over-scanning of noisy/flaky sites (interval pinned at base/4..base/3 for any transient period shorter than the relax ladder; base 24 h → 6 h indefinitely under alternating transients), plus "changed"-verdict history noise (worse on the deployed pre-Phase-11 build — see AUDIT-4B-8). No false-alert impact: the alert path is `flagged`-gated and untouched by cadence.
+    - **Subsystem / file(s)**: `worker/scan_tasks.py` `_schedule_next` (`changed = flagged or risk >= MATERIAL_CHANGE_RISK`, never consults `layer_scores[*].degraded`), `app/scanning.py` `next_interval_after_scan` (:65-74; tighten = `base // TIGHTEN_DIVISOR` regardless of current; relax = ×1.5 capped at base; boundary behavior otherwise verified clean: MIN/MAX clamps, shrink-base cap, round-half-even monotonicity harmless).
+    - **Reproduction**: hermetic, committed-passing: `test_repeated_material_risk_transients_hold_cadence_at_base_quarter` — alternating changed/clean from base 1440 yields 360,540,360,540,… (never returns to base); clean-only ladder = [360, 540, 810, 1215] → 1440 (four clean scans to recover). Risk-band numbers from AUDIT-4-2 (probe-side transients fuse ≥ 0.40), NOT re-derived per scope.
+    - **Root cause**: the scheduling input is a single fused scalar; the per-layer `degraded` flag (Phase 24; Audit Phase 4 Lead 1) sits in `layer_scores` one dict lookup away but the one consumer that converts a transient into repeated work ignores it.
+    - **Proposed remedy category**: signal-gating — skip the tighten (or require N consecutive material scans) when the triggering scan's `layer_scores` contain a degraded channel; alternative: tighten on a last-K-scans material-rate instead of a single scan. Not implemented here.
+
+    - **ID**: AUDIT-4B-4
+    - **Title**: Re-baseline does not arbitrate in-flight scans — a rebaseline is accepted while a scan is running, and the scan completes against the anchor it captured at start (demoted mid-flight)
+    - **Severity**: Low — justified: the scan row records its `baseline_id`, so the anchor is always traceable and the verdict is internally honest; impact is bounded to confusing history (a scan whose verdict references a no-longer-current trust anchor, no marker tying it to the replacement). No correctness break: `_run_scan` reads its bound baseline at task start and the promote is atomic (single transaction, `uq_baselines_one_inflight_per_site` backstops concurrent captures).
+    - **Subsystem / file(s)**: `app/services.py` `rebaseline_site` (409s on in-flight BASELINES only — `is_stale` on `created_at` — no scan-side arbitration), `worker/scan_tasks.py` `_capture_baseline` (demote-previous/promote-this single transaction).
+    - **Reproduction**: live — with scan `276eedc7` running on the example site, `POST /api/sites/{id}/rebaseline` → **HTTP 202**; capture `b7de1bf4` promoted at 00:30:17.720, 30 ms after the scan completed against the old anchor `ff54c418`; had the capture finished earlier the scan would have completed against a demoted baseline.
+    - **Root cause**: the in-flight arbitration contract was written per-resource (baseline-vs-baseline, scan-vs-scan, both with unique-index arbiters) with no cross-resource rule for "trust anchor being replaced while a scan that reads it is in flight".
+    - **Proposed remedy category**: contract choice — either document the anchor-at-enqueue semantics explicitly (cheap; `scans.baseline_id` already preserves it), or 409/supersede in-flight scans when a rebaseline starts (expensive; kills useful concurrent work). Not implemented here.
+    - **Source**: kickoff hunt list "claim/supersede arbitration (a re-baseline superseding an in-flight scan)".
+
+    - **Source**: kickoff's explicit "what repeated AUDIT-4-2 transients do to a site's cadence over days" question.
+
+
+    - **ID**: AUDIT-4B-5
+    - **Title**: Stale-row recovery latency is bounded by the site's `next_scan_at`, not by the 10-minute staleness window — a killed scan leaves a "running" row that can sit for a full interval before anything recovers it, and the recovery only fires on a due tick
+    - **Severity**: Low — justified: no work is lost (the site is scanned at its next due tick anyway; "delay by one interval" is the documented contract and holds), but the interim state lies to operators: the scan history shows a scan "running" for e.g. 59 minutes, then failed with "superseded". Recovery-by-usr-action exists (trigger/rebaseline check `is_stale` opportunistically), so only unattended waits are affected.
+    - **Subsystem / file(s)**: `worker/beat_tasks.py` (stale check only inside the per-site due path), `app/scanning.py` `STALE_INFLIGHT` vs `celery_app.py` hard limit 480 s (margin verified sound: 480 < 600).
+    - **Reproduction**: live end-to-end — scan `6f8422c2` SIGKILLed at 00:31:28 mid-run (`docker kill wardress-worker-1` while status running, Redis `unacked`=1); message purged from `unacked`/`unacked_index` (simulating total loss); tick 00:35:57 logged `skipped_inflight: 1` (fresh) and advanced the schedule; after `next_scan_at` was manually made due, tick 00:42:57 logged `recovered_stale: 1`, row failed "Scan never completed — superseded by a scheduled scan", replacement scan `8a07e4d4` enqueued and completed. Without the manual due-nudge the row would have been recovered at the site's natural next due tick (~01:30).
+    - **Root cause**: by design — staleness is evaluated only when the site is already due. The gap is the misleading interim row presentation, not the mechanics.
+    - **Proposed remedy category**: presentation/state-taxonomy — distinguish "superseded (bookkeeping)" from detection-failure rows in the history surface, or add an independent low-frequency stale-row sweep that also covers non-due sites (and baselines, which today have NO beat-side stale sweep at all — a stuck pending/capturing baseline recovers only via operator action).
+    - **Source**: timer/lifecycle hunt item "stale-inflight sweep vs the 480s hard time limit".
+
+
+    - **ID**: AUDIT-4B-6
+    - **Title**: The beat heartbeat measures worker tick EXECUTION, not beat liveness — under worker saturation the health page reports scheduling as stalled even while the beat container publishes fine (and conversely, tick `expires=120` silently drops ticks from a backlogged queue, which also starves the heartbeat)
+    - **Severity**: Low — justified: the signal is arguably honest (scans genuinely aren't draining) and the code comment (`beat_tasks.py` ~:76-80, "the tick runs on a worker") acknowledges the coupling; but the operator-facing semantics ("Beat" indicator) do not match the mechanism, and the `expires=120` drop is invisible (no counter, no log).
+    - **Subsystem / file(s)**: `worker/beat_tasks.py` heartbeat write (best-effort, per-tick), `app/routers/health.py` `_BEAT_STALE = 5 min` heuristic, `setup_periodic_tasks` `expires` values.
+    - **Reproduction**: code-trace + live configuration observation (worker prefork concurrency 12 confirmed via `celery inspect stats`; heartbeat key written by the tick task execution, not by the beat process). The saturation scenario was not soaked live (would require saturating the shared stack).
+    - **Root cause**: one signal (tick execution) is asked to answer two questions (is beat alive? is the worker draining?) because the tick task is the only periodic thing the system has.
+    - **Proposed remedy category**: signal separation — have the beat process write its own lightweight liveness key directly (it already runs inside the app image and can reach Redis), and report tick-execution lag as a separate degraded-scheduling signal; optionally count expired ticks. Not implemented here.
+    - **Source**: kickoff hunt list "the beat/dispatch module(s)"; resource/convoy item.
+
+
+    - **ID**: AUDIT-4B-7
+    - **Title**: Worker memory ceiling scales with concurrency × per-child model footprint and children are never recycled — 12 prefork children each lazily load torch+MiniLM+Playwright and retain them, with no `--max-tasks-per-child`; full warm concurrency extrapolates past the observed 7.4 GiB host ceiling
+    - **Severity**: Low — justified: an OOM-killed child is RECOVERED by design (WorkerLostError → row stuck running → stale sweep at 10 min; recovery path verified sound), so the blast radius is lost work + failed-scan noise, not a hang; but on small hosts (the observed one has 7.4 GiB) 12 warm children can plausibly OOM-spiral, and every OOM feeds the AUDIT-4B-5 misleading-row presentation.
+    - **Subsystem / file(s)**: `Dockerfile.worker` CMD (default prefork concurrency = host CPU count; `max-tasks-per-child: N/A` verified live via `celery inspect stats`), per-child MiniLM load in `worker/detection`; live docker stats: idle 1.34 GiB → 1.84 GiB with 2 concurrent scans (retained after).
+    - **Reproduction**: live partial (2-scan concurrency probe with docker stats sampling); the 12-child warm state was NOT soaked (would risk OOM on the shared host) — the extrapolation is labeled as such, per Rule 12 honesty.
+    - **Root cause**: default concurrency (CPU count) is uncoupled from memory budget; per-process model retention is a deliberate latency win with an uncosted memory multiplier.
+    - **Proposed remedy category**: capacity configuration — pin `-c` (and/or `--max-tasks-per-child`) in the worker CMD to a documented memory budget, or document host-RAM-per-concurrent-scan in the install docs. Not implemented here.
+    - **Source**: resource/convoy hunt item "MiniLM/SSIM CPU contention between concurrent scans".
+
+
+    - **ID**: AUDIT-4B-8
+    - **Title**: Deployment drift: the running stack predates PROMPT-002 Phases 8-11 in two files (deployed `scan_tasks.py` has NO `NOISE_FLOOR` — verdict `changed` fires on ANY nonzero layer score; deployed `scanning.py` differs comment-only); also the beat schedule file lives in the container FS, not on a volume
+    - **Severity**: Low (for this phase's scope) — the orchestration mechanics audited here are identical between container and HEAD, so every other finding attests the deployed system too; the drift is a detection-semantics mismatch (AUDIT-4's territory, recorded here because it was discovered via Rule 13 parity hashing and because it amplifies AUDIT-4B-3's history-noise impact). The beat schedule file (`/app/celerybeat-schedule.db`, PersistentScheduler, verified live) is lost on container recreate — benign by construction (CAS claims + idempotent janitors make every periodic task safe to fire-on-restart) but undocumented.
+    - **Subsystem / file(s)**: deployed `worker/scan_tasks.py` vs HEAD (git hash-object comparison: `d5d74f1d…` vs `a6878b37…`; the diff is exactly the Phase-11 NOISE_FLOOR block), deployed vs HEAD `scanning.py` (comment-only), `docker-compose.yml` beat service (no volume for the schedule file).
+    - **Reproduction**: `docker cp` + `git hash-object` parity check across 9 orchestration files (7 match HEAD exactly); `git diff --no-index` of the 2 mismatching files shows precisely the Phase-11 delta and a comment block.
+    - **Root cause**: the image was built from a mixed working-tree state (neither 1eeea6b nor HEAD); no build pins the commit. The schedule file location is a default, never a decision.
+    - **Proposed remedy category**: deployment hygiene — rebuild the stack from HEAD before any remediation-phase verification (hard requirement: remediation proofs must run against the code they claim to fix), and consider baking a build-commit marker; optionally volume-mount or relocate the beat schedule file and document its restart semantics. Not implemented here.
+
+- **Verified-clean ledger (fresh-eyes, evidence per item)**:
+    - Beat CAS claim: live — the tick's conditional `UPDATE ... WHERE next_scan_at == seen` advanced the schedule atomically on every observed dispatch (`due/enqueued/lost_claim` counters consistent across ~25 ticks); two-tick overlap pinned by `test_phase37` `test_overlapping_ticks_both_complete_single_scan_per_site`.
+    - Advance-before-enqueue: live — `next_scan_at` moved to `now+interval` at claim time, before the task existed.
+    - Duplicate suppress: live — scan-now during a running scan → HTTP 409 "A scan of audit4b-example is already in progress"; `ix_scans_one_inflight_per_site` / `uq_baselines_one_inflight_per_site` declared in models AND migrations (no metadata↔schema drift for the two in-flight arbiters).
+    - Fresh in-flight skip: live — tick logged `skipped_inflight: 1` for a 4.5-min-old running row.
+    - Stale recovery: live — `recovered_stale: 1` at 00:42:57 for the 11.5-min-old killed row; supersede + replacement scan atomically written (single transaction, supersede and INSERT commit together).
+    - Kill-while-pending: live — worker SIGKILLed with the message undelivered (`unacked`=0): after restart the scan ran normally pending→running→completed (pending loss is harmless; only the unacked mid-flight case matters).
+    - acks_late redelivery idempotency: hermetic — `_run_scan`/`_capture_baseline` early-return `"scan-already-{status}"`/`"baseline-already-{status}"` before any side effect; also proven live indirectly (the superseded row's own message, if redelivered, no-ops). Concurrent double-execution of one scan row is unreachable: visibility timeout (kombu default 3600 s, `broker_transport_options={}` verified live) ≫ 480 s hard limit, and `task_reject_on_worker_lost` default False acks WorkerLostError'd messages (row recovered by the DB sweep instead — consistent).
+    - `deliver_alert` idempotency: live — existing-delivery guard → `"already-delivered"`; resweep positive control live (`alerts_reenqueued: 1` → `deliver_alert` → `'no-channels'`, no crash).
+    - `fire_remediation` claim: code-trace — conditional UPDATE with rowcount arbiter + `executed_at` stamp + reclaim predicate (status queued AND stamp stale) + `uq_remediation_executions_hook_scan`; per-attempt terminal-state guarantee (a crash marks failed, never stuck queued).
+    - `_schedule_next` boundaries: hermetic (existing scheduler tests + new transient test); swallow-all wrapper verified (scheduling can never fail a scan).
+    - Re-baseline hint gate: live + code-trace — `_rebaseline_hint` reads `capture_meta["capture_method_version"]` (exact key written by the capture, evidence-preferred with `CAPTURE_METHOD_VERSION` fallback); fresh-site response showed `baseline_capture_method_version: null`, `needs_rebaseline: false` (absence = unknown, not old — as documented).
+    - Site/baseline deletion mid-flight: code-trace — scan early-returns `"missing-prereqs"`/`"scan-row-missing"`; artifacts orphaned → daily janitor (UUID-gated, tests green).
+    - Enqueue degradation: `app/tasks.py` broker-only client (backend=None), OperationalError/RuntimeError → 503 → routers mark committed rows failed — pinned by `test_tasks_enqueue.py` (5 passed).
+
+    - **Source**: Rule 13 environment attestation; the user's report that the image "is from commit 1eeea6b" (verified not exactly true — ancestor, not the build).
+
+
+- **Log-vs-reality discrepancies**:
+    - `celery_app.py` docstring ("acknowledge late so a crashed worker never silently drops a scan") vs reality: the broker does NOT promptly redeliver a kill-orphaned message — live-verified that kombu performs no unacked restore at worker startup and the message sat in Redis `unacked` for the full visibility timeout (default 3600 s; `broker_transport_options={}` confirmed). What actually recovers a killed scan is the DB stale-inflight sweep on the next due tick. The claim's spirit (nothing is silently lost) holds; its mechanism description (redelivery) does not. Worth a docstring correction in the remediation pass.
+    - `beat_tasks.py` module docstring ("even a lost enqueue can only delay a site by one interval, never duplicate it") — verified TRUE live and by trace, including the harder corollary (the lost message ALSO delays the stuck row's recovery until the next due tick — AUDIT-4B-5).
+    - PROMPT-003 main file §4 labels Audit Phase 4B "Data Model, Schema & Migrations" and 4D "task orchestration" — the actual execution order (per kickoffs + Phase 2B inventory) makes 4B orchestration/scheduling; noted so future readers don't hunt for a schema audit under this heading (schema coverage happened in Phase 2B + here for the two in-flight arbiters).
+
+
+- **New hermetic tests added this phase**: `backend/tests/test_phase4b_orchestration_repros.py` — 5 tests, ALL committed-passing (each characterizes CURRENT behavior per Rule 1; none is a tautology — each asserts observable DB/task outcomes):
+    - `test_flagged_scan_redelivery_cannot_recover_missing_alert` — pins AUDIT-4B-1 (alert loss unrecoverable by redelivery AND resweep).
+    - `test_resweep_recovers_stranded_alert_enqueue` — positive control: resweep works when the alert row exists (send captured).
+    - `test_backlogged_pending_scan_superseded_by_dispatch_tick` — pins AUDIT-4B-2 (15-min pending row superseded; old message's redelivery no-ops).
+    - `test_inflight_skip_still_advances_next_scan_at` — pins the advance-then-check ordering (skip pushes schedule out one interval).
+    - `test_repeated_material_risk_transients_hold_cadence_at_base_quarter` — pins AUDIT-4B-3 (alternating transients never return to base; clean ladder [360,540,810,1215]→base).
+
+- **Opportunities / Innovation ideas observed** (Rule 17 — not severity-scored, not gap-driven):
+    - **Idea**: adaptive dispatch budget — reuse the health router's `_queue_depth` primitive to scale `MAX_DISPATCH_PER_TICK` (or gate dispatch entirely) by broker depth.
+    - **Why it would help**: converts the fixed 50/tick ceiling into a self-limiting system that keeps scan START latency bounded during bursts (bulk import, mass tightened cadence) and removes the AUDIT-4B-2 amplification precondition without new infrastructure.
+    - **Where it touches**: `worker/beat_tasks.py` (dispatch tick), `app/routers/health.py` `_queue_depth` (extract to a shared module).
+    - **Rough shape of the change**: read Redis LLEN at tick start; skip/shrink the due-batch when depth exceeds workers × K; emit the decision in the tick stats dict. Sketch only.
+    - **Idea**: supersede-as-taxonomy — render "superseded by a scheduled scan" rows as a distinct bookkeeping category (UI filter + count) instead of generic failed scans.
+    - **Why it would help**: operator trust: today a killed/backlogged scan and a genuine detection failure are indistinguishable in history; the error string already encodes the distinction.
+    - **Where it touches**: frontend scan history (`site-detail.tsx`), optionally `ScanDetailOut`.
+    - **Rough shape of the change**: match on the supersede error marker (or better, persist a dedicated `superseded` flag/reason enum at write time) and badge the row. Sketch only.
+
+
+
+- **Full regression results** (Rule 13: every count from an actual run this session; backend `.venv`, real-PostgreSQL harness `wardress-test-pg`):
+    - `python -m pytest tests/test_phase4b_orchestration_repros.py -q` → **5 passed** (4.3 s)
+    - `python -m pytest tests/test_phase4b_orchestration_repros.py tests/test_scheduler.py -q` → **25 passed** (21.5 s)
+    - `python -m pytest tests/test_scheduler.py -q` → **20 passed** (13.6 s; first combined run showed a transient ERROR from a prior interrupted run's shared-DB state — isolated re-run of that test passed, combined re-run 25 passed — documented, not hidden)
+    - `python -m pytest tests/test_scan_tasks.py -q` → **24 passed** (16.1 s)
+    - `python -m pytest tests/test_tasks_enqueue.py -q` → **5 passed** (19.0 s)
+    - `python -m pytest tests/test_phase37_scheduling_agent_remediation.py -q` → **12 passed** (14.7 s)
+    - `python -m pytest tests/test_phase18_concurrency_races.py -q` → **8 passed** (16.0 s)
+
+- **Findings out of phase scope** (logged for the correct future phase, not investigated here):
+    - Live-observed capture failures on rfc-editor.org and datatracker.ietf.org (screenshot timeout / capture failure chains) → belongs to Phase 3's remediation prompt (build on AUDIT-3-*) and stress Phases 5A/5C.
+    - Deployed pre-Phase-11 verdict semantics (NOISE_FLOOR absent) → detection-layer remediation territory (AUDIT-4 scope); recorded here only as the AUDIT-4B-8 rebuild requirement.
+    - API-surface behaviors touched en passant (scan-now/rebaseline 409/202 shapes, health page semantics, mute) → Audit Phase 4C.
+    - Ops agent + Telegram surfaces consume the shared `services.py` claim paths; those surfaces themselves remain excluded per §0.
+
+- **Commit**: (filled post-commit — test file + log entry only, not pushed)
+
+
+    - TOTAL: 74 tests across the six subsystem-adjacent suites, 0 failures. (The full ~725-test suite was not repeated this phase — the session's command runner caps at 30 s per invocation; the six suites above cover every file the phase touched plus direct callers/callees. No production file was modified — zero production-edit risk by construction.)
