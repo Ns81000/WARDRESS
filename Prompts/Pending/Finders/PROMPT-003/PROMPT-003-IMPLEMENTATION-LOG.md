@@ -965,3 +965,118 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
 
 
     - TOTAL: 74 tests across the six subsystem-adjacent suites, 0 failures. (The full ~725-test suite was not repeated this phase — the session's command runner caps at 30 s per invocation; the six suites above cover every file the phase touched plus direct callers/callees. No production file was modified — zero production-edit risk by construction.)
+
+### [DONE] PROMPT-003 Audit Phase 4C — API-Surface & Dependency-Chain Fresh-Eyes Audit
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-11
+- **Assigned subsystem**: §4 Audit Phase 4C — the entire HTTP surface: `app/routers/*` (13 routers: sites, auth, users, apikeys, audit, imports, remediation, artifacts, alerts, settings+channels+ai, reports, agent, health), `app/schemas.py`, the auth/dependency chain (`app/deps.py`, `app/security.py`, `app/apikeys.py`, `app/ratelimit.py`), the audit-write seam (`app/audit.py`), the surface side of `app/services.py` (ServiceError → HTTPException translation; claim mechanics belong to 4B), `app/tasks.py` (503 enqueue contract), `app/explain.py`, `app/reporting.py` + `routers/reports.py`, `app/site_icons.py`, `app/ssrf.py`, `app/db.py`, `app/config.py`, `app/crypto.py`, `Dockerfile.app`, `docker-compose.yml` healthcheck, and `app/main.py` middleware/exception-handler stack. Built on, not re-derived: AUDIT-4B-4/-5/-6 scheduling semantics and AUDIT-4's verdict-path constants (NOISE_FLOOR, flagged/changed, escalation band 0.40-0.75, MATERIAL_CHANGE_RISK=0.40 consumed at the surface but not re-audited).
+
+
+
+- **Method & parity note (§3 fresh-eyes protocol)**:
+  - All 31 audited API files (16 app modules + 13 routers + routers/`__init__.py`) verified **container-vs-HEAD MATCH** via `docker cp` + `git hash-object` (the 4B protocol; no API-surface drift — unlike 4B's 7/9 orchestration files). Every live assertion below is therefore HEAD-valid.
+  - Live battery against the running stack (`wardress-app-1`, healthy): script preserved at `Prompts/Pending/Finders/PROMPT-003/scratch/audit4c_live_probe.ps1`. Two throwaway users (analyst/viewer) created and removed; one real site created → baseline captured ready → scan-now → completed `clean` → explain probed → site deleted. Login-limiter burst used a nonexistent account only. Stack left clean (no leftover sites/users; probe audit rows remain, which is correct audit behavior).
+  - Every code-read hypothesis was tested before logging: one candidate finding ("UserCreate accepts non-email strings") was **falsified live** — POST /api/users with `definitely-not-an-email` → 422 "a valid email address is required" (the schema carries a validator beyond the Field constraint the truncated code read missed). Not logged as a finding (Rule 13).
+
+- **Live-verified surface behavior (all as coded, no surprises)**: 401 + `WWW-Authenticate: Bearer` with generic detail on missing/garbage/expired/`wk_`-prefixed-bogus credentials; 403 messages name the required role; API keys cannot manage credentials (key creation & logout via key → 403); foreign agent conversations 404 (no existence leak); NaN/Infinity bodies → 422 "Request body is not valid JSON" before pydantic; 2 MB body → 413 before parsing; non-UUID path params → standard 422 `uuid_parsing`; missing resource → 404 with user-safe detail; DELETE replay → 404; bulk import per-row outcomes live (`created` / `skipped duplicate` / `error: Could not resolve host 'a---4c.test'`); sitemap+`allow_private_networks` as analyst → 403 admin gate; scan-now without ready baseline → 409 naming the site; rebaseline during in-flight capture → 409; explain on a completed scan with no AI provider → 503 user-safe; login lockout + dedicated per-IP login limiter → 429 with `Retry-After` (8 of 35 burst requests); favicon OFF → 404 with zero outbound work; no rate-limit headers on 2xx (only 429 carries `Retry-After`) — noted, acceptable.
+
+- **Findings**:
+
+  - **ID**: AUDIT-4C-1
+  - **Title**: Single-site create with a dead broker answers 503 "try again shortly" after the site is already committed; the invited retry 409s with "A site with this URL already exists"
+  - **Severity**: Medium — operator-facing contract dishonesty exactly during the outage scenario the codebase otherwise handles carefully; not a security break, no data loss, self-heals via 409, but the response actively misleads the retry.
+  - **Subsystem / file(s)**: `backend/app/services.py` (`create_site` commits site+baseline, then `_enqueue_or_fail` re-commits the baseline as failed and raises `QueueUnavailableError`), `backend/app/routers/sites.py` (`_http_from_service` → 503). Contrast: `routers/imports.py` handles the identical outage per-row with "created — baseline capture could not be enqueued … use Rebaseline once it is back".
+  - **Reproduction**: hermetic, committed-passing — `backend/tests/test_phase4c_api_surface_repros.py::test_create_site_dead_broker_commits_site_then_503s` (dead-broker Celery client; asserts QueueUnavailableError with "try again", then the site row EXISTS, baseline failed, and an immediate retry raises ConflictError "already exists").
+  - **Root cause**: `create_site` commits before enqueue (correct for row-safety) but the failure surface speaks only "queue down, retry" — it cannot tell the client the site half-succeeded, and the message's imperative contradicts the committed state. Bulk import solved the same problem with a per-row degraded-success shape; single create never got the parity pass.
+  - **Proposed remedy category**: surface-contract fix — give create-site the bulk-import degradation shape (201 + degraded detail pointing at Rebaseline) or a 503 whose message states the site was created and should not be re-created.
+  - **Source**: fresh-eyes hunt list ("503 enqueue-degradation surfacing to every caller") + cross-surface parity read of imports.py vs sites.py.
+
+  - **ID**: AUDIT-4C-2
+  - **Title**: `/docs`, `/redoc`, `/openapi.json` served unauthenticated and outside the rate-limit middleware — full API schema (92.5 KB) public on a security-monitoring product
+  - **Severity**: Medium — unauthenticated disclosure of the entire attack surface: every route, parameter bound, error model, and design commentary (e.g. the `wk_` key prefix, role semantics, lockout behavior in descriptions). Not Critical: no secrets or data in the schema; single-host self-hosted deployment; cheap to close.
+  - **Subsystem / file(s)**: `backend/app/main.py` (FastAPI ctor never sets `docs_url`/`redoc_url`/`openapi_url` — grep confirms zero occurrences; rate-limit middleware meters only paths starting `/api/`).
+  - **Reproduction**: live — `GET /openapi.json` → 200 (92500 bytes), `GET /docs` → 200, `GET /redoc` → 200, no credentials, no rate budget consumed. Also pinned hermetically: `test_phase4c_api_surface_repros.py::test_openapi_docs_redoc_public_unauthenticated` (committed-passing, ASGI transport).
+  - **Root cause**: FastAPI defaults left enabled; the §9 hardening pass metered "the API surface" as `/api/*` and never revisited the doc surface that ships alongside it by default.
+  - **Proposed remedy category**: config/gating change — disable docs/redoc/openapi in production builds (ctor args, optionally env-gated for dev) or route them behind auth.
+  - **Source**: fresh-eyes hunt list (authn completeness per route); Rule 13 probe.
+
+
+
+  - **ID**: AUDIT-4C-3
+  - **Title**: Site mute exists as two implementations: REST `PATCH /api/sites/{id}` inline vs shared `services.mute_site` (bot/agent) — with divergent audit snapshots (REST omits the `via` field)
+  - **Severity**: Low — semantics are currently equivalent (same 7-day clamp via schema bound vs `MUTE_CAP_MINUTES`, same `site.mute` action, same snapshot keys), so nothing misbehaves today; the finding is the standing drift risk on exactly the drift class `services.py`'s module docstring says it exists to eliminate, plus a non-uniform audit trail for the same action across surfaces.
+  - **Subsystem / file(s)**: `backend/app/routers/sites.py` (inline mute inside `update_site`) vs `backend/app/services.py` `mute_site` (called by `app/agent/tools.py` and `worker/telegram_bot.py`; records `after={**snapshot, "via": via}`).
+  - **Reproduction**: hermetic, committed-passing — `test_phase4c_api_surface_repros.py::test_rest_mute_audit_shape_diverges_from_services_mute` (PATCH → audit `after_json` has no `via`; `services.mute_site(via="telegram")` → `after_json["via"] == "telegram"`).
+  - **Root cause**: mute was folded into the site-PATCH handler instead of delegating to the shared action; the shared service's contract list claims mute as one of its core actions but REST never calls it.
+  - **Proposed remedy category**: refactor — route the REST mute path through `services.mute_site` so audit shape and clamping live once.
+  - **Source**: fresh-eyes hunt list (cross-surface parity: REST vs the shared services.py call sites).
+
+  - **ID**: AUDIT-4C-4
+  - **Title**: `DELETE /api/sites/{id}` has no in-flight guard and discloses no cascade scope — a site whose baseline capture is mid-flight deletes with 204, and the operator is never told what disappears
+  - **Severity**: Low — the destructive action is analyst-gated and audited (before-snapshot preserved), artifact dirs are reaped by the beat janitor's daily orphan-dir sweep (`worker/beat_tasks.py`), and in-flight worker writes land on missing rows handled worker-side; the harm is operator surprise (irreversible loss of scan/alert/suppression/remediation history) and asymmetry with the rest of the surface.
+  - **Subsystem / file(s)**: `backend/app/routers/sites.py` `delete_site` (no guard, 204 empty body, comment defers artifact cleanup "to a later phase" — that janitor has since landed in beat_tasks); FK cascade map in `app/models.py` (baselines/scans/suppression_rules/alerts+deliveries/per-site notification channels/remediation hooks+executions all `ondelete=CASCADE`).
+  - **Reproduction**: live — created a site, observed `baseline_status=pending`, `DELETE` → 204 while capture ran; replay → 404. No 409, no body. (Contrast: create/scan-now/rebaseline all 409 on in-flight work.)
+  - **Root cause**: delete implemented as a bare cascade with no in-flight arbitration and no response contract enumerating the destruction.
+  - **Proposed remedy category**: surface-contract fix — either 409 while a capture/scan is in flight (consistent with the surface's own convention) or an endpoint description + response summary of destroyed row counts.
+  - **Source**: fresh-eyes hunt list (idempotency/safety at the surface: DELETE cascade visibility).
+
+  - **ID**: AUDIT-4C-5
+  - **Title**: health.py readiness docstring cites a compose healthcheck that no longer exists in that form — the stack's healthcheck curls `/api/health/live`, not `/api/health`
+  - **Severity**: Low — comment-only drift (Rule 13 target); behavior is fine. Residual note: `GET /api/health` remains an unauthenticated DB-reachability oracle returning "database unreachable" detail; acceptable for the self-hosted model but should be a stated decision, not an accident of a stale justification.
+  - **Subsystem / file(s)**: `backend/app/routers/health.py` readiness route ("Backward-compatible with the Phase 0 compose healthcheck, which curls /api/health") vs `docker-compose.yml` and `docker inspect wardress-app-1` healthcheck = `curl -sf http://localhost:8000/api/health/live` (verified both).
+  - **Reproduction**: docker inspect + compose file read; no runtime probe needed.
+  - **Root cause**: the healthcheck target was later moved to `/live` without updating the readiness route's justification comment.
+  - **Proposed remedy category**: doc-only fix (re-anchor the readiness route's reason, or re-point the route if no consumer remains).
+  - **Source**: fresh-eyes hunt list (Dockerfile/healthcheck contract).
+
+
+  - **ID**: AUDIT-4C-6
+  - **Title**: Three routes double-charge the per-user rate limit: the auth dependency already meters every authenticated request, then icon/validate/pull call `enforce_user_rate_limit` again
+  - **Severity**: Low — a burst-heavy dashboard (favicon loads) or admin loop (AI validate / Ollama pull) consumes 2 of the 240/min budget per request; consistent (the same three routes do it), deliberate-looking, but undocumented — the effective budget halves with no statement of intent.
+  - **Subsystem / file(s)**: `backend/app/deps.py` (per-user charge in `get_auth_context`) × `backend/app/routers/sites.py` (`icon`), `backend/app/routers/settings.py` (`validate_ai_provider`, `pull_ollama_model`).
+  - **Reproduction**: code-read (all sites charge the same `user:{id}` bucket); not separately stress-tested (below Rule 18 threshold — deterministic, not variance-prone).
+  - **Root cause**: explicit per-route charges predate/ignore the dependency-level limiter; "rate-limited per user since images load in bursts" (icon docstring) is true twice over without saying so.
+  - **Proposed remedy category**: decide-and-document — either declare the double-charge as intentional burst weighting in each docstring, or drop the redundant calls.
+  - **Source**: fresh-eyes hunt list (rate-limit coverage and whether the gaps matter).
+
+  - **ID**: AUDIT-4C-7
+  - **Title**: `DELETE /api/users/{id}` hard-deletes any non-self user regardless of usage — destroying their API keys and agent chat history (FK CASCADE) with no surface disclosure; module docstring claims the opposite intent
+  - **Severity**: Low — admin-gated, audited (before-snapshot keeps email; audit rows survive via `actor_id SET NULL` + denormalized `actor_email`, verified live: the deleted viewer's audit rows remain attributable), refresh tokens/API keys are credentials (clean to destroy); the surprise is irreversible loss of the user's agent conversations and the doc/behavior gap.
+  - **Subsystem / file(s)**: `backend/app/routers/users.py` `delete_user` (docstring "Hard delete exists for cleanup of never-used accounts" — no such precondition is enforced) and the `app/models.py` FK map (`api_keys.user_id`, `agent_conversations.user_id` CASCADE; `audit_log.actor_id`, `sites.created_by`, `suppression_rules.created_by`, `alerts.acknowledged_by`, `remediation_*.created_by/confirmed_by` SET NULL — history-preserving, correct).
+  - **Reproduction**: live — created viewer, exercised it (agent conversation created), `DELETE` → 204, user gone from list, login 401, audit rows still attributable via denormalized email.
+  - **Root cause**: hard delete shipped as a plain cascade; the docstring's stated scope was never wired as a precondition.
+  - **Proposed remedy category**: contract/doc fix — enforce the "never-used account" precondition the docstring promises, or correct the docstring and disclose the cascade scope in the endpoint description.
+  - **Source**: fresh-eyes hunt list (contract honesty: docstrings are hypotheses; DELETE cascade visibility).
+
+- **Log-vs-reality discrepancies**: none against PROMPT-002 logs (out of scope this phase). Intra-repo comment-vs-reality captured as AUDIT-4C-5 (health docstring) and inside AUDIT-4C-4 (sites.py janitor comment: "cleaned by a janitor task in a later phase" — the janitor now exists in `worker/beat_tasks.py`; cleanup is covered, the comment is stale). One self-falsified candidate (UserCreate email validation) noted in Method.
+
+- **New hermetic tests added this phase**: `backend/tests/test_phase4c_api_surface_repros.py` — three tests, all **committed-passing** (3/3 green): dead-broker create-site 503 partial-success repro (AUDIT-4C-1); unauthenticated docs/openapi exposure pin (AUDIT-4C-2); REST-vs-services mute audit-shape divergence repro (AUDIT-4C-3). Live probe script preserved (not a pytest): `Prompts/Pending/Finders/PROMPT-003/scratch/audit4c_live_probe.ps1`.
+
+- **Opportunities / Innovation ideas observed** (Rule 17):
+  - **Idea**: paginate `GET /api/sites` (or cap its eager baseline-summary join).
+  - **Why it would help**: bulk import admits 500 sites per call and the list endpoint returns all sites + two baseline queries with no bound; dashboards degrade gracefully today only because installs are small.
+  - **Where it touches**: `backend/app/routers/sites.py` `list_sites`; frontend sites page.
+  - **Rough shape of the change**: offset/limit + total like the alerts/scans/audit pages already have (their pagination contract is the in-repo pattern to copy).
+  - **Idea**: escape LIKE metacharacters in the audit-log `actor` filter.
+  - **Why it would help**: `AuditLog.actor_email.ilike(f"%{actor}%")` treats `%`/`_` in the query as wildcards; searching for a literal address containing them silently over-matches (admin-only read filter — correctness nit, not security).
+  - **Where it touches**: `backend/app/routers/audit.py` actor filter.
+  - **Rough shape of the change**: escape `%`/`_`/`\` before interpolation, or exact-match plus an explicit "contains" mode.
+  - **Idea**: record failed explain attempts.
+  - **Why it would help**: `record_audit` for `scan.explain` is staged on the same session the 503 path rolls back, so only successful explains leave an audit trace; repeated forced regenerations (cost/quota events) are invisible when they fail.
+  - **Where it touches**: `backend/app/routers/sites.py` explain route; `app/explain.py`.
+  - **Rough shape of the change**: commit the audit row on its own session (or before the LLM call) so attempts, not just successes, are auditable.
+  - **Idea**: shared SiteDetailOut assembler (carried lead).
+  - **Why it would help**: four separate `SiteDetailOut(...)` construction sites in `routers/sites.py` still risk drifting (PROMPT-002 Phase 7 lead (b), re-confirmed present in current code).
+  - **Where it touches**: `backend/app/routers/sites.py`.
+  - **Rough shape of the change**: one helper taking (site, baseline, degraded_count) → SiteDetailOut.
+
+- **Full regression results**:
+  - New repro file: `uv run pytest tests/test_phase4c_api_surface_repros.py` → **3 passed**.
+  - API-surface suites (18 files: test_phase4_api, test_auth, test_phase5_rbac, test_phase5_users_apikeys, test_phase4_alerting, test_sites_router_integrity, test_phase17_auth_audit, test_phase5_health, test_phase5_bulk_import, test_phase5_ratelimit_ssrf, test_tasks_enqueue, test_services, test_phase5_audit, test_main, test_security, test_sites, test_artifacts, test_phase5_remediation): first batched run reported **3 failed / 10 errors / 237 passed** — all failures localized to `test_phase4_api.py` and root-caused to **my own accidental double-launch** of pytest against the single-contract test database (two sessions collided; both were killed mid-run). Isolated re-run: `uv run pytest tests/test_phase4_api.py` → **31 passed** (clean). Combined honest count: 237 + 31 = 268 passed, 0 genuine failures.
+  - No production file was modified (Rule 1). Live-stack side effects cleaned up (throwaway users/sites deleted).
+
+- **Findings out of phase scope**: none new — the remaining AI-config SSRF posture nuance (legacy `PUT /api/settings/ollama` `validate_url=False` save path vs use-time validation in `ai_config.py`) is logged for Audit Phase 4E's awareness, not investigated here; the scheduler mechanics the delete-with-in-flight-capture case exercises belong to 4B's territory (4C-4 records the surface side only).
+
+- **Commit**: fedfbf7 — PROMPT-003 Audit Phase 4C: API-surface repro tests + live probe script (diagnosis only); this log entry is committed immediately after, referencing that hash (not pushed).
+- **Next phase kickoff prompt**: delivered in chat only — never written to this log.
