@@ -57,29 +57,30 @@ Every phase in the map below is sized to fit in one context window doing one sub
 14. **Infrastructure and docs are read for drift, not written to.** Drift found here (including any PowerShell script or documentation inaccuracies) is a finding for the remediation prompt, not something to quietly correct now.
 15. **Fresh Docker install available for testing**, exactly as PROMPT-002 Rule 14. **Do not run `scripts/install.ps1` or `scripts/uninstall.ps1` yourself.** If containers are not up, ASK the user to start them.
 16. **Severity discipline.** Every finding gets exactly one severity, chosen honestly against §6.4 — do not inflate, do not deflate.
-17. **Liberty to brainstorm beyond the log — mandatory, not optional.** The traceability matrix and log-derived leads are your *floor*, not your *ceiling*. In every phase, think past "does this meet what PROMPT-002 said" and ask "what would make this subsystem genuinely better, more capable, or more resilient — including things neither PROMPT-002 nor its log ever imagined?" Capture these in the separate **Opportunities / Innovation Ideas** log field (§6.1) — not severity-scored, not required to trigger anything on their own, but every one written down with enough reasoning that the user can evaluate it later. Do not silently filter an idea out because it seems out of scope; log it and let the user decide. The only constraint is Rule 1 — brainstorm and log freely, never implement against production code during an audit phase.
-18. **No single-pass proof of reliability.** A stress-test result (a site capture, a concurrency run, a chaos-injection scenario) observed exactly once is a data point, not a finding of "works" or "doesn't work." Every site in the stress-test catalog, every concurrency load level, and every chaos scenario must be run a **minimum of three total passes**, ideally spread across more than one session/time-of-day so transient network/vendor-side conditions don't masquerade as your system's behavior. Record the outcome of every pass and the variance across them — "3/3 succeeded, consistent 18-22s capture time" is a finding; "succeeded once" is not.
-19. **No aggregate acceptance of below-target results.** Per §0.1: every below-target metric must be broken down to individually-investigated root causes per failing case, each with an explicit Fix-candidate or Accepted-risk disposition. An aggregate percentage with no per-case breakdown is an incomplete phase, not a finding.
-
----
-
-## 2. THE AUDIT GAUNTLET LOOP (mandatory for every phase)
-
-**Step 1 — INTAKE.** Read this entire file. Read `PROMPT-003-IMPLEMENTATION-LOG.md` completely (all prior audit-phase entries). Read the companion `PROMPT-003-stress-site-catalog.md` if this phase touches capture/stress testing. Read the specific PROMPT-002 phase spec(s) and log entries relevant to this phase's assigned subsystem (§4).
-
-**Step 2 — REBUILD THE TRACEABILITY MATRIX ROW BY ROW** (traceability phases) or **EXECUTE THE ASSIGNED STRESS/AUDIT WORK** (all other phases), per §4's per-phase instructions.
-
-**Step 3 — READ THE LIVE CODE COLD** where applicable — set prior claims aside and read the actual current files as if PROMPT-002 never happened, tracing every function, caller, exception path, and cross-phase interaction.
-
-**Step 4 — ENUMERATE NEW EDGE CASES, HARDER THAN BEFORE.** Do not just re-check PROMPT-002's list. Add adversarial cases it didn't consider.
-
-**Step 5 — TEST, WITH REPEATABILITY (Rule 18).** Write hermetic tests where automatable; use the live Docker install for anything requiring a real browser or real sites; run every stress scenario the minimum number of passes Rule 18 requires; document manual verification honestly where automation isn't possible.
-
-**Step 6 — CLASSIFY AND LOG, WITH NO AGGREGATE SHORTCUTS (Rule 19).** Every finding gets a severity (§6.4), a precise reproduction, a root-cause explanation, file/line(s), and a proposed remedy sketch. Every below-target metric gets the per-case breakdown Rule 19 requires. Append to `PROMPT-003-IMPLEMENTATION-LOG.md` per §6.1.
-
-**Step 7 — REGRESSION CHECK.** Confirm new test files did not regress the existing suites (Rule 5).
-
-**Step 8 — COMMIT AND HANDOFF.** Commit per Rule 9, output the next phase's kickoff prompt, stop.
+60. 17. **Liberty to brainstorm beyond the log — mandatory, not optional.** The traceability matrix and log-derived leads are your *floor*, not your *ceiling*. In every phase, think past "does this meet what PROMPT-002 said" and ask "what would make this subsystem genuinely better, more capable, or more resilient — including things neither PROMPT-002 nor its log ever imagined?" Capture these in the separate **Opportunities / Innovation Ideas** log field (§6.1) — not severity-scored, not required to trigger anything on their own, but every one written down with enough reasoning that the user can evaluate it later. Do not silently filter an idea out because it seems out of scope; log it and let the user decide. The only constraint is Rule 1 — brainstorm and log freely, never implement against production code during an audit phase.
+61: 18. **No single-pass proof of reliability.** A stress-test result (a site capture, a concurrency run, a chaos-injection scenario) observed exactly once is a data point, not a finding of "works" or "doesn't work." Every site in the stress-test catalog, every concurrency load level, and every chaos scenario must be run a **minimum of three total passes**, ideally spread across more than one session/time-of-day so transient network/vendor-side conditions don't masquerade as your system's behavior. Record the outcome of every pass and the variance across them — "3/3 succeeded, consistent 18-22s capture time" is a finding; "succeeded once" is not.
+62: 19. **No aggregate acceptance of below-target results.** Per §0.1: every below-target metric must be broken down to individually-investigated root causes per failing case, each with an explicit Fix-candidate or Accepted-risk disposition. An aggregate percentage with no per-case breakdown is an incomplete phase, not a finding.
+63: 20. **Strict Monotonic Phase Sequence & Zero-Skip Invariant.** Every phase in this audit has an explicit sequence identifier `[Phase N of 17]` listed in §4. An agent is **strictly prohibited from skipping or reordering any phase**. An agent completing Phase `N` must output the kickoff prompt for Phase `N+1` exclusively. Skipping code-audit phases (e.g., jumping from Phase 4C to Phase 5A and bypassing 4D, 4E, or 4F) is a catastrophic protocol violation that invalidates the audit handoff. Every kickoff prompt MUST explicitly state: `Executing ONLY Audit Phase <Name> [Phase N of 17]`.
+64: 
+65: ---
+66: 
+67: ## 2. THE AUDIT GAUNTLET LOOP (mandatory for every phase)
+68: 
+69: **Step 1 — INTAKE.** Read this entire file. Read `PROMPT-003-IMPLEMENTATION-LOG.md` completely (all prior audit-phase entries). Read the companion `PROMPT-003-stress-site-catalog.md` if this phase touches capture/stress testing. Read the specific PROMPT-002 phase spec(s) and log entries relevant to this phase's assigned subsystem (§4).
+70: 
+71: **Step 2 — REBUILD THE TRACEABILITY MATRIX ROW BY ROW** (traceability phases) or **EXECUTE THE ASSIGNED STRESS/AUDIT WORK** (all other phases), per §4's per-phase instructions.
+72: 
+73: **Step 3 — READ THE LIVE CODE COLD** where applicable — set prior claims aside and read the actual current files as if PROMPT-002 never happened, tracing every function, caller, exception path, and cross-phase interaction.
+74: 
+75: **Step 4 — ENUMERATE NEW EDGE CASES, HARDER THAN BEFORE.** Do not just re-check PROMPT-002's list. Add adversarial cases it didn't consider.
+76: 
+77: **Step 5 — TEST, WITH REPEATABILITY (Rule 18).** Write hermetic tests where automatable; use the live Docker install for anything requiring a real browser or real sites; run every stress scenario the minimum number of passes Rule 18 requires; document manual verification honestly where automation isn't possible.
+78: 
+79: **Step 6 — CLASSIFY AND LOG, WITH NO AGGREGATE SHORTCUTS (Rule 19).** Every finding gets a severity (§6.4), a precise reproduction, a root-cause explanation, file/line(s), and a proposed remedy sketch. Every below-target metric gets the per-case breakdown Rule 19 requires. Append to `PROMPT-003-IMPLEMENTATION-LOG.md` per §6.1.
+80: 
+81: **Step 7 — REGRESSION CHECK.** Confirm new test files did not regress the existing suites (Rule 5).
+82: 
+83: **Step 8 — COMMIT AND HANDOFF.** Commit per Rule 9. Look up §4's Phase Map and verify the exact `[Phase N+1 of 17]` target. Verify against `PROMPT-003-IMPLEMENTATION-LOG.md` that all prior phases (1 through N) are marked `[DONE]`. Output the kickoff prompt strictly for Phase `N+1`, referencing its assigned scope, then stop.
 
 ---
 
@@ -95,17 +96,24 @@ Every phase in the map below is sized to fit in one context window doing one sub
 
 ---
 
-## 4. AUDIT PHASE MAP (17 phases)
+## 4. AUDIT PHASE MAP (17 phases — Strict Monotonic Sequence)
 
-Ordering: traceability first, then discovery (repo inventory + prior history sweep), then fresh-eyes code audits (capture, detection, data models, API routers/RBAC, task orchestration/alert delivery, AI & supply chain, and frontend surfaces — deliberately excluding the separate operations-agent subsystem, per explicit scoping), then two-tier stress-testing using the automated runner, then concurrency/chaos, adversarial detection, performance & operational consistency, and final consolidation.
+> [!IMPORTANT]
+> **RULE 20 SEQUENCE LOCK**: Phases must be executed in strictly ascending sequential order (`Phase 01` through `Phase 17`).
+> Skipping any phase (e.g. attempting to start Phase 5A before 4D, 4E, and 4F are complete) is an automatic protocol violation.
+> Each phase's kickoff prompt MUST state its exact index `[Phase N of 17]`.
 
-### AUDIT PHASE 1 — Traceability Matrix: Capture Phases (PROMPT-002 Phases 1–7)
-*(Status: DONE — see implementation log)*
+### AUDIT PHASE 1 [Phase 01 of 17] — Traceability Matrix: Capture Phases (PROMPT-002 Phases 1–7)
+- **Status**: `DONE` (Commit `084bd6c` / `f1a8a4e`)
+- **Mandatory Next Phase**: AUDIT PHASE 2 [Phase 02 of 17]
 
-### AUDIT PHASE 2 — Traceability Matrix: Detection Phases (PROMPT-002 Phases 8–14)
-*(Status: DONE — see implementation log)*
+### AUDIT PHASE 2 [Phase 02 of 17] — Traceability Matrix: Detection Phases (PROMPT-002 Phases 8–14)
+- **Status**: `DONE` (Commit `11a5e54` / `a692b73`)
+- **Mandatory Next Phase**: AUDIT PHASE 2B [Phase 03 of 17]
 
-### AUDIT PHASE 2B — Full Codebase Inventory, Blast-Radius Mapping & Prior-History Sweep
+### AUDIT PHASE 2B [Phase 03 of 17] — Full Codebase Inventory, Blast-Radius Mapping & Prior-History Sweep
+- **Status**: `DONE` (Commit `5d7ac7f` / `7536fc6`)
+- **Mandatory Next Phase**: AUDIT PHASE 3 [Phase 04 of 17]
 **Target:** The entire repository for classification, plus `Prompts/Done/Loogers/WARDRESS_AUDIT_FINDINGS.md` (268KB) and `WARDRESS_FIX_LOG.md` (790KB) via targeted search.
 **Do:**
 1. **Repository Inventory & Blast-Radius Mapping:** Walk `backend/`, `frontend/`, `docs/`, `scripts/`, and repo root. Group and classify files into the blast-radius buckets:
@@ -122,60 +130,88 @@ Ordering: traceability first, then discovery (repo inventory + prior history swe
 2. **Prior-History Sweep:** Use targeted grep (never full reads) against `Prompts/Done/Loogers/` for "TODO", "deferred", "not implemented", "residual", "known issue", "unresolved". Cross-check if closed by PROMPT-002 or still open today.
 **Output & Formatting Discipline:** Append the grouped inventory table (by directory/subsystem with file counts, not 590 separate lines) and any prior-history gaps to the audit log following §6.1.
 
-### AUDIT PHASE 3 — Fresh-Eyes Code Audit: Capture Pipeline
+### AUDIT PHASE 3 [Phase 04 of 17] — Fresh-Eyes Code Audit: Capture Pipeline
+- **Status**: `DONE` (Commit `5b0a884` / `25ffae0`)
+- **Mandatory Next Phase**: AUDIT PHASE 4 [Phase 05 of 17]
 **Target files:** the capture-core files named in Phase 1, **plus** whatever Phase 2B's inventory added to this bucket — cold read, ignore PROMPT-002/log this session.
 **Do:** Full Step 3. Hunt for: resource leaks on every exception path; state leakage across retry attempts; Cloudflare wait-and-retry racing navigation timeout; height cap interacting with scroll-to-bottom-then-top; "silent lie" patterns; memory growth across sequential captures in one worker.
 
-### AUDIT PHASE 4 — Fresh-Eyes Code Audit: Detection Pipeline
+### AUDIT PHASE 4 [Phase 05 of 17] — Fresh-Eyes Code Audit: Detection Pipeline
+- **Status**: `DONE` (Commit `2928507` / `9721166`)
+- **Mandatory Next Phase**: AUDIT PHASE 4B [Phase 06 of 17]
 **Target files:** the detection-core files named in Phase 2, **plus** whatever Phase 2B's inventory added to this bucket — cold read, ignore PROMPT-002/log.
 **Do:** Full Step 3. Hunt for: ways to defeat unconditional layer contracts; rule-floor boundary behavior (0.849 vs 0.851); over-normalization letting real attacks slip through; numerical stability on malformed/huge diffs.
 
-### AUDIT PHASE 4B — Fresh-Eyes Code Audit: Data Model, Schema & Migrations
-**Target files:** `backend/app/models.py`, `schemas.py`, `capture.py`, `scanning.py`, `db.py`, and `backend/alembic/versions/`.
-**Do:** Full Step 3, cold. Hunt for: migration backfill/default gaps on pre-existing rows; model/schema validation mismatches; in-flight-baseline unique index race condition verification under concurrency.
+### AUDIT PHASE 4B [Phase 06 of 17] — Fresh-Eyes Code Audit: Orchestration, Scheduling & Data Models
+- **Status**: `DONE` (Commit `ef5eb8c` / `125e31e`)
+- **Mandatory Next Phase**: AUDIT PHASE 4C [Phase 07 of 17]
+**Target files:** `backend/worker/celery_app.py`, `worker/scan_tasks.py`, `worker/beat_tasks.py`, `worker/db.py`, `app/scanning.py`, `app/tasks.py`, `app/services.py`, `app/models.py`, `schemas.py`, alembic migrations.
+**Do:** Full Step 3, cold. Hunt for: beat claim/advance CAS races; in-flight scan/baseline arbitration; stale pending/running row recovery; worker prefork memory scaling; Celery late-ack and idempotency contracts.
 
-### AUDIT PHASE 4C — Fresh-Eyes Code Audit: API Routers, RBAC & Rate Limiting
-**Target files:** `backend/app/routers/` (except `agent.py`), `deps.py`, `ratelimit.py`, `security.py`.
-**Do:** Full Step 3, cold. Hunt for: tenant/account data leakage across routes; Admin/Analyst/Viewer RBAC boundary enforcement; rate-limit bypass paths; session/token invalidation and edge cases.
+### AUDIT PHASE 4C [Phase 07 of 17] — Fresh-Eyes Code Audit: API Routers, RBAC & Rate Limiting
+- **Status**: `DONE` (Commit `fedfbf7` / `ed7f5af`)
+- **Mandatory Next Phase**: AUDIT PHASE 4D [Phase 08 of 17]
+**Target files:** `backend/app/routers/` (all 13 in-scope routers, except `agent.py`), `deps.py`, `ratelimit.py`, `security.py`, `apikeys.py`, `audit.py`.
+**Do:** Full Step 3, cold. Hunt for: tenant/account data leakage across routes; Admin/Analyst/Viewer RBAC boundary enforcement; rate-limit bypass paths; session/token invalidation and edge cases; unauthenticated route exposure (`/docs`, `/openapi.json`).
 
-### AUDIT PHASE 4D — Fresh-Eyes Code Audit: Task Orchestration, Alert & Remediation Delivery
-**Target files:** `backend/worker/scan_tasks.py`, `remediation_tasks.py`, `alert_tasks.py`, `beat_tasks.py`, `celery_app.py`, `alerting.py`, `remediation.py`, `explain.py`, templates.
-**Do:** Full Step 3, cold. Hunt for: scan/baseline crash mid-write consistency; alert delivery idempotency; human-approval gating on remediation webhooks; beat interval shortening starvation; SSRF redirect validation in `site_icons.py`.
+### AUDIT PHASE 4D [Phase 08 of 17] — Fresh-Eyes Code Audit: Task Orchestration, Alert & Remediation Delivery
+- **Status**: `PENDING — NEXT UP`
+- **Mandatory Next Phase**: AUDIT PHASE 4E [Phase 09 of 17]
+**Target files:** `backend/worker/scan_tasks.py`, `remediation_tasks.py`, `alert_tasks.py`, `beat_tasks.py`, `celery_app.py`, `app/alerting.py`, `app/remediation.py`, `app/explain.py`, templates (`alert.html`, `test.html`, `report.html`), `app/site_icons.py`.
+**Do:** Full Step 3, cold. Hunt for: scan/baseline crash mid-write consistency; alert row creation unreachability on worker death (`AUDIT-4B-1`); alert delivery idempotency and retry backpressure; human-approval gating on remediation webhooks; remediation crash-after-claim windows (`AUDIT-2B-3`); beat interval shortening starvation; SSRF redirect validation in `site_icons.py`.
 
-### AUDIT PHASE 4E — AI Provider Integration, Supply-Chain & Infrastructure Configuration
+### AUDIT PHASE 4E [Phase 09 of 17] — AI Provider Integration, Supply-Chain & Infrastructure Configuration
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 4F [Phase 10 of 17]
 **Target files:** `backend/app/ai_*.py`, `llm.py`, `backend/worker/llm_escalation.py`, `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `pnpm-lock.yaml`, Dockerfiles, `docker-compose.yml`, `.env.example`, `.github/workflows/ci.yml`, `backend/tools/check_torch_osv.py`.
 **Do:** Full Step 3, cold.
-1. AI Integration: Graceful degradation when AI provider fails/hangs, Fernet encryption of keys on all write paths, auto-provisioned Ollama fallback.
+1. AI Integration: Graceful degradation when AI provider fails/hangs, Fernet encryption of keys on all write paths, auto-provisioned Ollama fallback, SSRF safety on custom provider endpoints.
 2. Supply-Chain & Config: Vulnerability sweep on dependencies, confirm `check_torch_osv.py` runs in CI, check secrets handling, default credentials, image pinning in Dockerfiles.
 
-### AUDIT PHASE 4F — Fresh-Eyes Code Audit: Frontend Capture & Detection Surfaces
+### AUDIT PHASE 4F [Phase 10 of 17] — Fresh-Eyes Code Audit: Frontend Capture & Detection Surfaces
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 5A [Phase 11 of 17]
 **Target files:** React components/hooks rendering capture health, scan results, verdicts, or alert history, and API-client code.
-**Do:** Full Step 3, cold. Root-cause the `capture-health.test.tsx` flake; check verdict/severity color clarity (degraded vs measured); stale-data races during in-flight scans; accessibility and mixed-script rendering.
+**Do:** Full Step 3, cold. Root-cause the `capture-health.test.tsx` flake; check verdict/severity color clarity (degraded vs measured); stale-data races during in-flight scans; accessibility and mixed-script rendering; comment/constant drift (`AUDIT-2B-5`).
 
-### AUDIT PHASE 5A — Stress-Test Catalog: Broad Real-World Baseline (Tier A)
+### AUDIT PHASE 5A [Phase 11 of 17] — Stress-Test Catalog: Broad Real-World Baseline (Tier A)
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 5B [Phase 12 of 17]
 **Do not touch code.** Execute Tier A of `PROMPT-003-stress-site-catalog.md` against the live Docker install using the automated runner `backend/tools/run_stress_catalog.py` (`uv run python tools/run_stress_catalog.py --tier A`).
 - Enforces Rule 18 (minimum 3 passes per site), measures latency and variance, and outputs the markdown table directly.
 - For every failure, log individual root cause and Fix-candidate/Accepted-risk disposition per Rule 19.
 
-### AUDIT PHASE 5B — Stress-Test Catalog: Advanced Bot Defenses & Exotic Edge Categories (Tiers B & C)
+### AUDIT PHASE 5B [Phase 12 of 17] — Stress-Test Catalog: Advanced Bot Defenses & Exotic Edge Categories (Tiers B & C)
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 6 [Phase 13 of 17]
 **Do not touch code.** Execute Tiers B and C of `PROMPT-003-stress-site-catalog.md` (Akamai, DataDome, PerimeterX, AWS WAF, Turnstile, hard e-commerce, WebSockets, infinite scroll, heavy hydration, extreme DOMs) using `backend/tools/run_stress_catalog.py` (`--tier B` and `--tier C`).
 - Same Rule 18 repeatability and Rule 19 individual root-cause discipline.
 
-### AUDIT PHASE 6 — Concurrency & Scale Stress Testing
+### AUDIT PHASE 6 [Phase 13 of 17] — Concurrency & Scale Stress Testing
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 7 [Phase 14 of 17]
 **Do not touch code.** Execute concurrency test regime per §7: load levels (1x, 2x, 5x) run 3 times each; 50-cycle soak run; measure queueing, CPU/memory, connection pool and lock contention.
 
-### AUDIT PHASE 7 — Chaos & Failure-Injection Testing
+### AUDIT PHASE 7 [Phase 14 of 17] — Chaos & Failure-Injection Testing
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 8 [Phase 15 of 17]
 **Do not touch code.** Execute 6 fault-injection scenarios per §7 (crash mid-capture, DNS/TLS failure, slow-loris response, malformed HTTP response, SSRF redirect loop, pathologically large DOM), run 3 times each. Classify as safe fail vs silent success vs worker crash.
 
-### AUDIT PHASE 8 — Adversarial Detection Accuracy Stress Test
+### AUDIT PHASE 8 [Phase 15 of 17] — Adversarial Detection Accuracy Stress Test
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 9 [Phase 16 of 17]
 **Do not touch code.** Construct new hermetic attack/benign fixture pairs based on the Phase 2 taxonomy and test through deployed detection pipeline 3 times each. Measure false-negative rate on attacks and false-positive rate on live benign churn.
 
-### AUDIT PHASE 9 — Performance Profiling, Infrastructure & Operational Consistency Audit
+### AUDIT PHASE 9 [Phase 16 of 17] — Performance Profiling, Infrastructure & Operational Consistency Audit
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: AUDIT PHASE 10 [Phase 17 of 17]
 **Do not touch code.**
 1. **Profiling:** Profile capture and detection pipelines under single and batch load. Identify concrete bottlenecks with measured costs (cold-start embedding, fusion reload, regex, missing DB indexes).
 2. **Infrastructure & Docs:** Verify `docker-compose.yml`, `.env.example`, `scripts/*.ps1`, docs, and `SKILL.md` against audited runtime behavior. Verify documented safety guarantees (SSRF gating, human approval on remediations, ReDoS timeout, Fernet encryption, RBAC).
 
-### AUDIT PHASE 10 — Consolidated Findings Register, Opportunities Register & Decision Gate
+### AUDIT PHASE 10 [Phase 17 of 17] — Consolidated Findings Register, Opportunities Register & Decision Gate
+- **Status**: `PENDING`
+- **Mandatory Next Phase**: DECISION GATE (Author PROMPT-004 Remediation Prompt OR Clean Bill of Health)
 **Do not touch code.** Read all prior audit entries. Produce:
 1. Master **Findings Register** with anchor links back to original phase entries.
 2. Severity summary table.
@@ -325,9 +361,20 @@ When done: append your audit log entry per §6.1, commit (test-file/log changes 
 
 ### Subsequent kickoffs
 
-The previous audit phase generates the next phase's kickoff prompt as part of its own log entry: read PROMPT-003 fully → read PROMPT-003-IMPLEMENTATION-LOG.md fully → read `PROMPT-003-stress-site-catalog.md` if the next phase is 5A/5B/5C/6/7/8 → read the specific PROMPT-002 sections + code files this phase targets, per §4 → execute this phase per §2, honoring Rule 18 (repeatability) and Rule 19 (no aggregate acceptance) wherever they apply → generate the next phase's kickoff prompt when done.
+> [!CAUTION]
+> **ZERO-SKIP KICKOFF ENFORCEMENT (Rule 20)**:
+> An agent completing Phase `N` is **strictly prohibited from skipping or guessing the next phase**.
+> Before generating any kickoff prompt, the agent MUST:
+> 1. Verify that the current phase is committed and logged as `[DONE]` in `PROMPT-003-IMPLEMENTATION-LOG.md`.
+> 2. Consult §4's Phase Map and look up the exact `Mandatory Next Phase:` line for `[Phase N+1 of 17]`.
+> 3. Verify that the next phase header contains the sequential tag `[Phase N+1 of 17]`.
+> 4. Ensure the kickoff prompt explicitly starts with: `You are executing ONLY Audit Phase <Name> [Phase N+1 of 17]`.
+> Any kickoff prompt that jumps ahead (such as jumping from Phase 4C to 5A, skipping 4D, 4E, or 4F) is an automatic protocol violation.
 
-**Audit Phase 10's kickoff-prompt output is different**: per §8, it either hands the user the ready-to-paste PROMPT-004 Phase 1 kickoff prompt (if warranted), or the Clean Bill of Health report with a recommended re-audit interval. If a later remediation prompt's own Re-Audit & Sign-Off phase (§8.2) in turn spawns PROMPT-005+, that phase's kickoff-prompt output follows the identical pattern one level up.
+The standard pattern for every kickoff prompt is:
+read PROMPT-003 fully → read PROMPT-003-IMPLEMENTATION-LOG.md fully → read `PROMPT-003-stress-site-catalog.md` if the next phase is 5A/5B/5C/6/7/8 → read the specific PROMPT-002 sections + code files this phase targets, per §4 → execute this phase per §2, honoring Rule 18 (repeatability) and Rule 19 (no aggregate acceptance) wherever they apply → generate the next phase's kickoff prompt strictly for `Phase N+1` when done.
+
+**Audit Phase 10 [Phase 17 of 17]'s kickoff-prompt output is different**: per §8, it either hands the user the ready-to-paste PROMPT-004 Phase 1 kickoff prompt (if warranted), or the Clean Bill of Health report with a recommended re-audit interval. If a later remediation prompt's own Re-Audit & Sign-Off phase (§8.2) in turn spawns PROMPT-005+, that phase's kickoff-prompt output follows the identical pattern one level up.
 
 ---
 
