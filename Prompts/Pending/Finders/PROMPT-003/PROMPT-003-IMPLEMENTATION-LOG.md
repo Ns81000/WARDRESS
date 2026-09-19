@@ -1225,7 +1225,7 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
 - **Method & environment (Rule 13)**:
   - Full Step 3 cold read of every in-scope file, tracing callers/callees into the scan path (`scan_tasks.py:315-327`), the HTTP surface (`settings.py` AI routes) and the litellm layer.
   - Live stack used read-only for state attestation (`wardress-app-1` healthy on :8321, worker/beat/db/redis up; no container was started or stopped): `ai_providers` = 1 row — the auto-provisioned `Ollama (local)`, `provider_type=ollama`, `base_url=http://ollama:11434`, `enabled=t`, `validation_status=unknown`, `ai_seed_done` sentinel present; `ai_task_assignments` = 0; `model_catalog` = 7850 models / 222 providers (a live models.dev sync is retained in the DB); the `ollama` profile container is NOT running and `socket.getaddrinfo('ollama')` **fails inside the app container** (`gaierror -5`); deployed versions: `weasyprint 69.0` in the app image, `torch 2.13.0+cpu` in the worker; `CREDENTIALS_ENCRYPTION_KEY` set.
-  - Empirical measurement instead of arithmetic assertion (Rule 4/18): two scratch probes under `Prompts/Pending/Finders/PROMPT-003/scratch/` (NOT committed — Rule 10) drive the production `validate_provider_call` against a local socket server that accepts and never answers, with the production 30 s timeout, three passes each.
+  - Empirical measurement instead of arithmetic assertion (Rule 4/18): two scratch probes under `Prompts/Pending/Finders/PROMPT-003/scratch/` (preserved for reproducibility, per the effort's precedent) drive the production `validate_provider_call` against a local socket server that accepts and never answers, with the production 30 s timeout, three passes each.
   - Supply-chain sweep with the tooling actually present: `uv`-managed `pip-audit 2.10.1` over the installed (locked) environment, `backend/tools/check_torch_osv.py` against the live OSV API, and `pnpm audit --audit-level high` (the exact CI command) in `frontend/`. Limits stated honestly below (pip-audit cannot see torch; the frontend gate is severity-thresholded; no SCA/lockfile-diff tooling or OSV batch client exists in this environment, so "vulnerability sweep" here means exactly these three gates).
 
 - **Findings**:
@@ -1361,7 +1361,7 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
     - Redaction (AUDIT-4E-8): `test_scrub_only_catches_prefix_or_length_shaped_secrets`.
     - Fernet positive proof: `test_every_ai_provider_write_path_stores_fernet_ciphertext`.
     - Supply-chain gates: `test_gate_is_wired_into_ci_without_a_swallowing_operator`, `test_torch_is_actually_present_in_the_audited_lockfile`, `test_advisory_makes_the_gate_exit_nonzero`, `test_unverifiable_osv_fails_closed`, `test_unreadable_lockfile_is_a_hard_error`, `test_lockfile_without_torch_is_a_pass`.
-    - Scratch probes (**NOT committed** — Rule 10; under `Prompts/Pending/Finders/PROMPT-003/scratch/`): `probe_ai_llm_hang_budget.py`, `probe_ai_llm_hang_multikey.py`. No production file was modified (Rule 1).
+    - Scratch probes (**preserved for reproducibility** under `Prompts/Pending/Finders/PROMPT-003/scratch/`, per the effort's precedent — Rule 5/10: not pytest, not part of any suite): `probe_ai_llm_hang_budget.py`, `probe_ai_llm_hang_multikey.py`. No production file was modified (Rule 1).
 
 - **Opportunities / Innovation ideas observed** (Rule 17 — not severity-scored, not gap-driven):
     - **Idea**: O-4E-1 — one shared outbound-fetch factory
