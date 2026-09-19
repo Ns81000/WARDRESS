@@ -1080,3 +1080,139 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
 
 - **Commit**: fedfbf7 — PROMPT-003 Audit Phase 4C: API-surface repro tests + live probe script (diagnosis only); this log entry is committed immediately after, referencing that hash (not pushed).
 - **Next phase kickoff prompt**: delivered in chat only — never written to this log.
+
+### [DONE] PROMPT-003 Audit Phase 4D — Fresh-Eyes Code Audit: Task Orchestration, Alert & Remediation Delivery
+
+- **Prompt**: PROMPT-003-capture-detection-audit-and-stress-hardening.md
+- **Session date**: 2026-09-19
+- **Assigned subsystem**: §4 Audit Phase 4D — `backend/worker/scan_tasks.py`, `worker/remediation_tasks.py`, `worker/alert_tasks.py`, `worker/beat_tasks.py`, `worker/celery_app.py`, `app/alerting.py`, `app/remediation.py`, `app/explain.py`, `app/site_icons.py`, templates (`email/alert.html`, `email/test.html`, `report/report.html`). Caller/callee seams traced: `worker/db.py` (fresh engine per task), `app/scanning.py` (STALE_INFLIGHT, adaptive cadence), `app/tasks.py`, `app/ssrf.py` + `app/ssrf_transport.py`, `app/routers/remediation.py` (confirm/dismiss claims), `app/routers/alerts.py`, `app/reporting.py` + `app/routers/reports.py` (report.html renderer), `app/models.py` (Alert/AlertDelivery/RemediationExecution/RemediationHook), and the delivery-path suites.
+
+- **Cold-read verification of the phase's named hunt areas**:
+
+| Hunt area | Verdict | Evidence |
+|---|---|---|
+| Scan/baseline crash mid-write consistency | Verified within its documented limits | `capture_baseline`/`run_scan` wrappers contain every unexpected error and land the row terminal-failed (`_mark_baseline_failed`/`_mark_scan_failed`, no-op-safe on completed rows); soft/hard limits 420/480 (`celery_app.py:44-45`) sit under STALE_INFLIGHT (10 min); baseline promotion is demote+promote in one transaction. Residual non-atomic artifact writes / no fencing / janitor-state mismatch already logged as AUDIT-3-4 (Low) — cross-referenced, not re-found. |
+| Alert row creation unreachability on worker death (AUDIT-4B-1) | CONFIRMED — still open | Cold re-read: terminal commit → `_create_alert` (separate commit; sole `Alert(` creation site, `scan_tasks.py:366-381`) → `_create_remediations` → `_schedule_next`; `_run_scan` redelivery early-returns `scan-already-completed` before all three; `resweep_undelivered` only re-enqueues deliveries for alerts that EXIST. 4B's committed repro `test_phase4b_orchestration_repros.py` re-ran green this session. No duplicate finding logged — AUDIT-4B-1 stands as canonical. |
+| Alert delivery idempotency and retry backpressure | Gaps found | AUDIT-4D-1 (any-row guard orphans later channels after a mid-loop crash), AUDIT-4D-2 (check-then-act guard double-sends under concurrency), AUDIT-4D-6 (channel-less alerts re-swept forever). Positive: failures are rows (visible), no Celery retry storms (wrapper returns "error", message acked), muted sites write skipped rows (terminating the sweep). |
+| Human-approval gating on remediation webhooks | Verified solid, one Low edge | Default `requires_manual_confirm=True` → `pending_confirm`; only the analyst/admin confirm endpoint's conditional-UPDATE claim moves a row to `queued`; auto hooks are explicit opt-ins cooldown-downgraded into the confirm queue; `fire_remediation` fires ONLY queued rows; dismissed rows never fire; hook deletion cascades queued executions (test-pinned). Edge logged as AUDIT-4D-7 (queued auto firings survive a mid-flight flip of the hook to manual-confirm). |
+| Remediation crash-after-claim windows (AUDIT-2B-3) | PARTIALLY CLOSED — verified with residue | 2B-3's "terminal `confirmed` row, 409 forever" no longer exists: `_fire` claims via conditional UPDATE stamping `executed_at` while the row stays `queued` under a STALE_INFLIGHT lease (`remediation_tasks.py:55-70`); the resweep re-enqueues queued rows past a 5-min grace; the router's stale re-confirm path reclaims confirmed-but-unenqueued rows after STALE_INFLIGHT; `test_remediation_claim_race.py` (10 tests) green. Residue inherent to the remedy: reclaim after lease expiry re-POSTs without knowing whether the first POST landed — at-least-once firing semantics (pinned one-way by `test_fresh_claim_blocks_retry_until_stale_window_passes`: fresh claim blocks, stale claim re-POSTs). Payload carries `scan_id` for receiver-side dedupe. Logged as accepted-by-design residue under 2B-3, not a new finding. |
+| Beat interval shortening starvation | No new finding | Dispatcher claims oldest-due-first with per-site error isolation and a CAS claim (`Site.next_scan_at == seen_next_scan_at`); overlapping ticks arbitrate safely (loser skips); MAX_DISPATCH_PER_TICK bounds each tick. Overload amplification (AUDIT-4B-2) and cadence pinning (AUDIT-4-2) are already logged; no individual-site starvation path found beyond those. |
+| SSRF redirect validation in site_icons.py | Gaps found | Redirect-to-internal IS closed (manual hops, scheme check, per-hop re-gate; `test_redirect_chain_hop_validation_rejects_internal_landing` green). But the fetch rides an unpinned `httpx.AsyncClient`: AUDIT-4D-3 (check-vs-connect rebinding window the raw-httpx stack elsewhere closes with `SSRFPinningTransport`) and AUDIT-4D-4 (the "size-capped so a hostile server cannot exhaust memory" docstring claim is not delivered — `client.get` buffers the full body before truncation). |
+- **Findings**:
+
+    - **ID**: AUDIT-4D-1
+    - **Title**: A mid-delivery crash permanently orphans every channel after the crash point — the "any delivery row exists" guard and the zero-rows resweep predicate can never re-arm a partially-delivered alert
+    - **Severity**: High — justified per §6.4 ("a documented spec requirement simply not met — a true Gap"): alert_tasks.py's module contract states "Delivery failures become alert_deliveries rows with status=failed and a user-safe detail, visible in the dashboard" — after a mid-loop crash the later channels have NO rows: no failure record, nothing visible, no retry path ever. The window is real and WIDER than AUDIT-4B-1's: per-channel commits span the whole delivery loop (SMTP/Apprise timeouts are 20-40 s each), and the identical loss is produced by a DB hiccup on any per-channel commit (exception propagates, wrapper returns "error", message is acked — no redelivery). Detection→notification is the system's core output (same justification standard as 4B-1's High).
+    - **Subsystem / file(s)**: `worker/alert_tasks.py` (`_deliver_alert` any-row guard :77-81, per-channel commit :162-166), `worker/beat_tasks.py` (`_resweep_undelivered` zero-rows predicate :326-346)
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4d_delivery_repros.py::test_crash_mid_delivery_orphans_remaining_channels_permanently` — two channels; the second channel's send raises; the first row is committed; the re-run returns "already-delivered"; `_resweep_undelivered()` reports `alerts_reenqueued == 0`; the second channel has no delivery row and none ever appears.
+    - **Root cause**: the idempotence guard is wrong-grained (ANY delivery row ⇒ "delivered") while commits are per-channel; recovery keys on the same coarse predicate (zero rows), so the two mechanisms meet exactly nowhere for the partial case.
+    - **Proposed remedy category**: idempotence-granularity change — guard/resweep keyed per (alert_id, channel_id) instead of any-row, or a per-channel claim row written before each send (the repo's conditional-UPDATE primitive), plus a sweep pass that re-enqueues alerts having channels without delivery rows.
+    - **Source**: kickoff hunt list "alert delivery idempotency and retry backpressure"; fresh-eyes crash-window analysis of `_deliver_alert`.
+
+    - **ID**: AUDIT-4D-2
+    - **Title**: Alert delivery's idempotence guard is check-then-act, not an atomic claim — concurrent invocations double-send every channel
+    - **Severity**: Medium — a real concurrency-invariant violation (the repo's own standard elsewhere: remediation's claim primitive exists precisely because "duplicate queue messages" are treated as possible), but reaching it requires a concurrent duplicate delivery (resweep re-enqueue while the original is still mid-delivery past the 5-min grace, or a broker duplicate); harm is duplicate notifications, not data corruption.
+    - **Subsystem / file(s)**: `worker/alert_tasks.py:77-81` (plain SELECT guard) vs `worker/remediation_tasks.py:49-70` (the claim primitive this same codebase uses for exactly this hazard)
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4d_delivery_repros.py::test_concurrent_delivery_invocations_double_send` — two concurrent `_deliver_alert` calls with a 0.1 s window inside the send; both return "sent=1"; two AlertDelivery rows exist for the one channel.
+    - **Root cause**: the guard is a plain SELECT with no arbitration between check and first commit; two sessions both observe zero rows.
+    - **Proposed remedy category**: atomic claim — per-(alert, channel) claim row via conditional UPDATE (rowcount arbitrates) before sending, mirroring remediation's `executed_at` lease.
+    - **ID**: AUDIT-4D-3
+    - **Title**: The favicon resolver fetches through an unpinned httpx client — the check-vs-connect DNS rebinding window that the rest of the raw-httpx stack closes is open on this path
+    - **Severity**: Medium — justified: this is the same SSRF hardening class the codebase treats as must-close on every other raw-httpx outbound fetch (worker/probe.py's httpx client and app/remediation.py's webhook POST both ride `SSRFPinningTransport`); here validation resolves DNS at gate time and lets httpx resolve again at connect. Not Critical: `app/ssrf.py` itself is untouched (Rule 12's auto-Critical applies to the policy file, not to consumers); the feature is default-OFF opt-in; the hostname comes from the stored site URL; redirect-to-internal IS closed; and the same residual class is documented-and-accepted for the Playwright path (ssrf.py docstring; AUDIT-3-3). Secondary, same root: `assert_url_allowed`'s blocking `socket.getaddrinfo` runs directly on the event loop for every hop (probe.py/remediation avoid this; site_icons does not).
+    - **Subsystem / file(s)**: `app/site_icons.py` (`_fetch_with_gates` :105-140, `attempt_favicon_fetch` :171-223); contrast `app/ssrf_transport.py`, `app/remediation.py:182-185`
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4d_delivery_repros.py::test_favicon_fetch_builds_unpinned_httpx_client` — instruments `httpx.AsyncClient` construction and proves no `transport` kwarg (no pinning transport) on any client the resolver builds. The rebinding flip itself needs live DNS control (out of hermetic scope) — construction proof plus code-trace.
+    - **Root cause**: the resolver pre-dates/discards the pinning discipline; each hop is re-gated at check time only.
+    - **Proposed remedy category**: transport parity — route the icon client through `SSRFPinningTransport(allow_private_networks=site.allow_private_networks)`; move any remaining per-hop gate's blocking DNS off the event loop (or drop the now-redundant gate in favour of the transport's per-request validation).
+    - **Source**: kickoff hunt list "SSRF redirect validation in site_icons.py"; same class as AUDIT-3-3's unpinned-network-path finding.
+
+    - **ID**: AUDIT-4D-4
+    - **Title**: "Downloads are size-capped (64 KiB) so a hostile server cannot exhaust memory" is not delivered — the body is fully buffered into RAM before the cap truncates
+    - **Severity**: Medium — justified: a partial implementation that does not meet the stated intent (§6.4). A hostile monitored site — the exact adversary this system exists to watch — can stream an arbitrarily large body to any dashboard client that triggers an icon fetch, multiplied by concurrent loads, bounded only by the attacker's goodwill.
+    - **Subsystem / file(s)**: `app/site_icons.py` (`_fetch_with_gates` :136-139: `resp.content[: max_bytes + 1]` after a plain `client.get`; same shape for the 256 KiB homepage cap; docstring claim :21-22)
+    - **Reproduction**: code-trace: `httpx.AsyncClient.get()` reads the entire response body into memory before returning; the slice applies afterwards. `test_site_icons.py::test_oversize_payload_aborts` pins the TRUNCATION contract (payload over the cap is refused) but cannot observe the buffering, because its fake fetcher never exercises real transport buffering.
+    - **Root cause**: the cap is implemented as post-hoc truncation instead of a streaming byte budget.
+    - **Proposed remedy category**: streaming read — `client.stream(...)` with an incremental byte budget that aborts past max_bytes+1, applied to both the icon and homepage fetches.
+    - **Source**: kickoff hunt list (SSRF/validation in site_icons.py); docstring-vs-reality check (Rule 13).
+
+
+    - **Source**: kickoff hunt list "alert delivery idempotency"; contrast with the remediation path's discipline.
+
+
+    - **ID**: AUDIT-4D-5
+    - **Title**: The auto-fire cooldown is anchored to execution `created_at`, not `executed_at` — a firing delayed by queue backlog lands outside the intended cooldown window
+    - **Severity**: Low — bounded harm (at most one extra unattended firing per boundary case) and the conservative direction is preserved (the brake still downgrades to the confirm queue; manual-confirm hooks are never affected).
+    - **Subsystem / file(s)**: `app/remediation.py:124-138` (`func.max(RemediationExecution.created_at)` over queued/succeeded/failed rows)
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4d_delivery_repros.py::test_auto_fire_cooldown_anchors_on_created_at_not_executed_at` — a prior execution created 40 min ago but actually POSTed 5 min ago; a fresh flagged scan's auto firing is queued for unattended execution instead of being parked in the confirm queue.
+    - **Root cause**: the cooldown proxy uses row-creation time because rows exist before they fire; `executed_at` (the actual outbound stamp) is never consulted.
+    - **Proposed remedy category**: anchor the window on `max(executed_at)` with a `created_at` fallback for never-fired rows — noting that pending_confirm→queued→fired lifecycle means "held" rows must keep counting from creation.
+    - **Source**: kickoff hunt list (human-approval gating / flap control); fresh-eyes read of the cooldown query.
+
+    - **ID**: AUDIT-4D-6
+    - **Title**: Alerts that can never be delivered (no active channels) are re-enqueued by the re-delivery sweep on every run, forever
+    - **Severity**: Low — pure churn (one SELECT plus one send_task attempt every 5 min per stranded alert, capped at 200/run), no incorrect behavior; but it is unbounded-over-time work for a permanently-undeliverable state, with no operator signal that the alert went nowhere.
+    - **Subsystem / file(s)**: `worker/alert_tasks.py:99-104` (the "no-channels" early return writes nothing), `worker/beat_tasks.py:326-346` (zero-rows predicate)
+    - **Reproduction**: hermetic, committed-passing: `tests/test_phase4d_delivery_repros.py::test_no_channel_alert_resweep_reenqueues_forever` — an aged alert with no channels: the sweep re-enqueues it (count 1), delivery returns "no-channels" with zero rows, and the next sweep matches it again (count 1).
+    - **Root cause**: the sweep's recovery predicate (zero delivery rows) cannot distinguish "enqueue lost" from "delivery structurally impossible"; the no-channels path never writes a row, so the predicate never clears.
+    - **Proposed remedy category**: terminal-state marker — a `skipped` delivery row ("no channels configured") or an alert-level state so the sweep's predicate terminates, surfaced in the dashboard either way.
+    - **Source**: kickoff hunt list "retry backpressure"; fresh-eyes trace of the resweep predicate.
+
+    - **ID**: AUDIT-4D-7
+    - **Title**: Flipping a hook to `requires_manual_confirm=True` does not recall already-queued auto firings — human-approval gating is not retroactive
+    - **Severity**: Low — narrow window (a queued execution fires within one worker pickup, or is reclaimed after the 10-min stale lease and fires then); the operator's policy change has no effect on executions already past the approval gate. Bounded, timing-dependent, and arguably the documented design (rows are only ever claimed by an explicit confirm OR by the explicit auto opt-in at creation).
+    - **Subsystem / file(s)**: `app/routers/remediation.py` (`update_hook` flips `requires_manual_confirm`; no UPDATE touches existing `queued` executions), `worker/remediation_tasks.py` (`_fire` fires any queued row within its lease)
+    - **Reproduction**: code-trace: an auto hook created a queued execution awaiting a worker → the admin sets `requires_manual_confirm=True` → the queued row still fires on the next pickup (or on stale-lease reclaim). No test pins or prevents this.
+    - **Root cause**: the manual-confirm gate is evaluated at execution-creation time only; there is no recall/hold primitive for already-queued rows.
+    - **Proposed remedy category**: policy-surface decision — either document the boundary explicitly (approval gating is evaluated per firing creation) or add a sweep that downgrades queued rows of hooks whose `requires_manual_confirm` is currently True back to `pending_confirm`.
+    - **Source**: kickoff hunt list "human-approval gating on remediation webhooks".
+
+    - **ID**: AUDIT-4D-8
+    - **Title**: Concurrent "explain this incident" requests race past the cache check and both pay the LLM call
+    - **Severity**: Low — wasted provider cost and a benign last-write-wins on the cached explanation; no correctness or security impact (both writes are valid text).
+    - **Subsystem / file(s)**: `app/explain.py:146-184` (cache check → generate → write, with no claim in between)
+    - **Reproduction**: code-trace: two concurrent requests for the same unexplained scan both observe `scan.explanation is None`, both call `task.generate`, both commit; the second overwrites the first.
+    - **Root cause**: cache-fill has no single-flight primitive (contrast the repo's conditional-UPDATE claim pattern used by site_icons/remediation).
+    - **Proposed remedy category**: single-flight — conditional `UPDATE scans ... WHERE id = :id AND explanation IS NULL` (or a claim column) so only the first generator's bill is paid; losers read the winner's row.
+    - **Source**: fresh-eyes read of `explain_scan` (in-scope target file).
+
+
+- **Log-vs-reality discrepancies**: none. Every Phase 1-7-era claim touching these files reproduced: `test_phase4_alerting.py`'s delivery/idempotence/muted/undecryptable suite (20 tests), `test_remediation_claim_race.py` (10 claim-race proofs incl. the fresh-vs-stale lease window), `test_phase31_critical_paths.py` (firing-path + wrapper contracts), `test_phase4b_orchestration_repros.py` (4B-1/4B-2 repros), `test_phase26_remediation_hooks.py`, `test_phase5_remediation.py`, `test_phase37_scheduling_agent_remediation.py`, `test_scheduler.py`, `test_site_icons.py` — all green before and after my additions. One documentation-vs-reality divergence found and logged as AUDIT-4D-4 (the site_icons docstring's memory-exhaustion claim), and one contract-vs-reality divergence logged as AUDIT-4D-1 (the alert_tasks module docstring's "failures become ... rows ... visible in the dashboard" promise).
+
+- **New hermetic tests added this phase**: `backend/tests/test_phase4d_delivery_repros.py` — 5 tests, all committed-passing (Rule 5/10):
+  - `test_crash_mid_delivery_orphans_remaining_channels_permanently` — AUDIT-4D-1: partial delivery is permanently orphaned; sweep cannot re-arm it.
+  - `test_concurrent_delivery_invocations_double_send` — AUDIT-4D-2: the guard is check-then-act; one channel POSTed twice.
+  - `test_no_channel_alert_resweep_reenqueues_forever` — AUDIT-4D-6: the zero-rows predicate re-matches a permanently undeliverable alert on every run.
+  - `test_auto_fire_cooldown_anchors_on_created_at_not_executed_at` — AUDIT-4D-5: cooldown keyed on creation, not the outbound POST stamp.
+  - `test_favicon_fetch_builds_unpinned_httpx_client` — AUDIT-4D-3: no pinning transport on any client the favicon resolver builds.
+  - Hermeticity notes: `celery_app.send_task` is stubbed at module level (the real Redis result backend retry-connects for ~20 s per call, which would stall the suite); `task_session` is pointed at the real disposable Postgres via the suite's alembic-migrated schema. No production file was touched (Rule 1).
+
+- **Opportunities / Innovation ideas observed** (Rule 17 — not severity-scored, not gap-driven):
+
+    - **Idea**: O-4D-1 — fleet delivery-health rollup on the health page
+    - **Why it would help**: the delivery path's failure modes are per-row today; a rollup (alerts with any failed delivery in the last 24 h, per-channel failure rates, channel-less alerts, partial-delivery alerts) would turn a silent delivery outage into one number an operator sees immediately.
+    - **Where it touches**: `app/routers/health.py` (summary query), `frontend/src/pages/health.tsx`
+    - **Rough shape of the change**: aggregate `alert_deliveries` by channel_type/status over a window + count alerts whose delivery count < active channel count; render as a small table.
+
+    - **Idea**: O-4D-2 — structured delivery outcome enum instead of free-text `detail`
+    - **Why it would help**: `detail` strings ("SMTP authentication failed", "webhook returned HTTP 500") are human-only today; a small `reason_code` alongside the text would let the UI group failures, let alerting-on-alerting work, and let the resweep's decisions be data-driven rather than predicate-guessing.
+    - **Where it touches**: `app/models.py` (AlertDelivery, RemediationExecution), `worker/alert_tasks.py`, `app/remediation.py`, delivery test fixtures
+    - **Rough shape of the change**: add a nullable code column + a constant map; populate at each failure branch; no behavior change.
+
+    - **Idea**: O-4D-3 — idempotency-key header on remediation webhooks
+    - **Why it would help**: the lease-reclaim path is at-least-once by design (2B-3 residue) and the payload's `scan.id` is the only dedupe handle a receiver has; an explicit `Idempotency-Key: <hook_id>:<scan_id>` header (plus documenting the retry semantics) would let receivers dedupe without reaching into the body.
+    - **Where it touches**: `app/remediation.py::post_webhook` (headers), docs
+    - **Rough shape of the change**: one header dict built from the hook/execution ids already in scope; no contract change to the body.
+
+- **Full regression results** (Windows host, Docker stack up — wardress-app/worker/beat/db/redis + disposable wardress-test-pg on 127.0.0.1:5433; every run against the alembic-migrated production-dialect schema, one pytest session per database):
+  - New repro file: `cd backend && uv run --frozen pytest tests/test_phase4d_delivery_repros.py -q` → **5 passed in 4.36s** (0 failed, 0 skipped).
+  - Delivery-subsystem batch: `uv run --frozen pytest tests/test_phase4_alerting.py tests/test_phase4b_orchestration_repros.py tests/test_remediation_claim_race.py tests/test_phase31_critical_paths.py tests/test_site_icons.py tests/test_scheduler.py tests/test_phase4_scan_integration.py tests/test_phase19_alert_ack_race.py tests/test_phase26_remediation_hooks.py tests/test_phase5_remediation.py tests/test_phase37_scheduling_agent_remediation.py tests/test_phase4d_delivery_repros.py -q` → **146 passed in 109.74s** — 0 failed, 0 skipped.
+  - Lint: `uv run --frozen ruff check tests/test_phase4d_delivery_repros.py` → **All checks passed!**
+  - No production file was modified this phase (Rule 1); the live stack was used read-only (containers inspected, no probes issued).
+
+- **Findings out of phase scope** (logged for the correct future phase, not investigated here):
+  - The unpinned-network-path class on the browser (Playwright) and raw-socket TLS-probe paths is AUDIT-3-3's territory (capture pipeline) — AUDIT-4D-3 records only the favicon-path instance, cross-referencing rather than re-deriving it.
+  - `app/routers/reports.py`'s WeasyPrint rendering internals (worker-thread offload, error mapping) sit in 4C's API-surface scope; only the `report/report.html` template's rendering contract (autoescape, no `|safe`) was checked here.
+  - `worker/telegram_bot.py`'s alert-channel duties were verified only as a caller of the shared alerting helpers; its own transport/parse surface belongs to the ops-agent boundary (§0) and is out of scope.
+
+- **Commit**: `1e0f7d8` — feat(audit-4d): alert/remediation delivery repro tests (diagnosis only); this log entry is committed immediately after, referencing that hash (not pushed).
+- **Next phase kickoff prompt**: delivered in chat only — never written to this log.
+
