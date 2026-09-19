@@ -169,13 +169,13 @@ Every phase in the map below is sized to fit in one context window doing one sub
 2. Supply-Chain & Config: Vulnerability sweep on dependencies, confirm `check_torch_osv.py` runs in CI, check secrets handling, default credentials, image pinning in Dockerfiles.
 
 ### AUDIT PHASE 4F [Phase 10 of 17] — Fresh-Eyes Code Audit: Frontend Capture & Detection Surfaces
-- **Status**: `PENDING — NEXT UP`
+- **Status**: `DONE` (Commit `95bd60e` / `8d282e4`)
 - **Mandatory Next Phase**: AUDIT PHASE 5A [Phase 11 of 17]
 **Target files:** React components/hooks rendering capture health, scan results, verdicts, or alert history, and API-client code.
 **Do:** Full Step 3, cold. Root-cause the `capture-health.test.tsx` flake; check verdict/severity color clarity (degraded vs measured); stale-data races during in-flight scans; accessibility and mixed-script rendering; comment/constant drift (`AUDIT-2B-5`).
 
 ### AUDIT PHASE 5A [Phase 11 of 17] — Stress-Test Catalog: Broad Real-World Baseline (Tier A)
-- **Status**: `PENDING`
+- **Status**: `PENDING — NEXT UP`
 - **Mandatory Next Phase**: AUDIT PHASE 5B [Phase 12 of 17]
 **Do not touch code.** Execute Tier A of `PROMPT-003-stress-site-catalog.md` against the live Docker install using the automated runner `backend/tools/run_stress_catalog.py` (`uv run python tools/run_stress_catalog.py --tier A`).
 - Enforces Rule 18 (minimum 3 passes per site), measures latency and variance, and outputs the markdown table directly.
