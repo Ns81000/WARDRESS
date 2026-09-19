@@ -195,19 +195,44 @@ Every phase in the map below is sized to fit in one context window doing one sub
 ### AUDIT PHASE 7 [Phase 14 of 17] — Chaos & Failure-Injection Testing
 - **Status**: `PENDING`
 - **Mandatory Next Phase**: AUDIT PHASE 8 [Phase 15 of 17]
-**Do not touch code.** Execute 6 fault-injection scenarios per §7 (crash mid-capture, DNS/TLS failure, slow-loris response, malformed HTTP response, SSRF redirect loop, pathologically large DOM), run 3 times each. Classify as safe fail vs silent success vs worker crash.
+**Do not touch code.** Execute fault-injection scenarios per §7 (minimum 7 scenarios, run 3 times each):
+1. Crash mid-capture (worker SIGKILL during Playwright render).
+2. DNS/TLS failure & slow/blackholed DNS hang on event loop (`ssrf_transport.py:72` / `site_icons.py:111-117` `NB-ORC-1`).
+3. Slow-loris response (slow headers/stream).
+4. Malformed HTTP response.
+5. SSRF redirect loop.
+6. Pathologically large DOM (>10MB).
+7. Streaming chunked body memory bomb / worker probe OOM (`probe.py:170,223` buffering before slice `NB-CAP-1`).
+Classify as safe fail vs silent success vs worker crash.
 
 ### AUDIT PHASE 8 [Phase 15 of 17] — Adversarial Detection Accuracy Stress Test
 - **Status**: `PENDING`
 - **Mandatory Next Phase**: AUDIT PHASE 9 [Phase 16 of 17]
 **Do not touch code.** Construct new hermetic attack/benign fixture pairs based on the Phase 2 taxonomy and test through deployed detection pipeline 3 times each. Measure false-negative rate on attacks and false-positive rate on live benign churn.
+- **Mandatory Visual-Only Attack Fixtures (`NB-DET-1`):** Must construct and evaluate three visual-only defacement pairs with unchanged DOM text:
+  1. `<style>` injection with visual defacement (e.g. `body { filter: invert(1) hue-rotate(180deg); }` or absolute overlay).
+  2. `@font-face` glyph hijacking (swapping character glyphs visually while DOM codepoints stay identical).
+  3. `<canvas>` or `<svg>` graphical takeover rendering defacement messages without HTML text.
+- Measure whether these evade alerting (fusing < 0.40 material change bar or < 0.50 flag threshold) and test against benign visual twins (legit brand refresh, webfont swap).
 
 ### AUDIT PHASE 9 [Phase 16 of 17] — Performance Profiling, Infrastructure & Operational Consistency Audit
 - **Status**: `PENDING`
 - **Mandatory Next Phase**: AUDIT PHASE 10 [Phase 17 of 17]
 **Do not touch code.**
 1. **Profiling:** Profile capture and detection pipelines under single and batch load. Identify concrete bottlenecks with measured costs (cold-start embedding, fusion reload, regex, missing DB indexes).
-2. **Infrastructure & Docs:** Verify `docker-compose.yml`, `.env.example`, `scripts/*.ps1`, docs, and `SKILL.md` against audited runtime behavior. Verify documented safety guarantees (SSRF gating, human approval on remediations, ReDoS timeout, Fernet encryption, RBAC).
+2. **PowerShell Scripts & Operational Lifecycle Audit (`OPS-1` to `OPS-8`):**
+   - `update.ps1`: Verify `.env.example` vs `.env` merge behavior (missing keys leading to broken upgrades).
+   - `validate.ps1`: Verify resource check thresholds (<4 GB RAM advice vs 12 warm prefork workers needing 7-8+ GB).
+   - `install.ps1`: Verify Node/pnpm bootstrapping and preflight checks.
+   - `diagnostics.ps1`: Verify secret scrubbing rules (ensure `wk_` API keys and tokens in service logs are scrubbed).
+   - Backup & Restore Verification: Run full `uninstall.ps1` backup → fresh install → `RESTORE.txt` replay test to verify zero data loss.
+3. **Docker Topology & Resource Constraints:**
+   - Verify `docker-compose.yml` service dependencies (`beat` missing `depends_on: db`).
+   - Audit worker memory limits, cgroups, healthchecks, and prefork `--max-tasks-per-child` recycling.
+4. **Soft-Block Baseline Poisoning (`NB-CAP-2`):**
+   - Probe baseline creation against 200 OK soft-block/paywall/verify-human pages (`nytimes.com`, `wsj.com`) to verify if non-error block pages are mistakenly stored as healthy baselines.
+5. **Documentation Drift vs Codebase Reality (`DOC-1` to `DOC-8`):**
+   - Cross-check `docs/docs.json`, `docs/*.mdx`, `README.md`, and `SKILL.md` against live code (linked stylesheet claims, noise floor/changed gate reality, Telegram bot direct DB bypass vs API diagram, hop-by-hop DNS rebinding claims, regex timeout guarantees, public API docs exposure).
 
 ### AUDIT PHASE 10 [Phase 17 of 17] — Consolidated Findings Register, Opportunities Register & Decision Gate
 - **Status**: `PENDING`
@@ -287,7 +312,14 @@ States explicitly: total findings by severity (should be zero Critical/High), ev
 
 - Minimum three load levels for concurrency testing (configured limit, 2×, 5×), each run a minimum of three times (Rule 18).
 - Minimum soak duration: at least 50 sequential capture+scan cycles on one worker without restart, or longer if the codebase's own worker-recycle policy is longer — state which and why.
-- Minimum six distinct fault-injection scenarios, each run a minimum of three times.
+- Minimum seven distinct fault-injection scenarios, each run a minimum of three times:
+  1. Crash mid-capture (worker SIGKILL during render).
+  2. DNS/TLS failure & slow/blackholed DNS hang on event loop (`NB-ORC-1`).
+  3. Slow-loris response.
+  4. Malformed HTTP response.
+  5. SSRF redirect loop.
+  6. Pathologically large DOM (>10MB).
+  7. Streaming chunked body memory bomb / worker probe OOM (`NB-CAP-1`).
 - Every number reported with the measurement method stated (profiler used, sample size, environment) — a single unrepeated observation is not a measurement.
 
 ---
