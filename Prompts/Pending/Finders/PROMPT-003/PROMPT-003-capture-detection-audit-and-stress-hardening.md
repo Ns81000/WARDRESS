@@ -161,7 +161,7 @@ Every phase in the map below is sized to fit in one context window doing one sub
 **Do:** Full Step 3, cold. Hunt for: scan/baseline crash mid-write consistency; alert row creation unreachability on worker death (`AUDIT-4B-1`); alert delivery idempotency and retry backpressure; human-approval gating on remediation webhooks; remediation crash-after-claim windows (`AUDIT-2B-3`); beat interval shortening starvation; SSRF redirect validation in `site_icons.py`.
 
 ### AUDIT PHASE 4E [Phase 09 of 17] — AI Provider Integration, Supply-Chain & Infrastructure Configuration
-- **Status**: `PENDING — NEXT UP`
+- **Status**: `DONE` (Commit `e100045` / `e7558d6`)
 - **Mandatory Next Phase**: AUDIT PHASE 4F [Phase 10 of 17]
 **Target files:** `backend/app/ai_*.py`, `llm.py`, `backend/worker/llm_escalation.py`, `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `pnpm-lock.yaml`, Dockerfiles, `docker-compose.yml`, `.env.example`, `.github/workflows/ci.yml`, `backend/tools/check_torch_osv.py`.
 **Do:** Full Step 3, cold.
@@ -169,7 +169,7 @@ Every phase in the map below is sized to fit in one context window doing one sub
 2. Supply-Chain & Config: Vulnerability sweep on dependencies, confirm `check_torch_osv.py` runs in CI, check secrets handling, default credentials, image pinning in Dockerfiles.
 
 ### AUDIT PHASE 4F [Phase 10 of 17] — Fresh-Eyes Code Audit: Frontend Capture & Detection Surfaces
-- **Status**: `PENDING`
+- **Status**: `PENDING — NEXT UP`
 - **Mandatory Next Phase**: AUDIT PHASE 5A [Phase 11 of 17]
 **Target files:** React components/hooks rendering capture health, scan results, verdicts, or alert history, and API-client code.
 **Do:** Full Step 3, cold. Root-cause the `capture-health.test.tsx` flake; check verdict/severity color clarity (degraded vs measured); stale-data races during in-flight scans; accessibility and mixed-script rendering; comment/constant drift (`AUDIT-2B-5`).
