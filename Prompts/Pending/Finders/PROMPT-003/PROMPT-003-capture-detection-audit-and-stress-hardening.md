@@ -155,13 +155,13 @@ Every phase in the map below is sized to fit in one context window doing one sub
 **Do:** Full Step 3, cold. Hunt for: tenant/account data leakage across routes; Admin/Analyst/Viewer RBAC boundary enforcement; rate-limit bypass paths; session/token invalidation and edge cases; unauthenticated route exposure (`/docs`, `/openapi.json`).
 
 ### AUDIT PHASE 4D [Phase 08 of 17] — Fresh-Eyes Code Audit: Task Orchestration, Alert & Remediation Delivery
-- **Status**: `PENDING — NEXT UP`
+- **Status**: `DONE` (Commit `1e0f7d8` / `59a098d`)
 - **Mandatory Next Phase**: AUDIT PHASE 4E [Phase 09 of 17]
 **Target files:** `backend/worker/scan_tasks.py`, `remediation_tasks.py`, `alert_tasks.py`, `beat_tasks.py`, `celery_app.py`, `app/alerting.py`, `app/remediation.py`, `app/explain.py`, templates (`alert.html`, `test.html`, `report.html`), `app/site_icons.py`.
 **Do:** Full Step 3, cold. Hunt for: scan/baseline crash mid-write consistency; alert row creation unreachability on worker death (`AUDIT-4B-1`); alert delivery idempotency and retry backpressure; human-approval gating on remediation webhooks; remediation crash-after-claim windows (`AUDIT-2B-3`); beat interval shortening starvation; SSRF redirect validation in `site_icons.py`.
 
 ### AUDIT PHASE 4E [Phase 09 of 17] — AI Provider Integration, Supply-Chain & Infrastructure Configuration
-- **Status**: `PENDING`
+- **Status**: `PENDING — NEXT UP`
 - **Mandatory Next Phase**: AUDIT PHASE 4F [Phase 10 of 17]
 **Target files:** `backend/app/ai_*.py`, `llm.py`, `backend/worker/llm_escalation.py`, `backend/pyproject.toml`, `backend/uv.lock`, `frontend/package.json`, `pnpm-lock.yaml`, Dockerfiles, `docker-compose.yml`, `.env.example`, `.github/workflows/ci.yml`, `backend/tools/check_torch_osv.py`.
 **Do:** Full Step 3, cold.
