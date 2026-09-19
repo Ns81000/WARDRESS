@@ -1,0 +1,98 @@
+=== audit4f flake probe start 2026-09-19T11:22:06.6236291+05:30 ===
+--- Phase A: 15 isolated runs: tests/capture-health.test.tsx ---
+A 1: exit=0 wall=13.3s
+   passed     207ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      60ms  health page shows no invented zeros when no scans carry capture evidence
+   passed     114ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      27ms  site detail shows no hint when the baseline matches the current capture method
+A 2: exit=0 wall=4.4s
+   passed     294ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      71ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      63ms  site detail shows the re-baseline hint for an old-method baseline
+   passed     409ms  site detail shows no hint when the baseline matches the current capture method
+A 3: exit=0 wall=4s
+   passed     171ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      49ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      65ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      24ms  site detail shows no hint when the baseline matches the current capture method
+A 4: exit=0 wall=4s
+   passed     152ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      51ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      59ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      32ms  site detail shows no hint when the baseline matches the current capture method
+A 5: exit=0 wall=4.2s
+   passed     152ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      51ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      51ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      21ms  site detail shows no hint when the baseline matches the current capture method
+A 6: exit=0 wall=4.6s
+   passed     155ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      46ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      52ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      22ms  site detail shows no hint when the baseline matches the current capture method
+A 7: exit=0 wall=4s
+   passed     169ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      45ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      51ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      22ms  site detail shows no hint when the baseline matches the current capture method
+A 8: exit=0 wall=4.6s
+   passed     190ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      58ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      69ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      33ms  site detail shows no hint when the baseline matches the current capture method
+A 9: exit=0 wall=4.5s
+   passed     205ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      56ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      53ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      25ms  site detail shows no hint when the baseline matches the current capture method
+A10: exit=0 wall=4.4s
+   passed     171ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      46ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      58ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      25ms  site detail shows no hint when the baseline matches the current capture method
+A11: exit=0 wall=4.8s
+   passed     212ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      59ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      59ms  site detail shows the re-baseline hint for an old-method baseline
+   passed     467ms  site detail shows no hint when the baseline matches the current capture method
+A12: exit=0 wall=4.8s
+   passed     209ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      61ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      72ms  site detail shows the re-baseline hint for an old-method baseline
+   passed     514ms  site detail shows no hint when the baseline matches the current capture method
+A13: exit=0 wall=4s
+   passed     168ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      41ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      56ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      23ms  site detail shows no hint when the baseline matches the current capture method
+A14: exit=0 wall=4.1s
+   passed     166ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      49ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      52ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      23ms  site detail shows no hint when the baseline matches the current capture method
+A15: exit=0 wall=4s
+   passed     169ms  health page renders capture-quality buckets exactly as the API counted them
+   passed      45ms  health page shows no invented zeros when no scans carry capture evidence
+   passed      52ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      22ms  site detail shows no hint when the baseline matches the current capture method
+--- Phase A complete 2026-09-19T11:23:20.7490533+05:30 ---
+--- Phase B: full suite x3 (pnpm test) ---
+B1: exit=0 wall=15.5s
+   passed     724ms  health page renders capture-quality buckets exactly as the API counted them
+   passed     171ms  health page shows no invented zeros when no scans carry capture evidence
+   passed     277ms  site detail shows the re-baseline hint for an old-method baseline
+   passed     116ms  site detail shows no hint when the baseline matches the current capture method
+   totals: 133 tests, 0 failed, 133 passed
+B2: exit=0 wall=13.3s
+   passed     609ms  health page renders capture-quality buckets exactly as the API counted them
+   passed     180ms  health page shows no invented zeros when no scans carry capture evidence
+   passed     166ms  site detail shows the re-baseline hint for an old-method baseline
+   passed     110ms  site detail shows no hint when the baseline matches the current capture method
+   totals: 133 tests, 0 failed, 133 passed
+B3: exit=0 wall=13.5s
+   passed     595ms  health page renders capture-quality buckets exactly as the API counted them
+   passed     187ms  health page shows no invented zeros when no scans carry capture evidence
+   passed     174ms  site detail shows the re-baseline hint for an old-method baseline
+   passed      73ms  site detail shows no hint when the baseline matches the current capture method
+   totals: 133 tests, 0 failed, 133 passed
+=== audit4f flake probe end 2026-09-19T11:24:03.2367374+05:30 ===

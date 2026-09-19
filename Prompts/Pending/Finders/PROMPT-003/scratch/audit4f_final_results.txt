@@ -1,0 +1,35 @@
+=== audit4f final batch start 2026-09-19T11:53:59.6179448+05:30 ===
+  durations: 2527/61/11/1/1/1/1/65/48/19
+REPRO pass 1: exit=0 wall=6.6s tests=10 failed=0 passed=10
+  durations: 2535/79/14/1/1/1/1/40/60/24
+REPRO pass 2: exit=0 wall=7.3s tests=10 failed=0 passed=10
+  durations: 2512/69/16/1/1/1/1/41/45/17
+REPRO pass 3: exit=0 wall=7.5s tests=10 failed=0 passed=10
+  capture-health     619ms health page renders capture-quality buckets exactly as the API counted them
+  capture-health     118ms health page shows no invented zeros when no scans carry capture evidence
+  capture-health     156ms site detail shows the re-baseline hint for an old-method baseline
+  capture-health     144ms site detail shows no hint when the baseline matches the current capture method
+FULL pass 1: exit=1 wall=20s files=79 tests=150 failed=0 passed=150
+  RAW tail:
+JSON report written to C:/Users/Ns8pc/Music/WARDRESS/Prompts/Pending/Finders/PROMPT-003/scratch/audit4f_full_p1.json
+
+  capture-health     545ms health page renders capture-quality buckets exactly as the API counted them
+  capture-health     136ms health page shows no invented zeros when no scans carry capture evidence
+  capture-health     136ms site detail shows the re-baseline hint for an old-method baseline
+  capture-health     918ms site detail shows no hint when the baseline matches the current capture method
+FULL pass 2: exit=1 wall=18.9s files=79 tests=150 failed=0 passed=150
+  RAW tail:
+JSON report written to C:/Users/Ns8pc/Music/WARDRESS/Prompts/Pending/Finders/PROMPT-003/scratch/audit4f_full_p2.json
+
+  capture-health     579ms health page renders capture-quality buckets exactly as the API counted them
+  capture-health     147ms health page shows no invented zeros when no scans carry capture evidence
+  capture-health     158ms site detail shows the re-baseline hint for an old-method baseline
+  capture-health     997ms site detail shows no hint when the baseline matches the current capture method
+FULL pass 3: exit=1 wall=17.5s files=79 tests=151 failed=0 passed=151
+  RAW tail:
+JSON report written to C:/Users/Ns8pc/Music/WARDRESS/Prompts/Pending/Finders/PROMPT-003/scratch/audit4f_full_p3.json
+
+LINT exit=0
+  Found 13 warnings and 0 errors.
+TSC exit=0 output=
+=== audit4f final batch end 2026-09-19T11:55:26.7604858+05:30 ===

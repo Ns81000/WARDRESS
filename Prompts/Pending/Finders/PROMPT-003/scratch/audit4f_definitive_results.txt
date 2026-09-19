@@ -1,0 +1,34 @@
+=== definitive batch start 2026-09-19T11:56:24.0586967+05:30 ===
+  durations: 2506/52/8/0/0/1/1/1/25/45/17
+REPRO pass 1: exit=0 wall=6.4s tests=11 failed=0 passed=11 success=True
+  durations: 2504/53/8/1/1/1/1/1/41/45/17
+REPRO pass 2: exit=0 wall=6.4s tests=11 failed=0 passed=11 success=True
+  durations: 2514/54/8/0/0/1/1/1/41/44/16
+REPRO pass 3: exit=0 wall=6.3s tests=11 failed=0 passed=11 success=True
+FULL pass 1: exit=0 wall=12.8s
+  An error occurred in the <SiteDetailPage> component.
+  Consider adding an error boundary to your tree to customize error handling behavior.
+  Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+  Γ£ô fails iff the data path outlives the implicit 1000 ms waitFor budget  2678ms
+   Test Files  22 passed (22)
+        Tests  144 passed (144)
+     Duration  11.64s (transform 4.24s, setup 0ms, import 37.81s, tests 15.44s, environment 51.94s)
+FULL pass 2: exit=0 wall=13.1s
+  An error occurred in the <SiteDetailPage> component.
+  Consider adding an error boundary to your tree to customize error handling behavior.
+  Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+  Γ£ô fails iff the data path outlives the implicit 1000 ms waitFor budget  2778ms
+   Test Files  22 passed (22)
+        Tests  144 passed (144)
+     Duration  11.89s (transform 5.11s, setup 0ms, import 39.35s, tests 14.77s, environment 53.74s)
+FULL pass 3: exit=0 wall=13.6s
+  An error occurred in the <SiteDetailPage> component.
+  Consider adding an error boundary to your tree to customize error handling behavior.
+  Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+  Γ£ô fails iff the data path outlives the implicit 1000 ms waitFor budget  2737ms
+   Test Files  22 passed (22)
+        Tests  144 passed (144)
+     Duration  12.39s (transform 4.93s, setup 0ms, import 41.43s, tests 15.02s, environment 57.15s)
+LINT exit=0 : Found 13 warnings and 0 errors.
+TSC exit=0 output=[]
+=== definitive batch end 2026-09-19T11:57:29.8256171+05:30 ===

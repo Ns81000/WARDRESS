@@ -1,0 +1,22 @@
+=== load-flake probe start 2026-09-19T11:25:44.9674833+05:30 (K=5 concurrent, R=4 rounds) ===
+round=1 k=1 verdict=PASS
+round=1 k=2 verdict=PASS
+round=1 k=3 verdict=PASS
+round=1 k=4 verdict=PASS
+round=1 k=5 verdict=PASS
+round=2 k=1 verdict=PASS
+round=2 k=2 verdict=PASS
+round=2 k=3 verdict=PASS
+round=2 k=4 verdict=PASS
+round=2 k=5 verdict=PASS
+round=3 k=1 verdict=PASS
+round=3 k=2 verdict=PASS
+round=3 k=3 verdict=PASS
+round=3 k=4 verdict=PASS
+round=3 k=5 verdict=PASS
+round=4 k=1 verdict=PASS
+round=4 k=2 verdict=PASS
+round=4 k=3 verdict=PASS
+round=4 k=4 verdict=PASS
+round=4 k=5 verdict=PASS
+=== load-flake probe end 2026-09-19T11:26:16.0786246+05:30 ===
