@@ -174,50 +174,40 @@ Every phase in the map below is sized to fit in one context window doing one sub
 **Target files:** React components/hooks rendering capture health, scan results, verdicts, or alert history, and API-client code.
 **Do:** Full Step 3, cold. Root-cause the `capture-health.test.tsx` flake; check verdict/severity color clarity (degraded vs measured); stale-data races during in-flight scans; accessibility and mixed-script rendering; comment/constant drift (`AUDIT-2B-5`).
 
-### AUDIT PHASE 5A [Phase 11 of 17] — Stress-Test Catalog: Broad Real-World Baseline (Tier A)
-- **Status**: `PENDING — NEXT UP`
-- **Mandatory Next Phase**: AUDIT PHASE 5B [Phase 12 of 17]
-**Do not touch code.** Execute Tier A of `PROMPT-003-stress-site-catalog.md` against the live Docker install using the automated runner `backend/tools/run_stress_catalog.py` (`uv run python tools/run_stress_catalog.py --tier A`).
-- Enforces Rule 18 (minimum 3 passes per site), measures latency and variance, and outputs the markdown table directly.
-- For every failure, log individual root cause and Fix-candidate/Accepted-risk disposition per Rule 19.
+### PARALLEL EXECUTION MODEL FOR PENDING PHASES (5A–10)
 
-### AUDIT PHASE 5B [Phase 12 of 17] — Stress-Test Catalog: Advanced Bot Defenses & Exotic Edge Categories (Tiers B & C)
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: AUDIT PHASE 6 [Phase 13 of 17]
-**Do not touch code.** Execute Tiers B and C of `PROMPT-003-stress-site-catalog.md` (Akamai, DataDome, PerimeterX, AWS WAF, Turnstile, hard e-commerce, WebSockets, infinite scroll, heavy hydration, extreme DOMs) using `backend/tools/run_stress_catalog.py` (`--tier B` and `--tier C`).
-- Same Rule 18 repeatability and Rule 19 individual root-cause discipline.
+> [!IMPORTANT]
+> **SUBAGENT-BASED EXECUTION**: The remaining phases (5A–10) are designed to execute in a **single session** using parallel subagents organized into 3 waves. This replaces the original one-phase-per-session model for these phases only. A coordinator agent orchestrates the waves, collects results into scratch files, and writes unified log entries. See `SESSION-B-KICKOFF.md` for the complete coordinator instructions.
+>
+> **Prerequisite**: Session A (deep verification of completed phases 1–4F) must be completed first. Its findings feed into these phases.
 
-### AUDIT PHASE 6 [Phase 13 of 17] — Concurrency & Scale Stress Testing
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: AUDIT PHASE 7 [Phase 14 of 17]
-**Do not touch code.** Execute concurrency test regime per §7: load levels (1x, 2x, 5x) run 3 times each; 50-cycle soak run; measure queueing, CPU/memory, connection pool and lock contention.
+#### WAVE 1 — Three Parallel Subagents (no infrastructure conflicts)
 
-### AUDIT PHASE 7 [Phase 14 of 17] — Chaos & Failure-Injection Testing
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: AUDIT PHASE 8 [Phase 15 of 17]
-**Do not touch code.** Execute fault-injection scenarios per §7 (minimum 7 scenarios, run 3 times each):
-1. Crash mid-capture (worker SIGKILL during Playwright render).
-2. DNS/TLS failure & slow/blackholed DNS hang on event loop (`ssrf_transport.py:72` / `site_icons.py:111-117` `NB-ORC-1`).
-3. Slow-loris response (slow headers/stream).
-4. Malformed HTTP response.
-5. SSRF redirect loop.
-6. Pathologically large DOM (>10MB).
-7. Streaming chunked body memory bomb / worker probe OOM (`probe.py:170,223` buffering before slice `NB-CAP-1`).
-Classify as safe fail vs silent success vs worker crash.
+### AUDIT PHASE 5A+5B [Phases 11–12 of 17] — Stress-Test Catalog: All Tiers (Subagent W1-A)
+- **Status**: `PENDING — NEXT UP (Session B, Wave 1)`
+- **Execution**: Parallel with Phases 8 and 9
+**Do not touch code.** Execute ALL tiers of `PROMPT-003-stress-site-catalog.md` against the live Docker install using the automated runner `backend/tools/run_stress_catalog.py` (`uv run python tools/run_stress_catalog.py --tier A`, then `--tier B`, then `--tier C`).
+- **Tier A** (Broad Real-World Baseline): All sites from the curated catalog.
+- **Tiers B+C** (Advanced Bot Defenses + Exotic Edge): Akamai, DataDome, PerimeterX, AWS WAF, Turnstile, hard e-commerce, WebSockets, infinite scroll, heavy hydration, extreme DOMs, RTL/mixed-script.
+- **Verify each Tier B/C site's current vendor before testing** (per the catalog's verification protocol).
+- Enforces Rule 18 (minimum 3 passes per site), measures latency and variance, outputs markdown tables.
+- For EVERY failure: individual root-cause investigation with Fix-candidate/Accepted-risk disposition per Rule 19.
+- **Scratch output**: `scratch/session-b-stress-testing.md`
 
-### AUDIT PHASE 8 [Phase 15 of 17] — Adversarial Detection Accuracy Stress Test
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: AUDIT PHASE 9 [Phase 16 of 17]
+### AUDIT PHASE 8 [Phase 15 of 17] — Adversarial Detection Accuracy Stress Test (Subagent W1-B)
+- **Status**: `PENDING (Session B, Wave 1)`
+- **Execution**: Parallel with Phases 5A+5B and 9
 **Do not touch code.** Construct new hermetic attack/benign fixture pairs based on the Phase 2 taxonomy and test through deployed detection pipeline 3 times each. Measure false-negative rate on attacks and false-positive rate on live benign churn.
 - **Mandatory Visual-Only Attack Fixtures (`NB-DET-1`):** Must construct and evaluate three visual-only defacement pairs with unchanged DOM text:
   1. `<style>` injection with visual defacement (e.g. `body { filter: invert(1) hue-rotate(180deg); }` or absolute overlay).
   2. `@font-face` glyph hijacking (swapping character glyphs visually while DOM codepoints stay identical).
   3. `<canvas>` or `<svg>` graphical takeover rendering defacement messages without HTML text.
 - Measure whether these evade alerting (fusing < 0.40 material change bar or < 0.50 flag threshold) and test against benign visual twins (legit brand refresh, webfont swap).
+- **Scratch output**: `scratch/session-b-detection-accuracy.md`
 
-### AUDIT PHASE 9 [Phase 16 of 17] — Performance Profiling, Infrastructure & Operational Consistency Audit
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: AUDIT PHASE 10 [Phase 17 of 17]
+### AUDIT PHASE 9 [Phase 16 of 17] — Performance Profiling, Infrastructure & Operational Consistency Audit (Subagent W1-C)
+- **Status**: `PENDING (Session B, Wave 1)`
+- **Execution**: Parallel with Phases 5A+5B and 8
 **Do not touch code.**
 1. **Profiling:** Profile capture and detection pipelines under single and batch load. Identify concrete bottlenecks with measured costs (cold-start embedding, fusion reload, regex, missing DB indexes).
 2. **PowerShell Scripts & Operational Lifecycle Audit (`OPS-1` to `OPS-8`):**
@@ -233,15 +223,40 @@ Classify as safe fail vs silent success vs worker crash.
    - Probe baseline creation against 200 OK soft-block/paywall/verify-human pages (`nytimes.com`, `wsj.com`) to verify if non-error block pages are mistakenly stored as healthy baselines.
 5. **Documentation Drift vs Codebase Reality (`DOC-1` to `DOC-8`):**
    - Cross-check `docs/docs.json`, `docs/*.mdx`, `README.md`, and `SKILL.md` against live code (linked stylesheet claims, noise floor/changed gate reality, Telegram bot direct DB bypass vs API diagram, hop-by-hop DNS rebinding claims, regex timeout guarantees, public API docs exposure).
+- **Scratch output**: `scratch/session-b-performance-ops.md`
 
-### AUDIT PHASE 10 [Phase 17 of 17] — Consolidated Findings Register, Opportunities Register & Decision Gate
-- **Status**: `PENDING`
-- **Mandatory Next Phase**: DECISION GATE (Author PROMPT-004 Remediation Prompt OR Clean Bill of Health)
-**Do not touch code.** Read all prior audit entries. Produce:
-1. Master **Findings Register** with anchor links back to original phase entries.
+#### WAVE 2 — Sequential (AFTER Wave 1 Completes — manipulates Docker stack)
+
+### AUDIT PHASE 6+7 [Phases 13–14 of 17] — Concurrency, Scale & Chaos Testing (Subagent W2)
+- **Status**: `PENDING (Session B, Wave 2 — after Wave 1)`
+- **Execution**: Sequential — this subagent manipulates the Docker stack (SIGKILLs, load injection) and MUST run alone
+**Do not touch code.**
+**Phase 6 — Concurrency & Scale:** Execute concurrency test regime per §7: load levels (1x, 2x, 5x) run 3 times each; 50-cycle soak run; measure queueing, CPU/memory, connection pool and lock contention.
+**Phase 7 — Chaos & Failure-Injection:** Execute fault-injection scenarios per §7 (minimum 7 scenarios, run 3 times each):
+1. Crash mid-capture (worker SIGKILL during Playwright render).
+2. DNS/TLS failure & slow/blackholed DNS hang on event loop (`ssrf_transport.py:72` / `site_icons.py:111-117` `NB-ORC-1`).
+3. Slow-loris response (slow headers/stream).
+4. Malformed HTTP response.
+5. SSRF redirect loop.
+6. Pathologically large DOM (>10MB).
+7. Streaming chunked body memory bomb / worker probe OOM (`probe.py:170,223` buffering before slice `NB-CAP-1`).
+Classify as safe fail vs silent success vs worker crash.
+- **Scratch output**: `scratch/session-b-concurrency-chaos.md`
+
+#### WAVE 3 — Coordinator Executes Directly (AFTER Wave 2 Completes)
+
+### AUDIT PHASE 10 [Phase 17 of 17] — Consolidated Findings Register & Opportunities Register (Audit Completion)
+- **Status**: `PENDING (Session B, Wave 3 — coordinator executes directly after all subagents complete)`
+- **Mandatory Next Phase**: NONE — this is the final phase. The user will create their own remediation prompt.
+**Do not touch code.** Read ALL prior audit entries (Phases 1–9 + Session A deep verification + all Wave 1/2 scratch files). Produce:
+1. Master **Findings Register** with anchor links back to original phase entries — deduplicated across ALL phases and sessions.
 2. Severity summary table.
-3. Opportunities / Innovation Register.
-4. The **decision** per §8: Author `PROMPT-004` (if any Critical/High or qualifying Medium clusters exist) or issue the Clean Bill of Health.
+3. Opportunities / Innovation Register — consolidated from all phases and sessions.
+4. **Audit Status Declaration**: State clearly that PROMPT-003 is COMPLETE. List total finding counts by severity.
+
+> [!IMPORTANT]
+> **DO NOT author PROMPT-004 or any remediation prompt.** DO NOT issue a Clean Bill of Health.
+> The user will review the complete findings and create their own remediation prompt.
 
 ---
 
@@ -324,39 +339,40 @@ States explicitly: total findings by severity (should be zero Critical/High), ev
 
 ---
 
-## 8. THE DECISION GATE AND THE CLOSURE LOOP
+## 8. THE CLOSURE LOOP (Reference Only — User-Driven)
 
-### 8.1 When PROMPT-004 is authored (Zero-Regression & First-Pass Resolution Standard)
+> [!IMPORTANT]
+> **PROMPT-003 does NOT auto-generate PROMPT-004 or any remediation prompt.** The audit completes at Phase 10’s Consolidated Findings Register. The user will review the findings and create their own remediation prompt with whatever scope, architecture, and priorities they choose.
 
-At Audit Phase 10, author `PROMPT-004-<short-name>.md` (plus its seeded log file and Phase 1 kickoff prompt) **if and only if**:
+The following sections are retained as **reference material** for the user when authoring their own remediation prompt:
+
+### 8.1 Remediation prompt charter (reference for user-authored PROMPT-004)
+
+A remediation prompt should be authored if:
 - Any Critical finding exists, or
 - Any High finding exists, or
 - Three or more Medium findings exist within the same subsystem.
 
-**PROMPT-004 Charter & Engineering Perfection Mandate:**
-PROMPT-004 must be engineered to resolve all confirmed issues in a **single, flawless pass** so that the need for a PROMPT-005 is eliminated:
-- **Pre-Engineered Fix Blueprints:** For every finding, Phase 10 must specify the exact target files, exact contract logic (e.g. byte-hash exclusion rule), and exact test criteria so the implementing agent executes a proven blueprint without guessing.
-- **Mandatory Red-Green-Refactor Flow:** Every phase in PROMPT-004 must: (1) prove the bug reproduces with a failing test on current code, (2) apply the surgical fix, (3) prove the test now passes, and (4) run full regression suites to guarantee zero side effects.
-- **Documentation & Scripts Remediation:** PROMPT-004 is contractually mandated to resolve all documentation drift (`docs/*.mdx`, `docs.json`, `README.md`) and repair all PowerShell scripts (`scripts/validate.ps1`, `install.ps1`, `diagnostics.ps1`, `update.ps1`) discovered in Audit Phase 9, ensuring the entire product matches reality.
-- **Automated Stress Re-Verification:** PROMPT-004's final sign-off phase must execute `backend/tools/run_stress_catalog.py` against all previously failing sites (3 passes each) to achieve 100% clean passes.
-- **Preserve Prior Art:** Preserve every "Prior Art" constraint from PROMPT-002 §4 (SSRF policy, hash-gate contract, rule floors, degradation signaling) as permanent, non-negotiable constraints.
-- **Order phases by dependency:** Database schemas and models first, capture and detection logic second, API routers and tasks third, frontend surfaces fourth, and final Re-Audit sign-off last.
-- **Rule 19 discipline:** Every finding closed must be verified by reproduction of the original finding's repro steps.
+**Recommended charter for the remediation prompt (user's discretion):**
+- **Pre-Engineered Fix Blueprints:** For every finding, specify the exact target files, exact contract logic, and exact test criteria.
+- **Mandatory Red-Green-Refactor Flow:** Every phase should: (1) prove the bug reproduces with a failing test on current code, (2) apply the surgical fix, (3) prove the test now passes, and (4) run full regression suites.
+- **Documentation & Scripts Remediation:** Resolve all documentation drift and repair all PowerShell scripts discovered in Audit Phase 9.
+- **Automated Stress Re-Verification:** The final sign-off phase should execute stress tests against all previously failing sites (3 passes each).
+- **Preserve Prior Art:** Preserve every constraint from PROMPT-002 §4.
+- **Order phases by dependency:** Database schemas first, then capture/detection, then API/tasks, then frontend, then final sign-off.
 
-### 8.2 The Closure Loop — mandatory final phase of every remediation prompt
+### 8.2 The Closure Loop — recommended final phase of every remediation prompt
 
-**This is the mechanism that prevents this effort from ending the way PROMPT-002 ended.** Every remediation prompt this effort authors (PROMPT-004, and any PROMPT-005+ it in turn spawns) must include, as its final mandatory phase, a **Re-Audit & Sign-Off phase** that:
-1. Re-runs the full Rule-5-equivalent regression suite.
-2. Re-executes the full three-tier stress-test catalog at least once in full, plus a minimum of two additional passes specifically on every site/scenario that previously failed (Rule 18's repeatability standard, applied to the fix).
-3. Re-verifies every specific finding this remediation round claimed to fix, using the *exact original reproduction* that first surfaced it — not a new, looser test that happens to pass.
-4. Explicitly checks for regressions the fix itself may have introduced elsewhere (a capture fix reintroducing a detection false positive, a detection threshold change reintroducing a capture-side inconsistency, etc.) — this is exactly the kind of cross-subsystem interaction a single narrowly-scoped remediation phase is structurally prone to missing.
-5. Produces its own Findings Register using this file's severity rubric (§6.4) and applies this file's Decision Gate (§8.1) to itself.
+Every remediation prompt should include, as its final mandatory phase, a **Re-Audit & Sign-Off phase** that:
+1. Re-runs the full regression suite.
+2. Re-executes the stress-test catalog.
+3. Re-verifies every specific finding using the exact original reproduction.
+4. Checks for regressions the fix itself may have introduced.
+5. Produces its own Findings Register and applies the severity rubric.
 
-**If that Re-Audit & Sign-Off phase surfaces any Critical/High finding, or a repeated/reintroduced Medium cluster, it must author the next remediation prompt (PROMPT-005, then PROMPT-006, and so on) using this identical §8 mechanism, and the loop continues.** The loop terminates only when a Re-Audit & Sign-Off phase produces a genuine Clean Bill of Health per §6.3: zero Critical/High findings, and every remaining Low finding individually justified and explicitly presented to the user for their own accept/reject decision — never a quiet aggregate close-out.
+### 8.3 When no remediation is warranted
 
-### 8.3 When no remediation prompt is warranted at all
-
-If Audit Phase 10 finds nothing meeting the §8.1 bar, produce the Clean Bill of Health report directly (§6.3) and explicitly recommend re-running this same PROMPT-003 audit again after a stated interval or after the next significant codebase change — external site behavior, bot-protection vendors, and load patterns all drift, so "clean today" is not "clean forever."
+If Phase 10 finds nothing meeting the bar above, recommend re-running PROMPT-003 after a stated interval or after the next significant codebase change.
 
 ---
 
@@ -406,7 +422,7 @@ When done: append your audit log entry per §6.1, commit (test-file/log changes 
 The standard pattern for every kickoff prompt is:
 read PROMPT-003 fully → read PROMPT-003-IMPLEMENTATION-LOG.md fully → read `PROMPT-003-stress-site-catalog.md` if the next phase is 5A/5B/5C/6/7/8 → read the specific PROMPT-002 sections + code files this phase targets, per §4 → execute this phase per §2, honoring Rule 18 (repeatability) and Rule 19 (no aggregate acceptance) wherever they apply → generate the next phase's kickoff prompt strictly for `Phase N+1` when done.
 
-**Audit Phase 10 [Phase 17 of 17]'s kickoff-prompt output is different**: per §8, it either hands the user the ready-to-paste PROMPT-004 Phase 1 kickoff prompt (if warranted), or the Clean Bill of Health report with a recommended re-audit interval. If a later remediation prompt's own Re-Audit & Sign-Off phase (§8.2) in turn spawns PROMPT-005+, that phase's kickoff-prompt output follows the identical pattern one level up.
+**Audit Phase 10 [Phase 17 of 17]'s output is the Consolidated Findings Register and Audit Completion declaration.** It does NOT auto-generate PROMPT-004 or any remediation prompt. The user will review the findings and create their own remediation prompt with whatever scope and architecture they choose.
 
 ---
 
