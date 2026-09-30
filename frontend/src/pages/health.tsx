@@ -1058,14 +1058,14 @@ export function HealthPage() {
                     completed scans by their capture_quality label
                   </p>
                 </div>
-
-                <div className="rounded-lg border border-hairline bg-surface-deep/30 p-3">
-                  <dt className="text-caption uppercase tracking-wider text-mute">Liveness Endpoint</dt>
-                  <dd className="mt-1.5 font-mono text-code-md text-ink flex items-center justify-between">
-                    <span className="text-accent-blue">GET /api/health/live</span>
-                  </dd>
-                </div>
               </dl>
+
+              <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
+                <span className="text-caption uppercase tracking-wider text-mute">Liveness Endpoint</span>
+                <span className="rounded border border-hairline bg-surface-deep/30 px-2.5 py-1 font-mono text-code-md text-accent-blue">
+                  GET /api/health/live
+                </span>
+              </div>
             </SpotlightCard>
           </div>
 

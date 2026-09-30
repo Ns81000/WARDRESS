@@ -1567,3 +1567,970 @@ All run with `backend/.venv` (`python -m pytest -q -p no:cacheprovider`), produc
     - `frontend/tests/*`'s remaining 20 files were cold-read for coverage inventory and convention (no setup file, no `globals: true`, so every file must clean up itself — `capture-health.test.tsx` and `health-honesty.test.tsx` do; `no-third-party-image-hosts`/`svg-path-integrity` are source-scanning tripwires). A deeper test-suite *coverage* audit was not in this phase's scope and is offered to Phase 9/10 as an optional sweep.
 - **Commit**: `95bd60e` — test(audit-4f): frontend capture/detection surface repro tests + flake characterization probes (diagnosis only); this log entry is committed immediately after, referencing that hash (not pushed).
 - **Next phase kickoff prompt**: delivered in chat only — never written to this log.
+
+---
+
+### [DONE] PROMPT-003 Session A — Deep Verification of Completed Phases (1–4F)
+
+- **Prompt**: SESSION-A-KICKOFF.md (coordinator model; §0/§1/§2/§6.4 of the main spec govern every subagent)
+- **Session date**: 2026-09-30
+- **Scope**: Independent deep verification of all ten completed audit phases (1, 2, 2B, 3, 4, 4B, 4C, 4D, 4E, 4F) by **five parallel subagents**, each operating with full investigative liberty (Rule 17), diagnosis-only (Rule 1), and every finding reproduced (Rule 4) or measured over ≥3 passes (Rule 18).
+- **Subagent reports** (Rule 10 — preserved in-repo as this effort's evidence; all raw probe scripts live outside the repo under `%TEMP%\opencode\wardress-session-a\`):
+  - `scratch/session-a-capture.md` — Audit Phases 1 + 3 (capture) — 467 lines
+  - `scratch/session-a-detection.md` — Audit Phases 2 + 4 (detection) — 583 lines
+  - `scratch/session-a-orchestration.md` — Audit Phases 2B + 4B (orchestration) — 680 lines
+  - `scratch/session-a-api-frontend.md` — Audit Phases 4C + 4F (API/auth/frontend) — 968 lines
+  - `scratch/session-a-ai-infra.md` — Audit Phases 4E + 4D (AI/supply-chain/delivery) — 823 lines
+- **Environment attestation (Rule 13)**: Docker stack up and healthy (`wardress-app-1` on :8321, worker/beat/db/redis). The disposable test database `wardress-test-pg` **had been deleted**; it was recreated this session with the command documented in `backend/tests/db_harness.py:98` / `README.md` ("Backend Development") and pinned to `127.0.0.1:5433`, user/pass `wardress`/`wardress`. Each subagent ran against **its own dedicated database** (`wardress_sa_capture_test`, `wardress_sa_detect_test`, `wardress_sa_orch_test`, `wardress_sa_api_test`, `wardress_sa_ai_test`) so no two ever shared the single-contract harness. No install/uninstall/update script was run. The live stack was used **read-only** by all five subagents (no container stopped/restarted/rebuilt/pulled; no throwaway live users or sites left behind).
+- **Rule 1 compliance**: `git diff --stat HEAD` is **empty**. Zero production files modified across the whole session. No subagent ran a git state-changing command and none committed.
+
+#### Summary
+
+| Metric | Count |
+|---|---|
+| Finding blocks logged by the five subagents | **106** |
+| **New findings** | **45** |
+| **Findings deepened** (new edge cases, wider blast radius, corrected numbers, or severity change) | **37** |
+| **Findings confirmed** unchanged | **23** |
+| **Findings invalidated** | **1** + 4 invalidated/partial hypotheses |
+| Cross-subsystem interactions identified | **10** |
+| Dead-code / orphan items proven | **~55** across 5 subsystems |
+| New hermetic test files | **3** (138 tests, all passing) |
+
+**Severity distribution across all 106 blocks** (one honest severity each, per §6.4; 4F's own "conservative" split is preserved):
+
+| Severity | Count | Notable |
+|---|---|---|
+| **Critical** | **7** | AUDIT-SA1-1, AUDIT-SA2-2, AUDIT-SA2-3, AUDIT-4-1, AUDIT-4E-1, AUDIT-4E-2, AUDIT-4E-4 |
+| **High** | **17** | AUDIT-SA1-2, AUDIT-3-1 (escalated), AUDIT-3-4 (escalated, partial), AUDIT-2-4, AUDIT-SA2-1, AUDIT-4-2, AUDIT-4-4 (new half), AUDIT-4-5 (escalated), AUDIT-4B-1, AUDIT-SA3-1…4, AUDIT-4D-1, AUDIT-SA5-1, AUDIT-4E-8 (escalated), AUDIT-4E-10 (escalated) |
+| **Medium** | **~40** | incl. AUDIT-1-1 (downgraded with justification), AUDIT-4B-5/-4B-6 (escalated), AUDIT-4C-1/-4C-2, AUDIT-4F-2/-4F-3, AUDIT-SA4-1/-2/-3/-5/-8/-9, AUDIT-4E-3/-5/-11, AUDIT-4D-2/-3/-4, AUDIT-SA5-3/-4 |
+| **Low** | **~42** | remainder |
+
+**Headline of Session A:** the ten completed phases were **honest and technically strong** — nothing was fabricated, several prior findings were *strengthened* rather than merely re-asserted, and one prior finding was fully invalidated. But independent verification found **three Critical SSRF-class holes and two Critical false-"clean" attack paths that no prior phase detected**, plus a **measured** false-positive rate on the model's own training data (34 of 323 benign rows exceed the default flag threshold) that turns AUDIT-2-4's "unproven overfitting risk" into a demonstrated alert rate.
+
+---
+
+#### Confirmed Findings (verified still present, with the deepening Session A added)
+
+| ID | Title | Prior severity | Session A severity | What Session A added |
+|---|---|---|---|---|
+| AUDIT-3-1 | Banner click can store the WRONG page | Medium | **High** | Root cause reproduced 3/3 through production `fetch_page` with a server-side request log. **The challenge gate is defeatable through the banner click**: a control whose `aria-label` matches the generic fallback and which navigates into a Cloudflare interstitial is captured as **challenge HTML with `cloudflare_challenge_detected: False` and `capture_quality: "full"`** — a direct violation of Phase 2's headline contract. `FetchResult` is internally self-contradictory (`final_url` pre-click, `http_status`/`headers` post-click). The stale `final_url` reaches `baseline.capture_meta`, `ScanPageData.final_url`, and therefore `detection/dom.py:651` (relative-URL base) and `:699` (same-host allowance) — a presentation-layer bug becomes a detection-accuracy bug. |
+| AUDIT-3-2 | Late-attaching consent iframes never dismissed | Medium | Medium | Prior root cause was **incomplete**: iframe nesting is a red herring (`page.frames` is flat and already includes grandchildren — 4 frames found at 3 levels). The two real causes are (a) the single `_frames(page)` snapshot, reproduced exactly (`attempts=30` = 1 frame while `len(page.frames)==2`, the iframe *was* fetched per the server log), and (b) **NEW**: `_clickable_in_viewport` compares a **page-coordinate** bounding box against `page.viewport_size` and never scrolls the element into view, so a `position:fixed` consent control inside an iframe appended at the end of `<body>` is rejected (measured: `y=78.4` → dismissed; `y=2578.4` → not dismissed, 60 attempts, 3.14 s). |
+| AUDIT-3-3 | SSRF rebinding window on the Playwright path | Medium | Medium | Cache widening confirmed (10 URLs → 3 `assert_url_allowed` calls). **New defect**: the cache key `f"{scheme}://{host}"` **omits the port**, so `https://cdn.example.com:8443/x` inherits the verdict for `:443`. **Honest counter-argument the prior log did not make**: Chromium maintains its own per-profile host resolver cache honouring the record TTL, so same-host rebinding inside one page load is unlikely to be re-resolved at all — the real risk is staleness against policy change, not rebinding. The finding is **largely subsumed** by AUDIT-SA1-1, which needs no timing at all. |
+| AUDIT-3-4 | Artifact janitor gaps / non-atomic writes | Low | **High** (write path) + **Medium** (retention path) | Split, because the two halves meet different §6.4 bands. **(a) Data corruption**: non-atomic `write_text`/`write_bytes` + `store_artifacts` running *before* the DB commit means a kill mid-write leaves a **truncated `page.html` behind a row that still reads `status='completed'` with a valid `content_hash`** — all nine layers then diff the truncation → maximal bogus diff → `flagged` → alert. The janitor cannot help because the row exists. **(b) Retention**: an exhaustive grep proves **nothing in the repo ever deletes a `Scan` or `Baseline` row** — the janitor's only criterion is row *absence*, so every artifact directory whose row survives lives forever regardless of age or terminal state, and the 500-removals-per-run cap means a backlog never fully drains at scale. |
+| AUDIT-3-5 | Capture-completeness facts never reach detection | Medium | Medium | The loss point is **one constructor call**: `ScanPageData(...)` at `scan_tasks.py:280-292` takes 9 scalar fields, none of them a completeness flag. Full write-only-evidence inventory produced: **17 of the 19 `capture_evidence` keys have zero production readers**, including `retry_count` (added by Phase 6) and `capture_wall_clock_ms` (added by Phase 7 specifically for triage). |
+| AUDIT-3-6 | Per-scan request multiplication x adaptive cadence = WAF escalation loop | Low | Low | Confirmed by measurement: `probe_site` makes 4 sequential requests (robots + 3 UA fetches), measured 1.766 / 1.609 / 1.625 s under 400 ms injected latency; the loop holds `max_connections=4` idle for 3 of 4 slots, so the parallelism headroom is already provisioned and unused. The `googlebot` UA ships on every scan from Wardress's IP. |
+| AUDIT-3-7 | `hashing.py` latent `content_sha256(None)` crash | Low | Low | Re-confirmed (`AttributeError` on `None`, `TypeError` on `bytes`). **New in the same layer family**: `probe.py:128-131` is a provably dead branch — `getpeercert()` returns `{}` under `verify_mode=CERT_NONE`, so `if peer:` is always falsy and `_name_attrs` can never run; the consequence is that `subject`/`issuer` are **silently absent from every TLS record** whenever the `cryptography` parse fails (a silent evidence gap in layer 6, not a cosmetic dead branch). |
+| AUDIT-3-8 | `auto_scroll_page` counts a shrinking height as stable | Low | Low | Present. Deepened: the related `stalled` condition *also* requires `height <= last_height`, so a collapsing page (virtualised list unmounting on scroll-up, ad slot collapsing after lazy-load) ends the walk early; the `finally` `scrollTo(0,0)` then fires and the screenshot is taken at the top of a page whose below-break lazy content never loaded — with `capped=False` and `stable` possibly `True`. |
+| AUDIT-1-1 | "changed, not clean" on benign dynamic content | High | **Medium** (downgraded, with justification) | **The logged cause is the minor part.** Eleven out-of-family benign churn shapes measured over 3 passes each fuse to **0.1907–0.2213** (pstdev 0.00000) and read `changed`; but `layer1_hash` alone is only `sigmoid(4.408 − 6.247) = 0.1372` of that, and the residual 0.06–0.08 is layer 2's content-churn term and layer 3's `min(0.4, 0.02 × total_new_refs)` — both *designed* to read non-zero on real churn. **Consequence: Phase 1's own proposed remedy (exclude the byte-hash when all content layers are sub-noise) would NOT deliver `clean`** — measured, an 8-article lazy append keeps `layer2 = 0.1231 > NOISE_FLOOR`. Only a byte-identical pair reads `clean`. Remedy design must change: a third verdict state, or gate `changed` on the *content* peak excluding l1 **and** the generic churn term. |
+| AUDIT-2-4 | NOISE_FLOOR / MATERIAL_CHANGE_RISK overfitting | High | High | **Converted from an unproven risk into a measured alert rate.** Re-fusing every row of the committed 646-row `fusion_dataset.json` through the deployed `layer9_fusion`: **36 of 323 benign rows reach 0.40; 34 exceed the default 0.50 flag threshold.** `vendor_script_added` (a benign axis) averages **0.7538** with max 0.8269 — 100% of that axis flags. `sanity_benign_quiet`, a row whose entire purpose is to prove the harness is calibrated, scores **0.6583**. The 152-row corpus guard is *circular*: its benign axes are 7 of the 14 benign axes, and the 7 it omits are exactly the ones that cross the bar (0 corpus benign rows cross 0.40). Phase 12's "strict subset" decision removed precisely the axes that would have exposed this. |
+| AUDIT-4-1 | `_new_text` granularity collapse on unpunctuated pages | Critical | **Critical** | The logged numbers were the **weakest** fixtures. The collapse is total: `_new_text == extract_visible_text(current)` verbatim (100.0% of the page) in **7 of 9** adversarial shapes (unpunctuated, emoji-only, numbers-only, mixed script without Latin punctuation, CJK without sentence markers, 51 KB single-line minified text, single-line DOM text). End-to-end over `run_detection`, a **one-word edit** reaches **risk 1.0 / `flagged`** in 6 realistic baseline fixtures (security write-up with `hacked by`; 3 profanity terms; aggression lexicon with `regime`/`traitors`; Chinese `被黑`; security-blog topic words; `telegram` contact). The rule floor `conclusive_signature_text` fires at 0.90. Both preconditions are *routine* on the live web (a) and (b). Deepened cause: `aggression_score = 1 − exp(−1.2·Σw)` has **no cap** on `Σw` while `topic_score` is capped at 0.7 — an asymmetry that is why the aggression channel reaches maximal severity. |
+| AUDIT-4-2 | Probe transients read as measured evidence (layer 6) | High | High | **The logged fused risk is understated.** With the `layer1_hash = 1.0` any real byte-changing scan carries, a current-side TLS probe failure fuses to **0.5502 — above the default 0.50 flag threshold**, i.e. one failed handshake on an otherwise-unchanged site produces an `Alert` + `RemediationExecution`. The log's 0.429 must have had a different layer-1 profile. `robots.txt` transients confirmed in both directions (0.15 each, neither degrades). |
+| AUDIT-4-3 | Statically expired cert scores 0.5 forever | Medium | Medium | **The logged "risk stays ~0.01" is understated by ~50x.** Measured with `expired=True` on both sides: `l6 = 0.5`, **fused risk 0.4857**, verdict `changed` forever — and because `0.40 <= 0.4857 < 0.75`, **every scan of a statically-expired site burns an LLM escalation call and permanently pins cadence to `base/4`**. The static-expiry case is *indistinguishable in the score* from a genuine expiry transition. |
+| AUDIT-4-4 | Suppression timeout asymmetry | Medium | Medium + **new High half** | Asymmetry half confirmed. **Two corrections to the prior log**: (a) only *alternation*-based bombs like `(a|aa)+b` actually time out — `regex`'s optimizer defeats `^(\w+\s?)+$`, `([a-zA-Z]+)*!`, `(.*,)*[0-9]+`, `(\d+)+#`, all ≤1.5 ms, so the "ReDoS immunity" claim is true for `normalize.py` (18 adversarial docs, max 99.9 ms on a 2 MB document, zero raises) and true for *common* user patterns but not absolute; (b) **the logged cost claim is unreachable** — 60 pathological nodes under one timing-out rule cost **2.00 s total**, not nodes x 2 s, because the `TimeoutError` aborts the whole element loop at the first node. **NEW, and the more serious half: an over-broad suppression rule permanently blinds layers 5 and 8 with no coverage signal.** A conclusive defacement scores `flagged` at 1.0 unsuppressed; with one rule of `css_selector *`, `body`, `main`, `regex .*` or `[\s\S]+` it drops to `changed` at 0.195. `build_suppression` accepts these with no warning and no size check, and `suppression_applied` evidence records only *which* rules ran — not how much content they removed. Since suppression runs **before every content layer and replaces the content on both sides**, a suppressed span is invisible to layers 2/3/5/8 entirely, which is also the primitive an adversary who can guess a common selector (`#banner`, `[role=alert]`, `.cookie-consent`) would use. |
+| AUDIT-4-5 | Empty/unparseable capture is a measured 1.0 | Medium | **High** | Escalated: the logged case reads `changed` at 0.4837, but the **mirror case is a false `clean`**. Two new sub-cases: **(a) a binary/undeclared-content capture FLAGS** — raw binary junk gives `layer2 = 1.0` (total structural annihilation) and `layer8 = 0.9738` (MiniLM cosine on binary noise) → **risk 0.9833, `flagged`**, creating alert + remediation rows from a capture bug; `drift_from_similarity` has no content-type guard. **(b) BOTH sides empty reads `clean`** — identical `content_sha256("")` makes `identical = True`, so layers 2/3/5/8 get `skip_result` (a *proof of zero* per the module docstring) and `layer4` degrades; the system's own designed distinction between "provably zero" and "unmeasured" is **inverted** by an empty page pair. |
+| AUDIT-4-6 | Layer 3 is removal-blind | Medium | Medium | Confirmed and **generalised**: all five reference kinds score exactly 0.0 on removal (script, iframe, form, link included, not just scripts/iframes). **New layer-2 sub-case**: hidden-element *additions* are the sensitive channel (`max(0, current − baseline)`), so **un-hiding** a hidden SEO farm by dropping `style="opacity:0"` produces `layer2 = 0.0` with `structural_churn = 0` — a completely silent transition from invisible spam to visible spam. Positive control: a legitimate security hardening (removing a Turnstile widget) is equally invisible, so the system is at least internally consistent. |
+| AUDIT-4-7 / AUDIT-4-8 | The two Phase-3 handoff specifications | Medium | Medium | Both specifications still match the code. **Three corrections to the specs themselves** (which the kickoff asked for): (1) AUDIT-4-7's "crop both to the capped extent" for layer 4 is **already partly done** — `_common_size` already takes the min scaled height; the uncropped part is only the pHash/dHash pair, so the remedy is a narrowing not a new mechanism; (2) AUDIT-4-8's "run hidden-state resolution symmetrically" is **already symmetric** — `_tree_stats` builds its own `_HiddenContext` per side; the real exposure is the absolute count dropping when rules move to a sheet the capture never fetched; (3) AUDIT-4-7's "partial-confidence scalar into fusion" needs a numerical guard the spec does not give — measured, `layer3 = 0.9` with one degraded channel lands at **exactly 0.4000** and is *not* bounded by `_UNMEASURED_RISK_CEIL` (which only bounds the uplift). |
+| AUDIT-2-1 / -2-2 / -2-3 | Taxonomy gaps; 3 genuinely-absent attack families | Med / High / Med | unchanged | Re-verified and **evasion scenarios now measured end-to-end**: subtle single-word tampering `two weeks` -> `two days` = 0.1942; `<meta http-equiv=refresh>` = 0.1987; client-side `location.replace` cloak = 0.3153; same-origin phishing overlay = 0.2242 (only a *new-domain* overlay is caught, at 0.5450 — the less likely case). **Two refinements to the prior log**: (a) the time-delayed family is **not** genuinely absent when the payload is DOM text (risk **1.0**, `flagged`) — only the timed-`<script>`-string form evades (0.3153); (b) **attack withdrawal IS caught, by layer 4** (banner removed = a 0.296 visual delta -> 0.9976 `flagged`), a genuine positive no prior phase tested, though asymmetric (a phishing overlay's withdrawal only reaches 0.2249). `nonnative_full_rewrite` / `nonnative_partial_inject` confirmed still absent from the 19-axis corpus. |
+| AUDIT-2-5 | `ScanFinding` has no `degraded` column | Medium | Medium | Re-read: the columns are exactly `id, scan_id, layer, layer_key, score, skipped, evidence, created_at`. Concrete consequence now measurable: a scan where *nothing was measured* has `layer2/3/5/8` rows byte-identical in shape to a layer-4 screenshot loss. |
+| AUDIT-2-6 | `capture_meta["headers"]` unused | Low | Low | Repo-wide grep over all 100 `backend/**/*.py`: one write, one *unrelated* reader (`app/explain.py:98` reads layer-6 **evidence**, not `capture_meta`). Unchanged. |
+| AUDIT-4B-1 | Lost alerts on worker death | High | High | **The window is 10.1 ms median / 26.8 ms max** (5-pass measurement), not "sub-second" — which makes it *rarer* but also means it is essentially an atomicity problem, not a race. The materially larger variant is the DB-hiccup one, which is **unbounded**: an `OperationalError` inside `_create_alert`'s commit propagates, the wrapper's `_mark_scan_failed` no-ops on the completed row, the task returns "error" and is **ACKed** — no redelivery, no recovery sweep. |
+| AUDIT-4B-2 | Overload amplification | Medium | Medium | **Entry threshold quantified**: amplification begins at a backlog of ~15–60 pending rows — *one over-capacity tick*. Saturation at ~2,160 sites at base cadence, ~500 at `base/4`, or **7–8 sites at the 5-minute floor**. Overload soak deliberately not run live (would saturate the shared stack); the supersede path itself was verified hermetically. |
+| AUDIT-4B-3 | Cadence pinning from transients | Medium | Medium | Simulated: **4 consecutive clean scans are needed to return to base (24 h at `base/4`)**. A site with a *daily* transient therefore **never returns to base — 0 of 500 simulated sites do, in 30 days**. Measured live tick drift is 64.18 s mean. |
+| AUDIT-4B-4 | Re-baseline does not arbitrate in-flight scans | Low | Low (**CONFIRMED, accepted-risk is correct**) | Independent re-assessment: a scan-side 409 would block the operator for up to 8 minutes and kill useful concurrent work; `scans.baseline_id` already makes the anchor fully traceable. "Accepted-risk" is the right call — recorded so it is not re-litigated. |
+| AUDIT-4B-5 | Stale-row recovery latency bounded by `next_scan_at` | Low | **Medium** (baseline half) | Worst case for a 24 h site measured as **interval + 2 x STALE_INFLIGHT = 24 h 20 min**. **Escalated on a new half**: stuck `pending`/`capturing` **baselines have no beat-side stale sweep at all** — verified, a 30-minute-stuck baseline survives all four periodic tasks untouched, the tick reports it as a benign `skipped_no_baseline` forever, and the site is **permanently unmonitored** with no operator signal. Only an operator action recovers it. |
+| AUDIT-4B-6 | Heartbeat measures tick execution, not beat liveness | Low | **Medium** | Escalated: the heartbeat is written **on the success path only**, so it is skipped on *any* dispatcher failure — a plain database outage makes the operator's only scheduling signal go red while the stack is otherwise healthy. **New**: 4 of the 5 periodic tasks have `expires == interval` exactly, pinned against Celery's own silent drop site (`worker/strategy.py:162`), and `REDELIVERY_GRACE == REDELIVERY_SWEEP_SECONDS == 300 s` with no margin. |
+| AUDIT-4B-7 | Worker memory ceiling, no child recycling | Low | Low | Re-measured: **624.5 MB warm child, and GC returns only 0.2 MB** — the footprint is non-reclaimable. 12 warm children extrapolate to **5.90 GiB of a 7.429 GiB host ceiling = 79 %**. **`--max-tasks-per-child` provably does *not* help** (the model memory is never released), which narrows the prior log's remedy list. |
+| AUDIT-4B-8 | Deployment drift | Low | **Low, residual only** | See *Invalidated* below. |
+| AUDIT-4C-1 | 503 partial-success on dead broker | Medium | Medium | Reproduced end-to-end at the HTTP layer. Bulk-import contrast quantified: the bulk path already has the right shape ("created — baseline capture could not be enqueued … use Rebaseline once it is back") and single-create never got the parity pass. |
+| AUDIT-4C-2 | `/docs`, `/redoc`, `/openapi.json` public and unmetered | Medium | Medium | **Fourth public route found**: `/docs/oauth2-redirect` (3012 B live). Live schema 92,500 B. **The schema narrates the SSRF gate and names the endpoints that probe internal networks** — the `allow_private_networks` field, the `sitemap` fetch, and the SSRF-related description text. **One sub-claim invalidated** (the `wk_` key prefix: 0 hits over the 99,585-byte schema — it lives in `app/apikeys.py`, not the published schema); the finding stands on 8 stronger items. |
+| AUDIT-4C-3 | Two mute implementations, divergent audit snapshots | Low | Low | Confirmed. |
+| AUDIT-4C-4 | `DELETE /api/sites/{id}` has no in-flight guard or cascade disclosure | Low | Low | Footprint measured: the cascade destroys baselines, scans, suppression rules, alerts + deliveries, per-site channels, and remediation hooks + executions — irreversible, with a 204 and an empty body. **New**: the endpoint has no UI caller at all, so the only way to delete a site is the API. |
+| AUDIT-4C-5 | health.py readiness docstring cites a dead healthcheck | Low | Low | Confirmed, and the drift is now **public**: the readiness route's own docstring advertises a compose healthcheck that no longer exists. The residual note is now measured — `GET /api/health` returns **200 in both the healthy and the database-down branch** (see AUDIT-SA4-9) and discloses "database unreachable" detail to an unauthenticated caller. |
+| AUDIT-4C-6 | Three routes double-charge the per-user rate limit | Low | Low | Confirmed; **effective budget measured at 10 instead of 20** on a 20/min configuration. |
+| AUDIT-4C-7 | `DELETE /api/users/{id}` hard-deletes regardless of usage | Low | Low | Confirmed, plus **new**: the endpoint has no UI caller, so the "never-used account cleanup" precondition the docstring promises is not just unenforced — it is unreachable in practice. |
+| AUDIT-4F-1 | `capture-health.test.tsx` flake | Low | Low | **Minimum triggering delay measured at exactly 1000 ms and it is load-independent** — the implicit `waitFor` budget, not a race and not test-state leakage. Both Phase-4F committed guards (`phase4f-capture-surface-repros.test.tsx`, `capture-health.test.tsx`) still pass at HEAD. |
+| AUDIT-4F-2 | Degraded renders as Clean / 0% | Medium | Medium | Confirmed. `consecutive_degraded_scans` is still referenced by **zero** files under `src/`. |
+| AUDIT-4F-3 | Blank dashboard on shape mismatch | Medium | Medium | **6 of 19** malformed payload shapes blank the whole dashboard, at **3 distinct unguarded expressions**, affecting **4 of the 10 routes**. Reproduced through React's own teardown path. |
+| AUDIT-4F-4 | Severity colour defined eight ways | Low | Low | Deepened from 4F's five: three more found, and the vocabulary collides *inside a single card*. |
+| AUDIT-2B-5 / AUDIT-4F-5 | `risk-gauge.tsx` comment asserts a moved constant | Low | Low | Confirmed, and **AUDIT-2B-5 is now closed into an executable guard** that still passes at HEAD. |
+| AUDIT-4F-6 / -4F-7 / -4F-8 / -4F-9 | bidi isolation; unnamed `role=application` gauge; unconditional-red unmeasured chip; duplicate scan-list fetch | Low | Low | All four confirmed unchanged. |
+| AUDIT-4D-1 | Mid-delivery crash orphans remaining channels forever | High | High | **Now deterministically reachable from user-controlled data**: a **CR/LF in a site name** raises `ValueError` out of `deliver_to_channel`, permanently orphaning every channel after that point with **no delivery row at all**. Real window measured as `40 s x (channels − 1)`. **Positive result recorded too**: the email HTML body is verified **safe** — Jinja autoescape is on, there is no `|safe`, and a hostile site name survives premailer intact. |
+| AUDIT-4D-2 | Check-then-act idempotence guard double-sends | Medium | Medium | Confirmed, with reachability analysis added (resweep re-enqueue during an in-flight delivery past the 5-minute grace). |
+| AUDIT-4D-3 | Favicon resolver on an unpinned httpx client | Medium | Medium | Confirmed; hop-by-hop redirect matrix re-verified (redirect-to-internal remains closed). |
+| AUDIT-4D-4 | Favicon "size-capped" claim not delivered | Medium | Medium | **Quantified with `tracemalloc`: a 32 MiB body produces a 64.2 MiB Python heap peak on the API event loop** before truncation returns 65,537 bytes. |
+| AUDIT-4D-5 / -4D-6 / -4D-7 / -4D-8 | Cooldown anchor; channel-less resweep; non-retroactive manual-confirm; concurrent explain | Low | Low | All four confirmed unchanged. |
+| AUDIT-4E-1 | SSRF policy skipped by one AI provider writer, never re-checked on execution | **Critical** | **Critical** | **A third, previously-unnamed reader path exists**: `resolve_tool_capability -> Ollama /api/show` POSTs to the stored `base_url` on a raw httpx client with **zero** SSRF checks and no rate limit. **The private-network allowance is keyed on provider *type***, which permits `169.254.169.254` / `100.100.100.200` / `fd00:ec2::254` (measured) while the default policy refuses them; and `normalize_base` performs no scheme/credential sanitisation (5 hostile shapes pass through). |
+| AUDIT-4E-2 | models.dev catalog fetch outside the SSRF policy, unpinned client | **Critical** | **Critical** | **And the fetched data is trusted past its schema**: a list-shaped `providers` key makes `AttributeError` escape `fetch_live_catalog`, falsifying the module's documented "never raises" contract (this one *can* break startup). `upsert_catalog` refuses an empty model set but not a structurally wrong one. |
+| AUDIT-4E-3 | Hung provider stalls one 30 s timeout per key/deployment | Medium | Medium | Re-measured over **6 passes**: 31.61 / 30.05 / 30.03 / 31.39 / 30.03 / 30.08 s for one deployment, 60.97 / 60.06 / 60.09 s for two. Confirmed exactly as logged. |
+| AUDIT-4E-4 | `weasyprint==69.0` advisory; dependency gate failing | **Critical** | **Critical** | **Not bumped, and the gate went from 1 advisory to 12 across 3 packages**: `weasyprint 69.0` (PYSEC-2026-3940), `pyjwt 2.13.0` x10 (all fix 2.14.0), `oauthlib 3.3.1` (CVE-2026-49265; reachable only via `apprise -> requests-oauthlib`, and **zero** repo code imports either, so unreachable from Wardress). |
+| AUDIT-4E-5 | Every runtime image is a floating tag | Medium | Medium | **And the worker's MiniLM weights are an unpinned floating model reference** whose pre-download failure is swallowed by `|| echo` at build time — so a changed upstream revision or a failed download produces a *successful* build with different (or missing) detection semantics. |
+| AUDIT-4E-6 / -4E-7 / -4E-9 | Ollama default endpoint; pull stream with no deadline; dependency hygiene residue | Low | Low | All three confirmed unchanged. |
+| AUDIT-4E-8 | Heuristic redaction leaks a short custom-endpoint key | Medium | **High** (escalated) | **The leak is constructed end-to-end and reaches a Viewer**: a 9-character key survives into the dict persisted as layer-8 `ScanFinding.evidence`, and into an HTTP 503 body. The prior finding scoped the exposure to server logs + admin-only `validation_detail`; it is materially wider. |
+| AUDIT-4E-10 | Two moderate frontend dev-dependency advisories below the gate | Low | **High** (escalated) | **The gate status changed**: `pnpm audit --audit-level high` is now **exit 1** with **2 HIGH `undici`** advisories (`. > vitest > jsdom > undici`), not "2 moderate, exit 0". |
+| AUDIT-4E-11 | `ruff format --check .` fails and masks later CI gates | Medium | Medium | **Worse than logged**: `ruff check .` now fails on the **first** command of the backend job (9 errors at HEAD), so `ruff format --check`, `pip-audit`, `check_torch_osv` and `pytest` never execute at all. Signal masking is total, not partial. |
+| AUDIT-4F-5 (detection cross-ref) | `fusion.py:40` and `:192` assert 0.35 against the real 0.40 | Low | Low | Confirmed. **Extended by a repo-wide sweep of every numeric claim in a comment across `worker/`**, which found two further drifted claims: `scan_tasks.py:48`'s "(~0.03)" benign-risk figure is now **~7x too low** (measured band 0.19–0.22), and `metadata.py`'s / `signatures.py`'s docstring claims about security-header downgrades and new-text-only lexicons are **substantively false** (6 of 8 CSP relaxations score 0.0; 7 of 9 adversarial shapes make 100% of the page "new"). One claim was **verified exact**: `scan_tasks.py:58`'s "min observed: 0.0518" reproduces from the artifact. |
+
+---
+
+#### New Findings
+
+> 45 new findings. Full evidence blocks (method, repro steps, measured numbers, cross-subsystem notes, dead-code tables, optimization tables) live in the five scratch reports cited at the top of this entry. Each block below carries ID, severity, subsystem, evidence anchor, root cause and remedy category per §6.1.
+
+##### Critical — 1 new
+
+**AUDIT-SA1-1 — The Playwright SSRF route guard is `page.route`-scoped: Service Workers and `window.open()` popups bypass SSRF validation completely, and the bypass is not limited to the same origin**
+- **Severity**: **Critical** (automatic per Rule 12 and §6.4's SSRF bullet). No inflation — the bypass is proven by **server-side truth**, not by argument.
+- **Subsystem**: `worker/fetcher.py:287-340` (`_make_ssrf_route_guard`; docstring at :288-291 claims it validates "every request the page initiates"), `:543` (`page.route("**/*", ...)` — **page** scope, not context scope), `:518-525` (`browser.new_context(...)` — no `service_workers="block"`); the same claim is restated by `banner_dismiss.py:30-32` and `stealth.py:37-41`.
+- **Evidence**: 3 passes, 3/3 byte-identical, real Chromium, local fixtures, truth source = the internal server's own request counter:
+
+  | Arm | config | guard saw the internal URL? | **internal server received the request?** | body readable back by the hostile page? |
+  |---|---|---|---|---|
+  | **Q1 = PRODUCTION** | `page.route` + `service_workers='allow'` | **No** | **YES** (`['/secret']`) | **YES** — full secret body |
+  | Q2 | `context.route` + `allow` | Yes | **YES** (abort did not stop it) | No |
+  | Q3 | `page.route` + `service_workers='block'` | No | **No** (`[]`) | n/a — SW never registers |
+  | Q4 | `context.route` + `block` | No | **No** (`[]`) | n/a |
+  | **Popups** | `page.route` (production shape) + `window.open()` | **No** | **YES** (`['/secret?via=popup']`) | — |
+
+  Read-back is **full**, not blind: both an `Access-Control-Allow-Origin: *` internal service and a CORS-strict (Redis/Postgres-shaped) one returned the complete secret, and the hostile page wrote it into the DOM — so it lands in the very string `fetcher.py:649` persists. **The exfiltrated internal response becomes Wardress's stored `page.html` artifact**, downloadable through the artifacts API. `docker-compose.yml` puts app/worker/beat/db/redis on one default network.
+- **Root cause**: the guard delivers *page-scoped request interception*, not context-scoped enforcement; service-worker-initiated requests are reported to the routing layer but **cannot be aborted by it**, and popups are not routed at all. Three docstrings assert a coverage invariant the code does not hold. **Distinct from AUDIT-3-3**: no DNS, no TTL race, no timing luck — `window.open()` alone is a one-line trigger.
+- **Proposed remedy category**: add `service_workers="block"` to `browser.new_context(...)` (proven sufficient by Q3/Q4) **and** add `context.route("**/*", guard)` for popup coverage — in addition to, not instead of, the block; add a hermetic regression test asserting **server-side zero hits** (not a browser-side `ERR_BLOCKED_BY_CLIENT`); correct the three docstrings. `app/ssrf.py` is untouched (Rule 12) — the entire fix is in `fetcher.py`'s context construction.
+- **Source**: Session A cold read of the guard's request-coverage claim.
+
+##### High — 16 new
+
+| ID | Title | Severity | Subsystem | Evidence anchor | Remedy category |
+|---|---|---|---|---|---|
+| **AUDIT-SA1-2** | Non-Cloudflare bot walls are captured as real content on the **scan** path and deterministically produce false alerts | High | `worker/fetcher.py:166-201` (Cloudflare-only markers); `worker/scan_tasks.py:262-272` (**no `http_status` gate** on the scan path, contrast the baseline gate at :109-118) | Detector truth table over production `looks_like_challenge_page`: Akamai (`AkamaiGHost`, `ak_bmsc`), DataDome 403 **and its 200-OK captcha**, PerimeterX/HUMAN, AWS WAF 403 + 405 CAPTCHA, Imperva, Sucuri, 200-OK soft-block — **all pass as REAL PAGE**. End-to-end through production `run_detection` + fusion: DataDome 200 interstitial -> **risk 0.931, flagged**; Akamai 403 -> 0.917 flagged; AWS WAF 403 -> 0.927 flagged. `http_status` is carried into `PageData` and **no layer or gate reads it**. A 200-OK wall additionally bypasses the baseline `>= 400` guard, so **it can be stored as a healthy baseline** and every later scan then reads as a massive change. | Vendor-agnostic wall-page classifier (status + header/cookie/title fingerprints for Akamai/DataDome/PerimeterX/Imperva/AWS WAF + 200-OK interstitial heuristics) as a *separate* gate; an `http_status >= 400` gate on the scan path; a `blocked_page` capture-quality label. **Directly predicts Phase 5A Tier-B failures and must be fixed before them, or they will be mis-attributed to per-site flakiness.** |
+| **AUDIT-SA2-1** | A rotating third-party widget (reCAPTCHA / Turnstile / Taboola / analytics / Intercom) **FLAGS** a healthy site at risk 0.6776 | High | `worker/detection/dom.py:640-676, 688-734` (layer 3) | 3 passes/shape, pstdev 0.00000. reCAPTCHA anchor iframe appears, reCAPTCHA `src` rotates, Turnstile, Taboola lazy ad iframe, Intercom, Segment, HubSpot-on-new-domain **all `flagged`**, 6 of them at exactly **0.6776** with the `new_sensitive_infrastructure` rule floor armed. Two new external stylesheets reach >= 0.50. Root cause is **not "new domain" but the absence of any notion of element identity**: layer 3 diffs *sets of URLs*, so an element already present whose `src` rotates scores identically to a brand-new injection — and `iframe_src`/`script_src`/`form_action` all carry weight 1.0. Control: the same iframe rotating *within a known domain* reads 0.19 `changed`. | Element-identity-aware ref diff (keyed on tag+position or a stable attribute, with `src`-value rotation classified separately from element addition); recalibrate the additive weights against the vendor-addition population AUDIT-2-4 measured. |
+| **AUDIT-SA3-1** | The dispatcher's schedule claim is never released: a single broker blip becomes a silent one-interval scan gap | High | `worker/beat_tasks.py:160-168` (claim committed **before** any scan row exists), `:202-204` (row INSERT), `:207-213` (publish, bare `except` that only logs), `:214-221` (per-site `except` -> rollback, **no un-claim**) | Hermetic + DB-unreachable trace: with `send_task` raising, the tick returns `{'due':1,'enqueued':0,...,'lost_claim':0}` — **the complete stats key set contains no error/fail/lost-publish bucket** — the Scan row survives as `pending` with no message anywhere, and the orphan's `next_scan_at` is 1,430+ minutes out. The claim is a **schedule mutation, not an intent log**: nothing can distinguish "claimed and enqueued" from "claimed then the publish died". Note the inconsistency it creates: a concurrent `scan-now` is *self-healing* (the API's own stale-recovery path), while beat dispatch is not. | Mark the freshly-inserted `pending` row `failed` with an explicit enqueue-failure reason on the publish-failure path (it is provably never going to run); add a `lost_publish` stat counter as the minimum viable version. |
+| **AUDIT-SA3-2** | No retention policy exists for scans, findings, artifacts, alerts, deliveries, remediation executions, or the audit log | High | absence of any deletion path in `backend/app/**`, `worker/**`, `alembic/**`, `tools/**` | Repo-wide grep for `retention|prune|purge|delete(Scan)|older_than|max_scans|keep_last|TRUNCATE` returns **zero** hits in any orchestration module. The only artifact deleter keys on row absence; `AuditLog` is immutable by design with no stated horizon. Monotonic growth of both the database and a mounted volume, on a product whose entire premise is unattended operation for months. Cross-confirms AUDIT-3-4's retention half from the orchestration side. | Time-bounded retention policies per table with a documented default horizon; an operator-visible "data retention" section; a scheduled prune task with per-run budgets. |
+| **AUDIT-SA3-3** | A failed capture orphans its artifacts permanently | High | `worker/beat_tasks.py:271-291` (janitor keys on row existence), `worker/artifacts.py` | Hermetic: a `failed` row's artifact tree survives every janitor cycle; a row-less tree is removed (positive control). Independent confirmation of AUDIT-3-4's retention half from the janitor's side. | Janitor scope keyed on row *state* and age, not existence alone. |
+| **AUDIT-SA3-4** | The worker's broker publish has no fail-fast bound: 10.7 s on the first failure, 63.8 s on every subsequent one | High | `worker/celery_app.py` (`broker_transport_options={}`, `max_retries=100`) vs `app/tasks.py` (API client: `max_retries=2, interval_start=0.1`) | Measured against a refused broker. Consequence: a worker publishing a follow-up task during a broker outage blocks a scan child for up to ~64 s per call, against a 420 s soft / 480 s hard limit — turning an infrastructure blip into wasted scan capacity and soft-time-limit kills. | Give the worker's publisher the same bounded retry policy as the API client, or make publishing non-blocking with the message handed to a retry queue. |
+| **AUDIT-SA4-1** | A password reset does not invalidate outstanding access tokens and does not revoke the account's API keys | Medium→**escalated rationale** (kept Medium) | `app/routers/users.py:123-125`, `app/deps.py:53-79`, `app/config.py:43-48` | HTTP probe: after an admin password reset, the victim's **old access token -> 200**, **API key -> 200**, live refresh cookie -> 401. Exactly one of three credential classes dies. API keys survive **indefinitely** (`_user_from_api_key` checks only `revoked_at is None` and `is_active`). The asymmetry is visible in the code: `users.py:90-101` revokes refresh tokens on *role change* precisely because "role rides in the access token" — the password branch applies the same revocation and leaves the key untouched. There is no `auth_version` column anywhere. `is_active=False` does kill both classes, so deactivate/re-activate is the only working eviction today. | A `token_version` / `auth_version` column stamped into the access token and checked on every decode, plus API-key revocation on password change and on role change; a documented "log out everywhere". |
+| **AUDIT-SA4-2** | The per-IP rate limiter is fully bypassable by a client-supplied `X-Forwarded-For` under the *documented* proxy configuration, and IPv6 is not normalised | Medium | `app/ratelimit.py:98-106, 117-136`, `app/config.py:88-91`, `README.md:355`, `docs/configuration.mdx:71` | Measured with the flag both ways. `TRUST_PROXY_HEADERS=true` + rotating XFF -> **8/8 allowed, limit fully bypassed** (default `false` correctly ignores it). The bug is the classic one: `split(",")[0]` takes the **leftmost** entry — the client-supplied one — while nginx `$proxy_add_x_forwarded_for` *appends* the real peer to the right. **Neither `README.md` nor `docs/configuration.mdx` says the proxy must overwrite rather than append.** Config-independent second vector: 6 addresses in one IPv6 /64 -> **6/6 allowed** from the socket peer alone. Bypassing `client_ip()` voids the dedicated login limiter too. Verified **not** findings: no fail-open mode in the limiter; the N-workers bypass is unreachable in the shipped topology (single uvicorn process, no `command:` override); API-key rotation does not reset the budget; `Retry-After` is correct. | Take the **rightmost** untrusted hop (walk the list right-to-left against a trusted-proxy count); normalise IPv6 to its /64; document the overwrite requirement next to the flag. |
+| **AUDIT-SA4-3** | The per-account login lockout is an unauthenticated, effectively permanent DoS against any known account address | Medium | `app/routers/auth.py:49-51, 89-132, 160-172` | HTTP probe, unauthenticated: 9 wrong-password attempts with **no credential** -> `[401 x5, 429 x4]`; the **correct** password while locked also returns 429 with the same `Retry-After`. Back-off is `60 * 2**(count−5)` capped at 900 s, so **one request per 15 minutes — four per hour — holds the lock indefinitely at zero cost**. The legitimate admin **cannot break it by logging in** (rejected before password verification); only waiting out a window the attacker keeps re-tripping, or an admin action requiring a **second** admin. On a one-admin self-hosted install that is a hard outage with no self-service recovery. Compounds with AUDIT-SA4-2. | A cap on *total* lockout duration, operator notification on lockout, and a single-admin recovery path; consider an admin-scoped "unlock" action. |
+| **AUDIT-SA4-5** | `CORS_ALLOWED_ORIGINS=*` makes the API reflect **any** origin with `Access-Control-Allow-Credentials: true`, contradicting the stated contract | Medium | `app/config.py:92-99` (`cors_origins()` validates nothing), `app/main.py:225-237` (`allow_credentials=True`) | In-process with `CORS_ALLOWED_ORIGINS=*`: simple GET and preflight OPTIONS from `https://evil.test` both return `ACAO: https://evil.test` + `ACAC: true`, `Allow-Methods: DELETE, GET, …`. Impact is currently **nil** (the only cookie is `SameSite=strict`; the bearer lives in JS module memory), which is exactly why every cross-origin mutation probe returns 401 — the entire remaining protection of the credential model rests on a cookie attribute in a different file with no assertion guarding the combination. The **default is safe**: empty origins means the middleware is not registered at all. | Reject `*` at config-parse time (or downgrade it to a non-credentialed wildcard with a logged warning); document that `*` is "any origin, with credentials", not a safe wildcard; add a test asserting the safe default. |
+| **AUDIT-SA4-8** | `GET /api/sites` is unbounded and silently ignores `limit`/`offset`: 600 sites = 364,581 bytes in one response | Medium | `app/routers/sites.py::list_sites` | Measured. Bulk import admits 500 sites per call, so the list endpoint's unbounded eager baseline-summary join is reachable by design. Quantifies AUDIT-4C's own "paginate `GET /api/sites`" opportunity. | Offset/limit + total, copying the contract the alerts/scans/audit pages already implement. |
+| **AUDIT-SA4-9** | `GET /api/health` returns HTTP **200** in both the healthy and the database-down branch, so status-code-based probes report healthy through a total DB outage | Medium | `app/routers/health.py` readiness route | Live + hermetic. This is the concrete form of AUDIT-4C-5's residual note, and it means `docker-compose.yml`'s style of status-code health probe would not detect a database failure. | Return 503 on the degraded branch (or document that `/live` is the only probe target and stop advertising `/health` as one). |
+| **AUDIT-SA5-1** | The locked `pyjwt==2.13.0` carries 10 published advisories; one is **live-reachable as an unauthenticated HTTP 500** | High | `app/security.py` (`decode_access_token`) | **Live-proven on the shipped uvicorn+httptools image**: one 27 KB `Authorization` header (a nested JWT header) -> `RecursionError` escapes `except jwt.PyJWTError` -> **HTTP 500 with a traceback, unauthenticated**. The other 9 are unreachable (single-alg HS256, no PyJWK) — triaged individually, not waved away. Fix is 2.14.0. | Dependency bump to `pyjwt>=2.14.0`; **and** harden `decode_access_token` against non-`PyJWTError` exceptions (a token is untrusted input) so no future advisory becomes an unauthenticated 500. |
+| **AUDIT-4E-8 → escalated** | *(see Confirmed table above — Medium to **High**: the leak reaches a Viewer through layer-8 `ScanFinding.evidence` and an HTTP 503 body)* | High | `app/llm.py:60-79`, `worker/detection/semantics.py` evidence, `app/routers/settings.py` | | Value-aware redaction against the configured key set, not just shape heuristics. |
+| **AUDIT-4E-10 → escalated** | *(see Confirmed table above — Low to **High**: the gate is now exit 1 with 2 HIGH `undici`, and the `walkthrough/` tree has **no audit gate at all**)* | High | `frontend/package.json` (`vitest ^4.1.10`), `walkthrough/package.json` | | Bump `vitest` to >= 4.1.11; add the same `pnpm audit` gate to the `walkthrough` workflow. |
+| **AUDIT-4E-1 → deepened** | *(see Confirmed table — a **third** unvalidated SSRF reader exists, and the type-keyed private-network allowance reaches cloud metadata)* | Critical | `app/llm.py` / `app/ai_ollama.py` (`/api/show`) | | Validate at the single point a `base_url` becomes a litellm deployment. |
+| **AUDIT-4E-4 → deepened** | *(see Confirmed table — 12 advisories across 3 packages, not 1)* | Critical | `backend/pyproject.toml`, `uv.lock` | | |
+
+##### Medium — 13 new
+
+| ID | Title | Subsystem | Evidence / root cause | Remedy category |
+|---|---|---|---|---|
+| **AUDIT-SA1-4** | `apply_stealth` fails open only when the package is *absent*; a raising `playwright-stealth` escapes `fetch_page` and strands the scan row in `running` | `worker/stealth.py:232-243` (no try around `Stealth(...)`/`apply_stealth_async`), `worker/fetcher.py:529, 465-494` (no bare `except`), `worker/scan_tasks.py:263-272` | Live probe: `RuntimeError` propagates and state is **partially applied** (library init scripts registered, `stealth.py`'s supplementary script never lands) — a *less* stealthed state than either contract describes. `fetch_page` has no last-resort handler, so the row committed `running` at `scan_tasks.py:258-260` is never updated; no error, no alert, no evidence — a silent stall. | Extend the fail-open contract to a *raising* library (log + continue unhardened, still install the supplementary script); give `fetch_page` a last-resort `except Exception -> FetchError`. |
+| **AUDIT-SA2-4** | The committed dataset's `sanity_benign_quiet` row fuses to 0.6583, and **layer 8 alone can never reach the material bar** | `worker/detection/training/fusion_dataset.json`, `worker/detection/fusion.py:62-71` | The single-layer reachability map (the operationally important artifact of Session A): `sum(c*v) = 5.8416` reaches 0.40; layers **1, 2, 3, 6, 8 are individually incapable** of it (layer 8 at its maximum of 1.0 produces only **0.1198** — a page whose entire visible content is replaced scores *lower* than one with a rotating third-party iframe at 0.6776). 8 layers uniformly at 0.0848 lands at exactly 0.4000; at 0.10 they flag with no single layer alarming. Layer 4's coefficient (26.26) is 6x layer 2's — the system's sensitivity is set by one channel. `sanity_benign_quiet`, a *calibration sanity row*, is above the flag threshold. | Re-derive `MATERIAL_CHANGE_RISK` from a benign population that includes the omitted axes; give layer 8 a channel that can carry a total content takeover; add the reachability map as a standing assertion. |
+| **AUDIT-SA3-5** | A failing `_schedule_next` silently converts a site into a once-per-tick scan loop | `worker/scan_tasks.py` (swallow-all wrapper), `app/scanning.py` | Hermetic: the scan completes, the schedule is untouched, and the **next tick re-dispatches the same site** — so a persistent `_schedule_next` failure means every site with that condition is scanned every 60 s. | Surface scheduling failures as a stat/alert rather than a bare log; make the wrapper fall back to a default interval. |
+| **AUDIT-SA3-6** | The in-flight unique index firing inside the dispatcher is absorbed into no stats bucket | `worker/beat_tasks.py` (dispatcher's `IntegrityError` catch), `app/models.py` partial index | A deterministically-won arbiter collision lands in `lost_claim=0` and no error bucket — so the dispatcher's own counters under-report contention. | Route the violation into a named stat (`skipped_inflight_race`). |
+| **AUDIT-SA3-7** | `beat` declares no `depends_on: db`; neither `worker` nor `beat` has a healthcheck | `docker-compose.yml:118-131` | `beat` genuinely needs `DATABASE_URL` and imports `worker.db`. Independently confirmed by the AI/infra subagent. | Add `depends_on: db: condition: service_healthy` and a healthcheck to both services. |
+| **AUDIT-SA3-8** | Migrations run only from `install.ps1` / `update.ps1`, never at container start | `scripts/*.ps1`, `backend/Dockerfile.app` | A container started by any other route (`docker compose run`, a scale-out, a CI job, an operator's manual `docker start` after a volume restore) comes up against an **un-migrated schema**. | Run `alembic upgrade head` as the app's entrypoint (or a dedicated migrate service the app depends on). |
+| **AUDIT-SA4-2 → SA4-4 companion** | The account lockout is a user-enumeration oracle, defeating the deliberately-added constant-time dummy hash | `app/routers/auth.py:38-40, 144-172` | Same 9-request burst against both address kinds: registered -> `[401 x5, 429 x4]`; unregistered -> `[401] x9`, never 429. The **401 -> 429 transition after exactly 5 requests is a perfect existence oracle requiring 6 requests and no timing analysis**. The timing defense itself is genuinely well-built (`_DUMMY_HASH` computed at import, `verify_password` on both branches) — it is defeated by the *state* the two paths leave behind. A second leak in the same area: the unknown-account path writes an `auth.login_failed` audit row while the locked path writes **none**, so the enumeration is visible through the admin audit log too. | Increment a lockout counter for unknown addresses as well, or return a fixed-shape 429 for both. |
+| **AUDIT-SA4-6** | Zero `aria-live` / `role="status"` regions anywhere in `src/`: polling state changes are never announced | `frontend/src/pages/{site-detail,health,alerts,remediation,scan-detail}.tsx` | Measured: zero live regions in the whole SPA, on surfaces whose entire purpose is asynchronous state change (2 s and 5 s poll intervals). Degrades gracefully. | A shared `<StatusAnnouncer>` on the polling surfaces; `role="status"` on verdict/degraded transitions. |
+| **AUDIT-SA4-7** | Keyboard users cannot use the bulk-import CSV control; three `<Label>` elements label nothing, and no data table in the app has a caption | `frontend/src/pages/bulk-import-dialog.tsx` + tables | Measured via keyboard traversal. Compounds AUDIT-4F-7 (unnamed `role="application"`) into a systemic a11y pattern: controls and data regions exist without accessible names. | Focusable file input (or a labelled trigger button); associate every `<Label>` with a control; `<caption>` (or `aria-label`) on every data table. |
+| **AUDIT-SA3-10** | `missing-prereqs` is the only scan-failure path that leaves `verdict` NULL | `worker/scan_tasks.py` | A scan row in that state renders differently from every other failure; FK cascade behaviour during concurrent delete + completion verified clean in all three orderings (positive result). | Normalise the terminal state (a typed failure reason) or handle NULL in the API/UI contract. |
+| **AUDIT-SA3-11** | `pool_pre_ping=True` in `worker/db.py` is unreachable, and every Celery task pays ~88 ms to build and tear down an engine | `worker/db.py::task_session` | `task_session` builds a **distinct engine per call**, so `pre_ping` never fires, `recycle=-1` never triggers, and the pool is never reused: measured **87.4 ms fresh vs 6.9 ms pooled**. A module-scoped lazily-created engine (or a `NullPool`-free shared pool) would remove the per-task cost. *Positive result recorded too*: connection-pool exhaustion is **unreachable** at 27/100 connections with 12 workers. | A process-scoped engine with a real pool; keep `pre_ping` (it is the right defence once the pool is shared). |
+| **AUDIT-SA5-3** | There is no Fernet key ring, version prefix, or re-encrypt path: rotating `CREDENTIALS_ENCRYPTION_KEY` silently destroys every stored credential, and the AI layer degrades to **unauthenticated** requests | `app/crypto.py`, every decrypt caller, `app/llm.py::_deployments` | Hermetic probe: encrypt under key A, swap to key B, and after the change `_deployments` builds a deployment with **no `api_key`** — i.e. the system does not fail, it *silently keeps working against a provider with no credential*. SMTP and Telegram channel configs are silently unconfigured by the same rotation. `.env.example` documents the key's existence but not its rotation consequence. | A versioned key ring (`FERNET_KEYS` with an active index) plus a re-encrypt migration path; a startup assertion that an unreadable blob fails the deployment rather than degrading it silently. |
+| **AUDIT-SA5-4** | CI never builds either Dockerfile, and the deployed `walkthrough/` tree has no audit, lint, typecheck or test gate | `.github/workflows/ci.yml`, `static.yml`, both Dockerfiles | **Neither runtime image is built in CI at all** — so the artifacts that actually ship are unscanned by any gate, and `|| echo` in the worker's MiniLM pre-download turns a failed model download into a successful build. `walkthrough/` is a second, entirely ungated dependency tree that `static.yml` publishes. | A build-and-scan job for both images; extend the frontend gate set to `walkthrough/`; fail the build on a model-download failure. |
+
+##### Low — 15 new
+
+| ID | Title | Subsystem | Evidence | Remedy category |
+|---|---|---|---|---|
+| **AUDIT-SA1-3** | `dismiss_banners` burns its entire 3 s budget on every capture of a banner-free page | `worker/banner_dismiss.py:398-406` | Measured 3.141 / 3.093 / 3.094 s (spread 0.048 s) at 30 attempts per frame, on top of **30 CDP `query_selector` round-trips per frame**. Against a measured 10.42–11.06 s end-to-end capture of the same banner-free page, that is **~28 % of total capture wall clock**. The wasted work is invisible — `attempts` is recorded and read by nothing. | Make the late-banner wait event-driven (a single cheap probe or a `MutationObserver`) rather than a flat timeout; skip it when the combined selector set is provably absent. |
+| **AUDIT-SA1-5** | The screenshot guard is dimension-asymmetric: it caps height only, and the evidence cannot express width | `worker/fetcher.py:377-416, 395`; `worker/stealth.py:92-99` | Measured: a 40,016 px page caps correctly to 1366x16384 with a valid `IEND`; a **20,008 px-wide** page captures **uncapped** at `screenshot_capped: False`, `capture_quality: "full"`, evidence `actual_height: 768` with **no width key at all**. Chromium's raster/tile limit is square; only the vertical axis is guarded. No failure was produced on this headless software-rasterised host, so no corruption is claimed. | Probe and cap width symmetrically; add `actual_width` to evidence; classify as degraded when either dimension exceeds the limit. |
+| **AUDIT-SA3-9** | `via` is accepted and silently discarded by the three orchestration service functions | `app/services.py` | Code trace. The parameter exists on three service functions and no caller uses it. | Remove the parameter or wire it into the audit snapshot. |
+| **AUDIT-SA3-12** | `wardress.ping` is an orphan task registration, and every task result is stored in Redis for 24 h for a consumer that does not exist | `worker/celery_app.py` | No production caller; Celery result retention bounded at 24 h and nothing reads results. | Deregister the task; set `result_expires` to the shortest workable value or disable the backend if unread. |
+| **AUDIT-SA3-13** | Redis runs with no AOF and no `maxmemory`: a restart loses in-flight queue messages, and growth is unbounded | `docker-compose.yml:23-32` | Live inspection. Compounds AUDIT-SA3-2: the broker's memory grows with no ceiling while the database grows with no ceiling, on the same self-hosted premise. | Enable AOF (or document the loss window explicitly); set a `maxmemory` policy; state the restart semantics in the install docs. |
+| **AUDIT-SA4-10** | Twelve provably-dead client functions in `src/lib/api.ts` leave eleven admin routes as live write surfaces with no caller, several advertised as `DEPRECATED` in the public schema | `frontend/src/lib/api.ts`, `app/routers/{settings,users}.py` | Grep-proven dead. Also a **functional gap**: there is no UI path to edit an existing AI provider. | Make the twelve live or absent; retire the deprecated backend routes alongside. |
+| **AUDIT-SA4-11** | The initial JS payload is 1,077 kB / 404 kB gzip; a route-level `lazy()` split measures 268 kB / 83 kB gzip | `frontend/` | Sourcemap-level byte attribution: 205 kB is inlined provider logos and 146 kB is Markdown machinery for 2 of 10 routes. | Route-level `lazy()` (measured −809 kB raw / −321 kB gzip); move provider logos behind the settings route. |
+| **AUDIT-SA4-12** | The audit-log `actor` filter treats `%` and `_` as LIKE wildcards | `app/routers/audit.py:38-39` | Measured: `actor=%` matches every row. Admin-only read filter, correctness not security. | Escape `%`/`_`/`\` before interpolation. |
+| **AUDIT-SA4-13** | Four dead symbols and one duplicated predicate: the JWT `role` claim, `AnyRoleUser`, `TableCaption`, two unused response fields, and the degraded predicate copied into two routers | `backend/app/security.py`, `frontend/src/lib/api.ts`, routers | Grep-proven. The duplicated degraded predicate is the interesting one: two routers each carry their own copy of the same `_has_degraded_layer` logic. | Remove; extract the shared predicate. |
+| **AUDIT-SA5-2** | `litellm` logs the full LLM prompt and the full raw response in plaintext at DEBUG; `app/llm.py` sets three litellm globals but never `turn_off_message_logging` | `app/llm.py`, litellm 1.93.0 | Probe drove production `_build_router(...).acompletion` against a fake endpoint with DEBUG logging: 96 records captured, **0 containing the API key** (so the key is safe) but the **prompt and reply bodies are in full**. The escalation prompt is built from **raw, un-normalized, un-suppressed HTML**, so it can contain captured page content verbatim. | Set `turn_off_message_logging = True` (or `litellm.suppress_debug_info` + an explicit logging filter); redact evidence text at the prompt boundary. |
+| **AUDIT-SA5-5** | `.dockerignore` excludes git-tracked ignores, so local scratch logs are baked into the shipped `wardress-app` image | `.dockerignore`, `Dockerfile.app` | Live: `build_app.err.log` and `build_app.log` are present in the image, absent from git, and absent from `.dockerignore`. | Invert the pattern (ignore everything, re-include the build context) or drop `.gitignore` from `.dockerignore`'s source list. |
+| **AUDIT-SA5-6** | Both runtime images run as root, and the compose services set no `security_opt`, `cap_drop`, `read_only` or `user` | both Dockerfiles, `docker-compose.yml` | Read-only inspection. Given AUDIT-SA1-1's SSRF-reach finding, a root capture container with a default network is the relevant multiplier. | Non-root `USER`, `cap_drop: [ALL]`, `no-new-privileges`, `read_only` where feasible. |
+| **AUDIT-SA5-7** | `LOGIN_RATE_LIMIT_PER_IP` is read by the code, exercised by tests, and documented in **neither** `.env.example` **nor** `docker-compose.yml` | `app/config.py:86` -> `app/ratelimit.py` | The env-var cross-reference (every `os.getenv` / pydantic-settings field in `backend/` and every `process.env` in `frontend/` diffed against both files) found exactly **1 gap, 0 documented-but-unread, and 1 deliberate correctly-documented exclusion (`ARTIFACTS_DIR`)**. This is the *tightest* security knob in the system and it is untunable and undocumented. | Document and forward it. |
+| **AUDIT-SA5-8** | `actions/checkout` leaves `persist-credentials` at its default in all three workflows | `.github/workflows/{ci,static}.yml` | Read-only inspection. No `pull_request_target` trigger and no write scope were found (both verified clean), so the exposure is narrow. | Set `persist-credentials: false` explicitly. |
+| **AUDIT-SA5-6b** | Alert delivery has no retry at all under a provider outage, and no circuit breaker | `worker/alert_tasks.py`, `worker/beat_tasks.py` (resweep cadence) | Model: under an SMTP outage the only retry is the 5-minute resweep, up to 200/run, with no backoff and no breaker. *Positive contrast recorded*: this is the opposite failure direction to AUDIT-4D-1/4D-2 (which lose alerts) — it is over-*work*, not loss. | Exponential backoff on the resweep predicate; a per-channel breaker; a `skipped` terminal row (which also closes AUDIT-4D-6). |
+| **AUDIT-SA5-7b** | Remediation webhook payloads carry no authentication and no replay protection | `app/remediation.py::post_webhook` | A receiver has no way to authenticate the sender or dedupe a retry. Compounds AUDIT-2B-3's accepted at-least-once residue: the lease-reclaim path re-POSTs without knowing whether the first landed, and `scan.id` is the only dedupe handle. | A shared-secret HMAC header or an `Idempotency-Key`; document the retry semantics. |
+
+---
+
+#### Invalidated Findings
+
+- **AUDIT-4B-8 (deployment drift) — INVALIDATED (file-drift half).** Re-verified by three independent subagents with `docker cp` + `git hash-object`: **20/20 MATCH** (orchestration scope), **10/10 MATCH** (API/frontend scope), **27/27 MATCH** (AI/infra scope) — 57 file comparisons, zero mismatches, CRLF-normalised on both sides. `worker/scan_tasks.py`, the file 4B reported as differing, is now `a6878b37...` in the container — byte-identical to the exact HEAD value 4B itself recorded. HEAD = `701552e`, working tree clean. **Consequences**: (a) 4B's "rebuild from HEAD before remediation-phase verification" hard requirement is **already satisfied** and can be dropped; (b) 4B's mixed-build caveat no longer applies, so every 4B live probe is now attested against the code it describes; (c) **the finding's substance survives as a Low residual** — nothing records which commit an image was built from, which is how the drift went undetected in the first place, and the beat schedule file (`/app/celerybeat-schedule.db`, 12,288 B, `PersistentScheduler`) still lives in the container's writable layer with no volume, so it is lost on container recreate (benign by construction — every periodic task is idempotent — but undocumented).
+- **AUDIT-4C-2's "`wk_` key prefix in the public schema" — INVALIDATED (partial).** 0 hits across the 99,585-byte OpenAPI document; the prefix lives in `app/apikeys.py`, not in the published schema. The finding itself stands on 8 stronger items (including the newly-found `/docs/oauth2-redirect` route and the schema's narration of the SSRF gate).
+- **Two Session A hypotheses tested and rejected in capture** (recorded so they are not re-audited): (a) an **IDN hostname does not** break the consent-cookie batch — Chromium accepts both the unicode and punycode forms, 13/13 cookies; (b) the screenshot height cap **cannot** produce a corrupt PNG — a 40,016 px page caps to 1366x16384 with a valid `IEND` (307,719 B), and a raw uncapped 40,016 px render also succeeds.
+- **One Session A hypothesis tested and rejected in detection**: `layer1 = 1.0` + real-Chromium render noise does **not** false-flag. Measured with 5 full-page renders at 1366x3442 over 12 pairs: layer 4 = 0.0001 / 0.0001 / 0.0001 / 0.0024, mean **0.0012**, pstdev 0.00115, max 0.0024, SSIM 0.9999 — **18x below the 0.2225 escalation bar**, and PNG byte sizes varied only 0.25 % with zero dimension change. Layer 4's 26.26 coefficient is **defensible for static pages**; the interactive-page question is routed to Phase 8.
+
+---
+
+#### Cross-Subsystem Interactions
+
+Ten interaction clusters were identified. The first three are, in the coordinator's assessment, the material output of Session A — each is a single defect class that the phase-by-phase structure could not have seen because it lives on a seam.
+
+**XS-1 — "Degradation is invisible end-to-end": six findings, one chain, one fix shape.**
+`worker/fetcher.py` computes 17 of 19 `capture_evidence` keys and **nothing reads them** (AUDIT-3-5) -> `ScanPageData(...)` drops the whole dict at the constructor (AUDIT-3-5) -> `ScanFinding` has no `degraded` column, so a findings-only consumer cannot tell "provably zero" from "dark channel" (AUDIT-2-5) -> `pipeline.py`'s degraded guard is baseline-side only, and an *empty page pair* inverts the system's own "provably zero vs unmeasured" distinction (AUDIT-4-5) -> `routers/sites.py` counts degradation fleet-wide but the site-detail payload's TS type drops the `degraded` key and `consecutive_degraded_scans` is read by **zero** files (AUDIT-4F-2) -> the UI renders `Clean` / green dot / `0%` / `0/1 layers ran` while the Health page simultaneously counts the site under "Degraded Captures". **A scan that measured nothing and a scan that measured identical are the same object to every operator-facing surface.** Six findings, one chain.
+
+**XS-2 — The SSRF policy is applied per call site rather than structurally: five instances across four subsystems, one fix.**
+AUDIT-SA1-1 (Critical — the browser's page-scoped route guard, with full read-back into a stored artifact) + AUDIT-4E-1 (Critical — three AI reader paths, one of which is newly found) + AUDIT-4E-2 (Critical — the catalog fetch, plus a "never raises" contract that a schema violation falsifies) + AUDIT-4D-3 (the favicon resolver) + AUDIT-4E-2b's unpinned-client class shared with `probe.py`. All are the same shape: *someone remembered to add the check*. AUDIT-SA1-1 additionally proves the browser arm needs a context-level change (`service_workers="block"`), not just a route-scope change — so the fix is a shared outbound-fetch factory **plus** an armoured capture context. AUDIT-4E-1's finding that the private-network allowance is keyed on provider *type* and therefore reaches cloud-metadata addresses means the allowance itself, not just its application, needs review.
+
+**XS-3 — Detection-to-notification has three independent, silent, unrecoverable loss windows.**
+AUDIT-4B-1 (alert row creation after the terminal commit, measured at **10.1 ms median / 26.8 ms max**, plus an unbounded DB-hiccup variant that is ACKed rather than redelivered) + AUDIT-4D-1 (per-channel commits during delivery; **now deterministically reachable from a CR/LF in a user-controlled site name**, real window `40 s x (channels−1)`) + AUDIT-4D-2 (check-then-act guard double-sends). All three are silent, all three are covered by exactly the wrong recovery primitive, and none of the three is covered by the `resweep_undelivered` task — whose predicate is "zero delivery rows" while creation failures leave *no row at all*. Detection → notification is the system's core output.
+
+**XS-4 — Retention is unbounded in every store the product writes to.**
+AUDIT-3-4/SA3-3 (artifact directories whose rows still exist survive forever; nothing ever deletes a `Scan` or `Baseline` row) + AUDIT-SA3-2 (scans, findings, alerts, deliveries, remediation executions, audit log) + AUDIT-SA3-13 (Redis with no `maxmemory` and no AOF) + AUDIT-SA5-5 (scratch logs baked into the shipped image). The deployment premise is unattended, self-hosted, months-long operation.
+
+**XS-5 — False positives on healthy sites are the dominant real-world risk, and they arrive from three independent directions.**
+(A) *Capture failure*: AUDIT-SA1-2 (bot-wall pages -> risk 0.917–0.931, `flagged`), AUDIT-3-1 (a banner click can capture the wrong page and defeat the challenge gate), AUDIT-3-4 (a truncated artifact behind a `completed` row). (B) *Probe transients*: AUDIT-4-2 (TLS failure now fuses to **0.5502**, above the flag threshold). (C) *Detection scoring*: AUDIT-SA2-1 (a rotating widget flags at 0.6776), AUDIT-4-1 (a one-word edit on an unpunctuated page reaches **1.0**), AUDIT-2-4 (**34 of 323 benign rows in the model's own training data** exceed the default flag), AUDIT-4-5 (binary-junk capture at 0.9833). Every one of them creates an `Alert` **and** a `RemediationExecution` **and** permanently pins cadence to `base/4`. The LLM second opinion is **not** consulted for most of them (they exceed the 0.75 escalation ceiling), so the designed mitigation does not apply.
+
+**XS-6 — False "clean" on real attack patterns: the class that most directly violates the North Star.**
+AUDIT-SA2-2 (Critical — a CSP widening from `'self'` to `*` scores **exactly 0.0**; the scan reads `clean` at risk 0.0031, and the direction classifier returns "unknown" for **6 of 8** real-world relaxations while calling an attacker-added origin `stronger`) + AUDIT-SA2-3 (Critical — layer 7 is **exactly 0.0** for a cloaked banner at >= 146 reference tokens, because the additive ramp is anchored to `added/|ref|` and therefore decays as the page grows, while the *legitimate* mobile-serves-less case grades 0.62–0.66) + AUDIT-4-5 (both sides empty -> `clean`) + AUDIT-4-6 (removal-only defacement; and un-hiding a hidden spam farm -> `layer2 = 0.0` with zero structural churn) + AUDIT-2-3 (redirect and client-side cloaking) + AUDIT-SA2-4 (layer 8 at its maximum contributes only 0.1198, so a *total* content takeover is the largest miss the coefficient table encodes).
+
+**XS-7 — CI cannot report, so every "the suite is green" claim in this log is unverifiable at the repo level.**
+AUDIT-4E-11 is now **worse** than logged: `ruff check .` fails on the *first* command of the backend job, so `ruff format --check`, `pip-audit`, `check_torch_osv` and `pytest` never execute. AUDIT-4E-4/SA5-1 put `pip-audit` at 12 advisories across 3 packages. AUDIT-4E-10 escalated: the frontend gate is now **exit 1** (2 HIGH `undici`). AUDIT-SA5-4: **neither Dockerfile is built in CI at all**, and `walkthrough/` has no gate whatsoever. The only green security-relevant gates are `check_torch_osv` and `alembic check`.
+
+**XS-8 — Both "recovery actions" an operator would reach for do not do what the API implies.**
+AUDIT-SA4-1 (a password reset revokes refresh tokens only; access tokens and API keys survive indefinitely) + AUDIT-SA5-3 (rotating `CREDENTIALS_ENCRYPTION_KEY` silently destroys every stored credential and the AI layer then *keeps working against the provider with no credential at all*, while SMTP and Telegram silently unconfigure). Both are silent, both are one operator action away, and both defeat the documented incident-response procedure.
+
+**XS-9 — AUDIT-SA1-2 directly predicts Session B Wave 1's Tier-B failures, and sequencing matters.**
+The stress catalog's Tier B is Akamai / DataDome / PerimeterX / AWS WAF / Turnstile. Per the capture subagent's measured truth table, **every one of those vendors' walls is currently captured as real content and produces a `flagged` scan** — so Phase 5A+5B will fail those sites for a *detector* reason, not a flakiness reason, and will mis-attribute it per-site unless the wall classifier and the scan-path `http_status` gate land first. This is the one Session A finding that changes the plan for a pending phase.
+
+**XS-10 — The dead-code / write-only surface is repo-wide, and it is concentrated in exactly the places the phases believed were complete.**
+Capture: 17 of 19 `capture_evidence` keys have zero production readers, including two added *specifically* for triage (`capture_wall_clock_ms` by Phase 7, `retry_count` by Phase 6). Detection: `signatures._new_text`'s `base_lines` set proven dead by a 20,000-pair behavioural A/B (reproduced as a regression guard); `cloaking.py:117`'s `added == 0` arm proven redundant over a 400-case grid (also reproduced as a guard); `script_profile(sample_cap=)` has no production caller; `__all__` omits `degraded_result` despite 5 production importers; 6 unused generator parameters. Orchestration: `wardress.ping` is an orphan registration, `via` is accepted and dropped by three service functions. API/frontend: 12 dead client functions leaving 11 admin routes live but caller-less, plus 4 dead symbols and a duplicated degraded predicate across two routers. AI/infra: 2 orphan functions and a duplicated `LAYER_LABELS` map. **Every one of these is proven by behavioural A/B or repo-wide grep, not by inspection.**
+
+---
+
+#### Updated Opportunities Register
+
+New opportunities raised by Session A (in addition to everything already logged in O-1…O-8, O-4D-1…3, O-4E-1…4):
+
+| # | Idea | Why it would help | Where |
+|---|---|---|---|
+| **O-SA-1** | **One outbound-fetch factory** (extend AUDIT-4E's O-4E-1): a `safe_async_client()` that always installs the pinning transport + validates on open, **plus** a test asserting no module builds a bare `httpx.AsyncClient` for outbound work — and, for the browser, a single armoured-context constructor that both blocks service workers and installs a context-scoped guard | Makes "forgot the policy" unrepresentable across AUDIT-SA1-1, 4E-1, 4E-2 and 4D-3 at once, and turns `ssrf.py`'s docstring back into a fact | `app/ssrf_transport.py`, `worker/fetcher.py`, `ai_catalog.py`, `site_icons.py`, `ai_ollama.py`, `remediation.py`, `probe.py` |
+| **O-SA-2** | **Batched MiniLM encoding** — measured **1.68x, −253 ms/scan** (24 individual `embed_text()` calls: 626.5 ms mean, pstdev 33 → 2 batched `encode()` calls: 373.6 ms, pstdev 6). Per-call overhead floor is 12.61 ms, so at the 24-chunk worst case a page pays 300–605 ms of pure overhead. Layer 8 is **959 ms of a ~1.44 s detection cost (66 %)** | The single highest-value optimization found in Session A | `worker/detection/semantics.py` |
+| **O-SA-3** | **Resize each screenshot once per layer-4 call** — instrumented: 8 `resize()` + 8 `convert()` calls per invocation; `resize` alone is 0.749 s tottime over 5 invocations = **150 ms/call, 33 % of layer 4**. Deriving pHash/dHash/SSIM/chroma from one downscaled array projects **90–120 ms/scan** | Needs a corpus re-baseline (hash values shift), so it is a deliberate trade | `worker/detection/visual.py` |
+| **O-SA-4** | **Event-driven banner wait** — removes **3.09–3.14 s from every capture of a banner-free page** (measured, 3 passes), which is ~28 % of a 10.4–11.1 s capture; and **scroll a consent-iframe control into view** before the viewport test, which converts a measured `dismissed: False` into a real dismissal and recovers the lazy content the overlay's scroll-lock was suppressing | The largest single capture-latency win found | `worker/banner_dismiss.py` |
+| **O-SA-5** | **Parallel `probe_site` UA fetches** (`asyncio.gather`) — measured 4 sequential requests at 1.61–1.77 s; `max_connections=4` is already provisioned and idle for 3 of 4 slots | ~2x on the probe leg; must preserve `desktop_chrome`'s headers for layer 6 | `worker/probe.py` |
+| **O-SA-6** | **Route-level `lazy()` in the SPA** — measured: initial payload 1,077 kB / 404 kB gzip, of which 205 kB is inlined provider logos and 146 kB is Markdown machinery for 2 of 10 routes; a route-level split measures **268 kB / 83 kB gzip** | −809 kB raw / −321 kB gzip on first load | `frontend/src/App.tsx` routing |
+| **O-SA-7** | **A process-scoped DB engine for Celery tasks** — measured 87.4 ms fresh vs 6.9 ms pooled, paid on every task, while `pre_ping` sits configured-but-unreachable | Removes a per-task engine build; makes the existing pool settings meaningful | `worker/db.py` |
+| **O-SA-8** | **Fernet key ring + re-encrypt migration path**, with a startup assertion that an unreadable blob fails the deployment rather than degrading it silently | Closes AUDIT-SA5-3 and makes credential rotation an operation rather than a data-loss event | `app/crypto.py`, `app/llm.py`, `app/alerting.py` |
+| **O-SA-9** | **A "third verdict state"** (`clean` / `changed-benign` / `changed` / `flagged`) driven by the content-layer peak excluding `layer1` *and* the generic churn term | Directly implements what the AUDIT-1-1 measurement shows is required (the byte-hash exclusion alone does not deliver `clean`), and gives the frontend a vocabulary for the state operators actually see | `worker/scan_tasks.py`, `app/schemas.py`, `site-detail.tsx` |
+| **O-SA-10** | **A `degraded`/`unmeasured` presentation vocabulary** — a shared severity module (`riskTone(value, threshold)`) plus a distinct third layer state, so a dark channel never renders with the same vocabulary as a measured zero | Closes AUDIT-4F-2, 4F-4, 4F-7, 4F-8 **and** the frontend half of XS-1 in one change; this is AUDIT-4F's own opportunity list, now with a measured justification | `frontend/src/lib/`, all capture surfaces |
+| **O-SA-11** | **A build-commit marker baked into both images**, plus a CI job that actually builds and scans them | AUDIT-4B-8's drift was invisible precisely because nothing recorded the build; AUDIT-SA5-4 means the shipped artifacts are currently unscanned | `Dockerfile.*`, `ci.yml` |
+| **O-SA-12** | **A standing `min-rows-per-benign-axis` assertion in the corpus validator** — adding the 6 omitted benign axes would immediately fail the build (measured maxima 0.8269 / 0.8454 / 0.3588 / 0.6583 / 0.0222 / 0.0048), which is the correct signal | Converts AUDIT-2-4's blind spot from a one-time measurement into a build-time failure | `backend/tools/build_regression_corpus.py` |
+| **O-SA-13** | **A `partial_cloaking_small_payload` corpus axis across >= 3 reference sizes**, and a `layer8_total_takeover` shape | AUDIT-SA2-3 and AUDIT-SA2-4 both expose ranges with **no corpus row at all** (274 of 323 attack rows have layer 7 exactly 0.0; no partially-cloaked row exists in either artifact) | `backend/tools/build_regression_corpus.py`; feeds Phase 8's fixture suite |
+
+**Attack-shape gaps handed to Audit Phase 8** (from the detection subagent, measured today — this is Phase 8's fixture backlog, ordered by the severity each gap currently causes):
+
+| # | gap | measured today |
+|---|---|---|
+| 1 | **Benign**: reCAPTCHA / Turnstile / Taboola / Intercom / analytics / chat widget appears, or its `src` rotates | `flagged` at 0.6776, 3/3 |
+| 2 | **Benign**: operator adds a legitimate vendor script (`vendor_script_added` axis) | every row flags, mean 0.7538 |
+| 3 | **Benign**: a legitimate site redesign (`site_redesign` axis) | max 0.8454 |
+| 4 | **Benign**: one or two new external stylesheets | 1 -> 0.4243 (cadence), 2 -> `flagged` |
+| 5 | **Benign**: `sanity_benign_quiet` — the calibration sanity row itself | 0.6583 |
+| 6 | **Benign**: an A/B variant swap (`ab_test_variant` axis) | max 0.3588 — the closest benign axis to the bar |
+| 7 | **Attack**: a CSP widening, or `script-src 'self'` -> `'unsafe-inline'` | `clean` at 0.0031 |
+| 8 | **Attack**: a maximal HSTS downgrade (2 y + includeSubDomains + preload -> `max-age=300`) | 0.1 -> risk 0.0041 |
+| 9 | **Attack**: an attacker origin added to the CSP allowlist | classified `stronger`, 0.0 |
+| 10 | **Attack**: a small cloaked payload on a realistic page (>= 146 reference tokens) | layer 7 = **exactly 0.0** |
+| 11 | **Attack**: un-hiding a hidden spam farm (drop `style="opacity:0"`) | layer 2 = 0.0, `structural_churn = 0` |
+| 12 | **Attack**: removal-only defacement (strip scripts / iframe / form / link) | layer 3 = 0.0 on all five kinds |
+| 13 | **Attack**: an unpunctuated page + baseline-present lexicon + any one-word edit | `flagged` at 0.94–1.0 |
+| 14 | **Attack**: single-word tampering (`two weeks` -> `two days`) | 0.1942, never escalated |
+| 15 | **Attack**: `<meta http-equiv=refresh>` / client-side `location.replace` cloak | 0.1987 / 0.3153 |
+| 16 | **Attack**: a same-origin credential-harvest overlay | 0.2242 (only a new-domain overlay is caught, at 0.5450) |
+| 17 | **Attack**: a payload in a timed `<script>` string | 0.3153 (the DOM-*text* form of the same attack **is** caught at 1.0) |
+| 18 | **Positive control needed**: an attack **withdrawn** mid-window | currently caught at 0.9976 via layer 4 — **no corpus row guards this**, so a regression would be silent |
+| 19 | **Benign, needs live measurement**: a hue-only brand refresh | dataset max 0.0222, but layer 4 alone at 0.2379 flags; the synthetic hue test read 0.0, so the real `hsl()`-swap render is unmeasured |
+
+Plus the three mandatory **visual-only** attack fixtures `NB-DET-1` §4 already mandates (Phase 8's own spec).
+
+---
+
+#### Regression Results
+
+Aggregated from all five subagents plus one coordinator re-run. **Every count is from an actual run this session** (Rule 13). All backend runs used a dedicated `wardress_sa_*_test` database on the recreated `wardress-test-pg`.
+
+| Subagent | Suite | Result |
+|---|---|---|
+| Coordinator | **All three new Session A test files together** (`test_phase_sa3_orchestration_deep.py`, `test_phase_sa5_ai_infra_repros.py`, `test_session_a2_detection_findings.py`) on `wardress_sa_consol_test` | **138 passed in 98.19 s** — 0 failed, 0 skipped |
+| Detection | `test_session_a2_detection_findings.py` x3 | **107 passed** — 73.62 / 86.37 / 83.31 s (3/3, zero variance in the count) |
+| Detection | 23 detection files + the new file | **541 passed in 322.09 s** |
+| Detection | 12-file detection baseline batch (pre-existing) | **222 passed in 112.01 s** |
+| Detection | 10-file detection baseline batch (pre-existing) | **212 passed in 164.13 s** |
+| Detection | `ruff check` / `ruff format --check` on the new file | **All checks passed!** / **1 file already formatted** |
+| Orchestration | `test_phase_sa3_orchestration_deep.py` | **22 tests, 0 failed, 0 skipped, 0 xfail** |
+| Orchestration | 6 subsystem-adjacent suites | **157 passed** |
+| Orchestration | Full backend suite (with concurrent subagent files present) | **1,457 passed, 10 deselected, 6 errors in 31:06** — the 6 errors are a **Windows `PYTEST_CURRENT_TEST` 32,767-char env-var ceiling hit during pytest *teardown*** by a concurrent sibling subagent's file, not a regression; **confirmed absent when the same files are run in a single session** (see the coordinator row above, 138 passed / 0 errors) |
+| AI/infra | `test_phase_sa5_ai_infra_repros.py` | **9 passed in 0.38 s** |
+| AI/infra | 13-file AI/delivery/SSRF batch (incl. 4E's own 21 repro tests and 4D's 5) | **250 passed, 1 warning in 181.01 s** (the warning is the pre-existing apprise `imghdr` DeprecationWarning) |
+| AI/infra | `ruff check` / `ruff format --check` on the new file | **All checks passed!** / **1 file already formatted** |
+| AI/infra | `alembic upgrade head` + `alembic check` on `wardress_sa_ai_test` | exit 0 / **"No new upgrade operations detected"** |
+| API/frontend | 13-file API-surface regression batch | **168 passed, 1 warning in 167.30 s** |
+| API/frontend | `pnpm build` | built in 6.22 s; `index-*.js` 1,103.50 kB / gzip 417.54 kB (+ the pre-existing >500 kB advisory) |
+| API/frontend | `pnpm exec vitest run` x3 | **22 files / 144 tests / 0 failed, exit 0** (17.84 s / 53.16 s cold / third pass after scratch deletion) |
+| API/frontend | `pnpm exec tsc -b` | **exit 0**, no output |
+| API/frontend | `pnpm exec oxlint src` | **exit 0**; 12 warnings, 0 errors on 54 files (= the recorded baseline) |
+| Capture | *(no repo file changed — no suite owed per Rule 5)* | `git diff --stat HEAD` empty throughout |
+
+**Supply-chain gates executed live this session** (AI/infra subagent):
+
+| Gate | Command | Exit | Result |
+|---|---|---|---|
+| Backend dependency audit | `uv run --frozen pip-audit --skip-editable` | **1** | **12 known vulnerabilities in 3 packages** (was 1): `weasyprint 69.0` (fix 70.0), `pyjwt 2.13.0` x10 (fix 2.14.0), `oauthlib 3.3.1` (unreachable — zero repo imports) |
+| torch OSV cross-check | `uv run --frozen python tools/check_torch_osv.py` | **0** | torch 2.13.0: no known advisories |
+| Frontend audit (CI gate) | `pnpm audit --audit-level high` | **1** | **2 HIGH `undici`** (was "2 moderate, exit 0") |
+| Frontend audit (all) | `pnpm audit` | 1 | 12 total: 3 low / 7 moderate / 2 high |
+| **Walkthrough audit (no CI gate exists)** | `cd walkthrough && pnpm audit --audit-level high` | **1** | **1 HIGH `nanoid`** + 6 moderate + 1 low |
+| Backend lint (CI step 1) | `uv run --frozen ruff check .` | **1** | **9 errors** at HEAD — so steps 2–5 never run |
+| Backend format (CI step 2) | `uv run --frozen ruff format --check .` | **1** | **24 files** (identical count to 4E) |
+| Migration drift | `uv run --frozen alembic check` | **0** | no drift |
+| Compose validation | `docker compose config --quiet` | 0 | green (validates nothing about the images) |
+
+**Alembic downgrade verification (orchestration subagent — never done before, requested explicitly).** Two independent sweeps: an empty database, and a **fully populated** one (1 row seeded through the ORM into all 23 tables).
+
+> **Verdict: all 16 migrations downgrade cleanly with zero residue, on both an empty and a fully populated database. `downgrade base` leaves only an empty `alembic_version`; `upgrade head` round-trips; `alembic check` reports no drift before and after.** No migration fails, partially fails, or leaves residue. Three *data*-destructive (not failure) notes carried forward: `0a6bd482fe1f` silently disables the absolute session-lifetime anchor on downgrade (security-relevant, undocumented); `j4k5l6m7n8p9` silently resets login-lockout state (so a downgrade re-enables brute-force attempts until the next failure); and `i3j4k5l6m7n8`'s **upgrade** deletes duplicate sites with cascade, which is the only forward-path destructiveness and is not surfaced to an operator anywhere. `g1h2i3j4k5l6`'s downgrade removes `ix_scans_one_inflight_per_site`, so between that downgrade and `k5l6m7n8p9q1`'s re-upgrade concurrent `scan-now`s can both create a scan.
+
+**New hermetic tests added this session** (all committed-passing characterization tests per Rule 5; each asserts *current* behaviour so a remediation prompt can flip the specific assertion it fixes):
+
+| File | Tests | Covers |
+|---|---|---|
+| `backend/tests/test_session_a2_detection_findings.py` | **107** (12 classes) | SA2-1 widget FPs + rule-floor arming; SA2-2 CSP widenings -> `None` -> `clean`; SA2-3 `_new_text` collapse + 5 lexicon families end-to-end; SA2-4 over-broad suppression blinding layers 5+8; SA2-5 removals + un-hiding; SA2-6 cloaking scale-blindness + the `added==0` redundancy proof; SA2-7 empty/whitespace/comment-only/binary captures; SA2-8 the 8-layer reachability map + sigmoid safety over z in [-1000,1000] + NaN->trusted-zero + fallback-floor preservation + the `base_lines` dead-code proof (4000 pairs) + the 0.0518 comment verified from the artifact; SA2-9 5 taxonomy evasion shapes + 2 positive controls + attack-withdrawal; SA2-10 13 adversarial-HTML normalization shapes; SA2-11 34 benign dataset rows flag / `vendor_script_added` mean 0.7538; SA2-12 MiniLM cosine has no finite guard + NaN -> maximal drift |
+| `backend/tests/test_phase_sa3_orchestration_deep.py` | **22** | AUDIT-4B-1's window measured over 5 passes + a positive control; SA3-1 claim-not-released (2 tests); SA3-5/SA3-6; 4B-5's baseline half (a stuck pending baseline survives all 4 beat tasks) + `skipped_no_baseline` burning an interval; 4B-6's heartbeat-skipped-on-error + `expires == interval` for every periodic task; the 480 < 3600 bound for every registered task; SA3-4's publish asymmetry; SA3-11's fresh-vs-pooled engine cost; SA3-2's retention absence; SA3-3's orphaned failed-capture artifacts; concurrent delete + completion in all 3 orderings; 4B-3's cadence floor |
+| `backend/tests/test_phase_sa5_ai_infra_repros.py` | **9** | SA5-1's `RecursionError` escape from `decode_access_token` + the unredacted short key reaching layer-8 evidence; 4E-1's third reader (`/api/show` never consults the policy) + the type-keyed cloud-metadata allowance + `normalize_base` passthrough; 4E-2's falsified "never raises"; 4D-1's CR/LF site-name `ValueError`; **positive control**: the alert HTML template escapes a hostile site name; SA5-3's key-ring absence + rotation degrading to keyless |
+| *(none for capture)* | 0 | Deliberate: every capture finding's hermetic repro currently **fails** against production code, and Rule 5 forbids committing a red test. Five proposed failing-test files are specified in `scratch/session-a-capture.md`'s Summary with what each would prove. |
+| *(none for API/frontend)* | 0 | Deliberate: SA4 added **zero** files to the repository. Three scratch vitest files were created and **deleted** (they attach `process` handlers for React-escaping errors and would have made `vitest run` exit 1 despite all tests passing — the exact trap Phase 4F documented). |
+
+**Rule 5 status: no regression.** Every suite is at or above its recorded baseline, `git diff --stat HEAD` is empty (zero production edits across the whole session), no subagent committed, no subagent stopped/restarted/rebuilt a container, and the live stack was left clean (no throwaway users, sites, API keys, channels, conversations or hooks; every mutable operation ran against a subagent's own scratch database).
+
+#### Log-vs-reality discrepancies (claims from prior entries that Session A could not reproduce as written)
+
+1. **`AUDIT-4-2`'s fused risk of 0.429 is understated.** With the `layer1_hash = 1.0` any real byte-changing scan carries, the measured fused risk is **0.5502 — above the default 0.50 flag threshold**, not merely the 0.40 material bar. The logged scenario must have had a different layer-1 profile. (Severity consequence: this is a **flag**, not just a cadence event.)
+2. **`AUDIT-4-3`'s "risk stays ~0.01" is understated by ~50x.** Measured with a statically-expired cert on both sides: layer 6 = 0.5, **fused risk 0.4857**, verdict `changed` forever, and permanently inside the LLM escalation band (0.40 <= 0.4857 < 0.75) — **an LLM call per scan** plus a permanent `base/4` cadence pin.
+3. **`AUDIT-4-4`'s cost claim is unreachable.** "A rule that times out only on long nodes can burn nodes x 2 s before its first timeout" — measured: 60 pathological nodes under one timing-out rule cost **2.00 s total**, because the `TimeoutError` aborts the whole element loop at the first node. The asymmetry half is confirmed.
+4. **`AUDIT-1-1`'s proposed remedy would not achieve its stated goal.** Phase 1 proposed excluding the raw byte-hash from the `changed` trigger; measured, the benign band is 0.19–0.22 and `layer1_hash` alone is 0.1372, so that change recovers at most 0.09 of risk and an 8-article lazy append still reads `changed` on `layer2 = 0.1231 > NOISE_FLOOR`. **Remedy design must change** (see O-SA-9).
+5. **`AUDIT-4-6`'s "layer 3 doesn't score reference deletion" is incomplete.** All five reference kinds score exactly 0.0, not just scripts/iframes — including the site's own `<form action>` and `<link href>`. And layer 2 has a parallel, previously-unrecorded blind spot: **un-hiding** a hidden farm scores 0.0 with zero structural churn.
+6. **`AUDIT-2-3`'s "staged/time-delayed payloads: genuinely absent" is half-wrong.** The client-side delayed-render slice **is** caught when the payload is DOM text (risk 1.0, `flagged`); only the timed-`<script>`-string form evades (0.3153). Corollary the remedy must cover: AUDIT-2-3's "parse meta-refresh in layer 3/7" specification would miss the script-string form entirely.
+7. **`AUDIT-4C-2`'s "`wk_` key prefix in the public schema" is not reproducible.** 0 hits across the 99,585-byte OpenAPI document. The finding stands on 8 other items.
+8. **Three comments assert constants that have moved** (extending AUDIT-4F-5's class into the detection tree, where it was logged as out-of-scope): `worker/detection/fusion.py:40` and `:192` assert **0.35** against a real 0.40; `worker/scan_tasks.py:48`'s "(~0.03)" benign-risk figure is **~7x too low** (measured band 0.19–0.22); and `worker/detection/metadata.py`'s and `signatures.py`'s docstring claims ("security-header downgrades score", "lexicons run on NEW text only") are **substantively false** (6 of 8 CSP relaxations score 0.0; 7 of 9 adversarial shapes make 100 % of the page "new"). **One claim verified exact**: `scan_tasks.py:58`'s "min observed: 0.0518" reproduces from the committed artifact (`combined_subthreshold-0015`).
+9. **Two of Phase 4's handoff specifications are off target** (AUDIT-4-7 §1 — layer 4 already top-crops for SSIM; AUDIT-4-8 §2 — hidden-state resolution is already symmetric per side). Conclusions unchanged, designs need narrowing.
+10. **The effort's "suites are green, therefore CI is green" implication is now known to be structurally unverifiable.** AUDIT-4E-11 is worse than logged: `ruff check .` fails on the *first* command of the backend job, so nothing behind it runs. Every "the suite is green" statement in this log is an observation about a local run, which is exactly what it claims to be — but nothing in the repository enforces it.
+11. **No encoding defect**: the `§` characters in `worker/detection/*.py` and `worker/llm_escalation.py` are intact U+00A7; a byte-level sweep of every `backend/**/*.py` for U+0013–U+0017 found zero stray control characters.
+
+#### Findings out of scope (routed, not investigated)
+
+- **AUDIT-SA5-4's 7 `ruff` errors in `backend/tools/run_stress_catalog.py`** belong to the Phase 5A stress harness — Phase 5A needs them clean before its gate can go green. Logged here because they are the *first* command of the backend CI job.
+- **`AUDIT-SA5-7`'s `LOGIN_RATE_LIMIT_PER_IP`** and **`AUDIT-SA3-7`'s missing `depends_on: db`** both belong to Audit Phase 9's ops/infra pass (`OPS-1`…`OPS-8`), which is the phase that owns `.env.example`↔compose↔scripts drift.
+- **AUDIT-SA2-2's CSP direction classifier remedy** needs a token-semantics table (which CSP source expressions are more restrictive than which) — a CSP-spec design question for the remediation prompt's own design phase, though the code fix is confined to `worker/detection/metadata.py`.
+- **AUDIT-SA2-3's cloaking re-tune requires a new corpus axis first** (`partial_cloaking_small_payload` across >= 3 reference sizes) — that axis's design belongs to Phase 8's fixture work; the gap list is supplied above.
+- **Layer 4's interaction with *interactive* pages** (ads, consent widgets, carousels, sticky headers) — the render-noise measurement used a static page, and these are exactly the elements AUDIT-3-1/3-2 showed can render nondeterministically. Routed to Phase 8's adversarial fixtures.
+- **`AUDIT-4F-6`'s bidi gap is latent today** but Tier C (`aljazeera.net`, `bbc.com/arabic`, `haaretz.co.il`) exists precisely to exercise it — fixing before Phase 5C is cheaper than re-auditing rendered screenshots afterwards.
+- **Ops agent + Telegram surfaces** remain excluded per §0; neither subagent audited them, and the only note is Phase 2B's existing boundary determination (re-confirmed by the AI/infra subagent: `app/agent/` reads through the same service layer and does not bypass RBAC).
+
+#### Coordinator notes for Session B
+
+- **XS-9 is a sequencing constraint, not just a finding.** AUDIT-SA1-2 predicts that Phase 5A+5B's Tier-B sites (Akamai, DataDome, PerimeterX, AWS WAF, Turnstile) will fail *because the wall detector is Cloudflare-only*, not because of per-site flakiness. Session B should either fix the wall classifier first or record the prediction as the expected baseline for those categories so Rule 19 per-case root-causing is not mis-directed.
+- **Deployment parity is now clean (57/57 file comparisons across three subagents)**, so Session B's live probes are all HEAD-valid. AUDIT-4B-8's "rebuild before remediation verification" prerequisite is satisfied.
+- **The `ruff check` failure at HEAD is now the first CI gate** and will block any remediation PR. It should be sequenced first in whatever remediation prompt follows.
+- **The three new Session A test files are the only repo changes from this session** and are the durable characterization baseline for a remediation prompt: 138 tests that assert current behaviour and will need their specific assertions flipped as each finding is fixed.
+
+- **Commit**: *pending — the user has not requested a commit for this session; the working tree holds this log entry, five scratch reports, and three new characterization test files, with zero production modifications.*
+- **Next**: Session B — `SESSION-B-KICKOFF.md`, Wave 1 (Phases 5A+5B, 8, 9 in parallel).
+
+---
+
+
+---
+
+### [DONE] PROMPT-003 Audit Phases 5A+5B+5C — Stress-Test Catalog: All Tiers (Subagent W1-A)
+
+- **Prompt**: SESSION-B-KICKOFF.md (subagent W1-A, Wave 1)
+- **Session date**: 2026-09-30
+- **Assigned subsystem**: the capture pipeline under real-world site load, across every tier of `PROMPT-003-stress-site-catalog.md`
+- **Full report**: `scratch/session-b-stress-testing.md` (2,559 lines, 83 per-site `### FAIL` blocks). Everything below is a coordinator integration; the scratch report is the evidence of record.
+
+- **Environment attestation**: measured against the live Docker install (worker performing real Playwright captures). Host AMD Ryzen 5 5625U 6C/12T, Docker ceiling 7.429 GiB. **All latency figures were taken under CPU/RAM contention with two sibling Wave-1 subagents** and are relative comparisons, not clean absolute measurements (W2's numbers, taken alone, are the clean ones).
+
+- **Method**: production `worker.fetcher.fetch_page` in child-process isolation via `backend/tools/run_stress_catalog.py` and its helper `backend/tests/_capture_child_impl.py`, with a **180 s per-capture budget**. Each capture additionally recorded `http_status`, the production `looks_like_challenge_page` verdict, independent vendor fingerprinting (headers, cookies, challenge-DOM markers), and the fused detection risk/verdict obtained by running the deployed `run_detection` on the capture pair.
+
+- **Execution plan & two stated deviations**: (1) the catalog yields **88 Tier-A entries but only 69 unique URLs** (19 sites appear in two category blocks); W1-A executed the 69 unique URLs and mapped each result back to *every* category that URL belongs to, preserving per-category attribution while saving ~27% of capture time. (2) Execution was ordered B→C→A so the two tiers that yield new findings completed first. Both deviations are stated and justified in the report.
+
+- **Coverage — COMPLETE**: **121/121 unique URLs × 3 passes = 363 captures** (Tier A 69, B 31, C 21). Rule 18 satisfied at 3 passes/site.
+
+- **Stress-test results** (dense summary; **every failing site has an individual `### FAIL` block with root cause + Fix-candidate/Accepted-risk in the 27-row disposition ledger**):
+
+  | Tier | Captures OK | Sites 3/3 | Detection pairs | `clean` / `changed` / **`flagged`** | Walls stored as content |
+  |---|---|---|---|---|---|
+  | A | 180/207 | 56 | 177 | 33 / 89 / **55 (31%)** | **7** |
+  | B | 80/93 | 25 | 77 | 3 / 29 / **45 (58%)** | **8** |
+  | C | 52/63 | 15 | 49 | 4 / 24 / **21 (43%)** | **4** |
+
+  Per-site pass/variance rows for all 121 sites are in the scratch report. Passing sites take one line each there, as §6.1 requires; no aggregate-only rows were accepted anywhere.
+
+- **Session A's XS-9 prediction — VERIFIED, with a correction that matters.** `AUDIT-SA1-2` (Cloudflare-only wall detector, no `http_status` gate on the scan path) held exactly as predicted. **The correction:** Tier B's failure is **bifurcated**. 29 of 31 Tier-B sites captured *cleanly*; the dominant damage is not wall storage but **false-flagging commercial pages** — 58% of real consecutive-visit pairs `flagged` at a median fused risk of **0.79 with no attack present**. This is a third, separable defect (register H9) and is why the Tier-B results must not be read as "bot walls block capture".
+
+- **Findings (20)**: 2 Critical, 6 High, 8 Medium, 4 Low.
+  - **Critical** — `AUDIT-5C-1` (a 200-OK onboarding dialog / login wall is stored as a healthy, ready, current baseline by the deployed stack; the next scan of the real page flags at risk **0.99999**) → register **C11**; `AUDIT-5C-6` (a **controlling** Service Worker registers under the production capture context on `web.whatsapp.com`, live-confirming Session A's `AUDIT-SA1-1`) → merged into register **C1**.
+  - **High** — `5A-1` ad/prebid host rotation scored as injection, predicted `1-exp(-0.9)=0.5934` and measured **exactly 0.5934** → merged into **H8**; `5A-2` capture-completeness variance flags at 0.998; `5A-3` a 0.65% rendered-height delta flags BBC News at 0.7633; `5A-7` seven ordinary Tier-A homepages are walled and **`reuters.com` serves its wall on HTTP 200**; `5B-1` six non-Cloudflare walls stored as `capture_quality: "full"`, one a **401 Anubis PoW gate** the catalog does not list; `5B-2` 58% of Tier-B pairs false-flagged → `5A-2`/`5A-3` merged into **H7**, `5A-7`/`5A-4` merged into **H9**.
+  - **Medium** (8) — `5A-5` DNS failure surfaced as `SSRFBlockedError` which the retry contract permanently excludes from retrying → merged with W2's `7-4`; `5A-6` the mandated stress runner **cannot detect the failure mode Tier B exists to catch** (a bot-wall capture is recorded as a clean PASS); `5B-4` `ERR_HTTP2_PROTOCOL_ERROR` classified transient and still failing 3/3; `5B-5` catalog drift, measured and timestamped; `5C-2` the height-only screenshot guard fails on 7 of 52 Tier-B/C sites (widths of 4,000 px and 1,378 px captured **uncapped** with `capture_quality: "full"`); `5C-3` inner-container scroll captured as a single viewport; `5C-4` `apnews.com` reproduces the scroll-shrink path live (`initial_height 15368 → final_height 768`, still `full`); `5C-5` `india.gov.in` returns 403 to the browser but 200/607 KB to Wardress's own probe.
+  - **Low** (4) — `5A-8` `archive.org`'s `noscript` fallback stored as a complete capture; `5A-9` runner budget exhaustion on one site and one site lost to the DNS outage (**Accepted-risk**, environment).
+
+- **Log-vs-reality**: W1-A made **five documented self-corrections to its own wall detector**, each driven by a counter-example in its own data, and stated them in the report. It also falsified **three "extremely large page" premises** and **two lazy-load/DataDome category claims**, now recorded in the catalog file itself (the catalog's "How to extend" section requires drift to be recorded there, not only in the log).
+
+- **Opportunities / Innovation ideas** (Rule 17): the 27-row disposition ledger's non-Fix-candidate rows, plus the observation that **a `ready` baseline should carry a provenance label** ("captured from a page that answered 200 but is implausibly small relative to its own screenshot") so an operator can see poisoning directly.
+
+- **New hermetic tests added**: none committed. No test file was added by this phase; its value is its measurement set, preserved in the scratch report per Rule 10.
+- **Regression**: no repo file changed by W1-A, so no suite was owed per Rule 5.
+
+---
+
+### [DONE] PROMPT-003 Audit Phases 6+7 — Concurrency, Scale & Chaos Testing (Subagent W2)
+
+- **Prompt**: SESSION-B-KICKOFF.md (subagent W2, Wave 2 — run alone)
+- **Session date**: 2026-09-30
+- **Assigned subsystem**: Celery worker/beat orchestration under concurrency, scale and fault injection
+- **Full report**: `scratch/session-b-concurrency-chaos.md` (769 lines). Coordinator integration below.
+
+- **Environment attestation**: **W2 ran with the machine to itself — no sibling contention** — which is the reason it was sequenced after Wave 1, and the reason its timings are the clean ones in this audit. Isolated audit stack (same images) on scratch DB `wardress_audit` and Redis DB 9; the live worker/beat were stopped during load testing and restarted after.
+
+- **Configured limit = 12 (prefork), proven four ways**: no `-c` in `Dockerfile.worker:36`; no `command:` override in `docker-compose.yml:89-116`; no `worker_concurrency` in `celery_app.py:23-46`; and 12 live children matching Celery's own `concurrency: 12 (prefork)` banner. **1× = 12, 2× = 24, 5× = 60.**
+
+- **Load-test results** (3 passes each, cheap page profile):
+
+  | Level | E2E p50 | Queue p50 / p95 | Throughput | Failures | Peak worker memory |
+  |---|---|---|---|---|---|
+  | 1× | 25.2–37.7 s | 0.2–0.4 / 0.3–0.5 s | 0.290–0.456/s | 0/36 | — |
+  | 2× | 31.6–34.5 s | 10.4–10.7 / 20.7–24.6 s | 0.491–0.516/s | 1/72 | — |
+  | 5× | 64.9–**309.5 s** | 47.1–**282.5** / 95.9–323.9 s | 0.156–0.462/s (**2.96× spread**) | **0 → 8 → 17 of 60** | **6.52–6.67 GiB = 85.8–87.8% of ceiling** |
+
+- **Where it breaks, and why (heavy profile)**: per-scan cost rose **34.6 s → 318.7 s (9.2×) at 1×**, of which **83–94% is outside the capture** — 12 prefork children × 6 torch threads on 6 cores, with `torch.get_num_threads() = 6` and nothing pinning it. The next 12-scan batch **all hit the 420 s soft / 480 s hard time limits → SIGKILL → 12 scan rows stuck `running` with `error = NULL` for 25+ minutes.**
+
+- **Amplification cascade (`AUDIT-4B-2`) — CONFIRMED and worse than predicted.** Session A had deliberately not run this live. Measured: supersession fires at K=5, 15, 30 and 60 alike — **the trigger is age, not backlog depth**; 192 superseded rows with 40 new pending rows enqueued in a single tick. Session A predicted "amplification begins at a backlog of ~15–60 pending rows"; measured, **any** backlog older than 10 minutes triggers it.
+
+- **Soak run (50 sequential cycles, no worker restart)**: **50/50 completed, zero failures, zero state leakage.** Memory 4,933 → 5,080 MB = **step-then-plateau**, flattening from cycle ~36 — which *contradicts* a naive unbounded reading of `AUDIT-4B-7`. But a **different** resource grows without bound: **zombie processes +2.0 per cycle, perfectly linear, 1,444 → 1,546**, with no plateau. The recycle policy chosen was "no recycle", justified by Session A's proof that `--max-tasks-per-child` does not help because model memory is never released.
+
+- **Chaos & failure-injection results** (7 spec scenarios + 4 additional; each classified safe fail / silent success / worker crash):
+
+  | # | Scenario | Passes | Classification | Headline |
+  |---|---|---|---|---|
+  | 1 | Crash mid-capture (SIGKILL) | 3/3 | **worker crash** | Row orphaned; **the broker does NOT redeliver** (`task_reject_on_worker_lost` defaults False) |
+  | 2 | Blackholed DNS | 3/3 | **silent misreport** | `getaddrinfo` blocks the event loop **8.004 s** and reports `SSRFBlockedError` |
+  | 3 | Slow-loris | 3/3 | **unbounded** | 271.9 / 271.8 / 272.35 s — **13.6× its own 20 s budget**, 57% of the hard limit |
+  | 4 | Malformed HTTP | 3/3 | 3 safe fail, **1 SILENT SUCCESS** | → register **C12** |
+  | 5 | SSRF redirect / internal matrix | 3/3 | **safe fail — policy holds** | **27/27 blocked** |
+  | 6 | Pathologically large DOM (>10 MB) | **1 pass only** | see coverage note | |
+  | 7 | Streaming chunked body bomb | 3/3 | **unbounded** | +13.9 / +50.4 / +141.1 MB for 10 / 60 / 200 MB, linear |
+  | +1 | Kernel OOM of `chrome-headless` | 3/3 | **worker crash** | 12 children = 5.6 GiB = 75.4% at the OOM instant |
+  | +2 | Docker management API unavailable | 3/3 | **operator-invisible outage** | 500s for ~9 minutes |
+  | +3–5 | Postgres restart / Redis loss / network partition | **0 passes** | **NOT TESTED** | budget exhausted — flagged, not hidden |
+
+- **Findings (11)**: 2 Critical, 4 High, 4 Medium, 1 Low.
+  - **Critical** — `AUDIT-7-1` (a truncated/malformed **200** response is silently promoted to a trust anchor as a 39-byte empty page, and the site then reads **`clean` forever** at risk 0.0063) → register **C12**; `AUDIT-6-1` (at its own configured concurrency the worker exhausts the Docker memory ceiling: the kernel OOM-kills Chromium, killing other concurrent work, Celery SIGKILLs children on the hard limit, and the Docker API becomes unusable for ~9 min) → register **C13**.
+  - **High** — `6-2` the worker leaks **exactly 2.0 zombie processes per scan cycle, linearly and without bound**; `7-2` the metadata probe has **no total deadline** (271.9 s = 13.6× its budget); `7-3` `probe.py` buffers the entire hostile response before slicing, scaling linearly and unbounded with attacker-chosen body size (this is `NB-CAP-1`, first proven); `6-3` scan cost inflates 9–16× at full concurrency while throughput improves only 1.3–1.6×.
+  - **Medium** — `7-4` a DNS failure is reported as an SSRF policy refusal **and** the synchronous SSRF gate freezes the API event loop for the full resolver timeout (merged with W1-A's `5A-5`); `7-5` a worker SIGKILL leaves the scan row `running` forever with no broker redelivery; `6-4` at 5× the failure rate is highly non-deterministic (**0/60 → 8/60 → 17/60 across three identical passes**); `6-5` overload amplification confirmed (merged into `AUDIT-4B-2`).
+  - **Low** — `6-6` Chrome Desktop UA / model-catalog task-naming drift.
+
+- **Log-vs-reality**: Session A's 79% warm-pool extrapolation **verified** (75.4% at the OOM instant, 85.8–87.8% running) and its 624.5 MB/child re-measured at **582.6 MB**. W1-A's bogus `SSRFBlockedError` observations were **reproduced and root-caused** to `ssrf.py:55-58`. `AUDIT-4B-2`'s entry threshold was **revised downward** (see above). `AUDIT-4B-7`'s "unbounded growth" reading was **partially refuted** — worker memory plateaus; the unbounded resource is a different one.
+
+- **Opportunities / Innovation ideas** (Rule 17): bound `torch.get_num_threads(1)` per child and cap prefork concurrency against the **Docker** ceiling rather than the host's RAM; reap child processes; a wall-clock deadline across the whole metadata probe rather than per operation; stream the probe with an incremental byte cap.
+
+- **Full regression results**: **1471 passed, 1 failed, 20 xfailed.** The single failure is `test_confirm_cancel_race_single_winner` — an **agent-subsystem** test outside W2's assigned scope, which **passes in isolation**; it is not a regression from this session.
+
+- **Final state attestation**: all five services back up and healthy, API `200`, live database clean (`sites=0 scans=0 baselines=0 alerts=0`), scratch database dropped, audit containers and volumes removed, `git status --short` identical to session start.
+
+---
+
+### [DONE] PROMPT-003 Audit Phase 8 — Adversarial Detection Accuracy Stress Test (Subagent W1-B)
+
+- **Prompt**: SESSION-B-KICKOFF.md (subagent W1-B, Wave 1)
+- **Session date**: 2026-09-30
+- **Assigned subsystem**: all nine detection layers + fusion, as deployed
+- **Full report**: `scratch/session-b-detection-accuracy.md` (624 lines). Coordinator integration below.
+
+- **Method**: **85 hermetic attack/benign fixture pairs** (57 attack, 21 benign, 7 control) pushed through the deployed `run_detection`, with **real Chromium 149 screenshots on both sides** — including a genuine server-side asset-swap mechanism (same URL, different bytes) and a real 12-pair glyph-outline-swapped TTF for the font-hijack fixture. **273 pipeline invocations, every fused-risk pstdev exactly 0.000000.** Rule 18 is trivially satisfied because the pipeline is a pure function of `PageData`.
+
+- **Stress-test results**:
+
+  | Class | Count | Result |
+  |---|---|---|
+  | Attack — **below the 0.40 material bar** | 57 | **22 (38.6%)**, of which **3 read `clean`** |
+  | Benign — **cross 0.40** | 21 | **13 (61.9%)**; **12 (57.1%) alert**; 1 burns an LLM call per scan |
+
+  Every miss and every false positive has an individual root-cause block (Report §4) and an explicit Fix-candidate disposition (Report §3). No aggregate-only rows.
+
+- **The mandated visual-only fixtures (`NB-DET-1`) — all three CAUGHT**: `<style>` invert **0.9999** · `@font-face` glyph hijack **0.9979** · canvas **0.9998/1.0000** · SVG-geometry **0.9998**. The brief's crux resolved cleanly: **layer 4 returned a measured value on 85/85 fixtures, never degraded, crashed 0 times** — the capture→screenshot path is not the limiting factor anywhere.
+
+- **But the benign twins are the actual finding, and they are louder than the attacks they were paired against**: a **legitimate webfont swap flags at 0.9995** (L4 0.3627) versus the glyph hijack's 0.3043; a **responsive breakpoint change with byte-identical HTML flags at 1.0000** (L4 0.6293). Layer 4 has no notion of *why* pixels differ → register **H7**, a new class present in no prior phase. The remedy shape is O-8-1, a `capture_context` channel fusion treats as *explanation* rather than evidence.
+
+- **Findings (15)**: **4 Critical, 9 High, 2 Medium** *(W1-B's own summary line said 5/8/2; its per-finding detail tables — which the coordinator treats as authoritative — read 4/9/2.)*
+  - **Critical** — `8-1` CSP widening is a **false `clean`** (layer 6 exactly 0.0000, fused 0.0019 with real screenshots on both sides) and a `<meta http-equiv>` CSP is never read at all → merged into **C5**; `8-3` layer 4 has **no area floor**, with a hard cliff at ~0.1% / ~0.5% of compared area → register **C7**; `8-4` layer 7 is a **step function of page size** (0.1032–0.1296 on small pages, exactly 0.0 on realistic ones) → merged into **C6**; `8-5` revealing hidden content is invisible and removal-only defacement scores exactly 0.0 → register **C8**.
+  - **High** — `8-2` HSTS neutralisation scores 0.1 → C5; `8-6` the `_new_text` collapse also false-flags **punctuated** pages, so the "unpunctuated only" mitigation does not hold → merged into **C4**; `8-7` removal-only defacement → C8; `8-8` `<base href>` and event-handler payloads invisible to layer 3 → register **H18** (new); `8-10` the `bbox` suppression primitive is total (conclusive defacement → 0.1372 `changed`) → merged into **H6**; `8-12` breakpoint change flags at 1.0 → merged into **H7**; `8-13` legitimate content/layout changes flag → register **H19** (new); `8-14` layer 4 cannot distinguish a glyph hijack from a legitimate webfont swap → **H7**; `8-15` every widget/vendor-script/new-stylesheet shape flags → merged into **H8**.
+  - **Medium** — `8-9` a `<noscript>` defacement is invisible to Wardress's own screenshot and a `title=` tooltip payload to every channel; `8-11` a timing-out suppression rule manufactures the delta it was meant to silence → merged into **H6**.
+
+- **Log-vs-reality — the single most important methodological note in this audit.** W1-B **refuted four Session A / Phase 2 numbers in the direction that looks alarming but is not**: single-word tampering 0.1942 → **0.6718 `flagged`**; `<meta http-equiv=refresh>` 0.1987 and `location.replace` 0.3153 → **1.0000 `flagged`**; same-origin phishing overlay 0.2242 → **0.9993 `flagged`**; over-broad suppression 0.195 → **0.7044 `flagged`**. **The cause is method, not product**: Session A's synthetic fixtures carried **no screenshots**, so layer 4 was `degraded` and contributed nothing; W1-B used **real Chromium renders**, and production always has screenshots. Where the two diverge, **W1-B's numbers are the more faithful measurement of deployed behaviour.** Consequently `AUDIT-2-2`'s "subtle single-word tampering is genuinely absent" and "only a new-domain overlay is caught" are **invalidated**.
+
+  Conversely, Session A's headline numbers were **confirmed digit-for-digit** where method did not differ: 36 of 323 benign rows reaching 0.40 and **34 exceeding the 0.50 flag threshold**; `vendor_script_added` mean 0.7538 / max 0.8269; `site_redesign` max 0.8454; `sanity_benign_quiet` 0.6583; the corpus guard at 0 of 56; and the `(a|aa)+b` ReDoS timeout — which W1-B **sharpened** into a stronger result: the optimizer is **position-sensitive, not pattern-insensitive** (the same pattern costs 2,001 ms as the first element and 1.0–2.0 ms as the last).
+
+  W1-B also **corrected one of its own measurements** — an apparent "14.6 s ReDoS" that was its own host-contention artifact, not a pattern — and recorded it explicitly so the number is not rediscovered as new.
+
+- **Two questions Session A routed forward, answered**: layer 4 on **interactive** pages is **sound** (4 render pairs, L4 0.0031–0.0149, `clean` 4/4, **16× below** the 0.2225 escalation bar); and the hue-only brand-refresh worry is **resolved in the system's favour** (real `hsl()` render 0.1921, **18× below** the material bar).
+
+- **Verified-clean ledger** (measured, not doc-trusted): the layer-1 hash gate resisted **10/10** whitespace and normalisation bypass shapes; the identical-hash gate was never the source of any miss; churn padding does not dilute an attack (defacement + 40 articles = 1.0000); pipeline determinism exact; no fixture produced a degraded layer except one that intentionally degraded the UA probe.
+
+- **New hermetic tests added**: `backend/tests/test_phase8_adversarial_detection.py` — **12 passed, 20 xfailed**, `ruff check` and `ruff format --check` clean. The 20 `xfail` entries are **characterization guards** a remediation prompt flips as it fixes each finding (Rule 5: a red suite is never an acceptable end state).
+
+- **Full regression results**: detection 12-file batch **222 passed** (exact baseline); 10-file batch + Session A file + new file **331 passed, 20 xfailed**; new file alone 12 passed / 20 xfailed.
+- **Coverage — stated honestly (Rule 8)**: interactive-page layer-4 work used a synthetic interactive fixture, not live sites; the corpus axis additions recommended by the report are designs, not implementations (Rule 1).
+
+---
+
+### [DONE] PROMPT-003 Audit Phase 9 — Performance Profiling, Infrastructure & Operational Consistency Audit (Subagent W1-C)
+
+- **Prompt**: SESSION-B-KICKOFF.md (subagent W1-C, Wave 1)
+- **Session date**: 2026-09-30
+- **Assigned subsystem**: capture + detection performance, the PowerShell operational lifecycle (`OPS-1`…`OPS-8`), Docker topology, documentation drift (`DOC-1`…`DOC-8`), and dead code
+- **Full report**: `scratch/session-b-performance-ops.md` (1,057 lines). Coordinator integration below.
+
+- **⚠️ Explicit note on the Rule 15 conflict, and how it was resolved.** The Session-B brief asked W1-C to run a full `uninstall.ps1` backup → fresh install → `RESTORE.txt` replay "if possible". **It was not possible without violating Rule 15** — an absolute, non-negotiable rule of the audit spec — and without destroying the live volumes two sibling subagents were actively testing against. **W1-C did not run `install.ps1` or `uninstall.ps1`.** It substituted: (a) static analysis of the backup and restore code paths with a **bidirectional artifact-coverage cross-check** (every artifact the backup creates is referenced by the restore, and vice versa), labelled **medium-high confidence with the end-to-end replay UNVERIFIED**; and (b) for `diagnostics.ps1`, it copied the two scrubbing functions **verbatim** into a scratch harness pointed at a **synthetic** `.env` — the real one was never read. `update.ps1` and `install.ps1` were audited by **reading**, never by running; `update.ps1`'s merge logic was exercised only as copied code against synthetic fixture pairs.
+
+- **Method**: `cProfile`, `docker stats`, `EXPLAIN` against the live DB (read-only), and manual A/B interleaving with stated n. **All timing figures were taken under contention** with two sibling subagents on a 6-core host and are labelled as such; the A/B *comparisons* are decision-grade, the absolute numbers are not.
+
+- **Profiling results** (decision-grade A/B comparisons):
+
+  | Candidate | Measured | Verdict |
+  |---|---|---|
+  | Batched MiniLM | 24 calls 606.8 ms → 1 batched 345.0 ms = **1.76× / −261.7 ms per scan** (n=3) | **VALID — highest-value optimisation** |
+  | Per-task DB engine | 95.06 ms fresh vs 5.32 ms pooled = **17.9× / 89.74 ms wasted per task** (n=5) | **VALID** (needs `pool_size=1`) |
+  | Layer 8 cost | **93–95%** of a 14 KB page, but **saturates at 2.4–3.0 s**; L2 grows 1.12 → **138.90 ms** from 0.3 KB → 171 KB, **unbounded** | L8 is bounded by design; **L2/L3/L5 are the scaling risk** |
+  | "Resize once per layer-4 call" (O-SA-3) | **+34.3 ms @1280×3000, −21.9 ms @1280×4000** — the sign flips | **INVALIDATED — do not implement** |
+  | Fusion reload | **0** `json.loads` in 6,000 calls; 0.0135 ms/call | **INVALIDATED** |
+  | Regex recompilation | 17 module-level `re.compile`; hot inline site **1.725 µs** | **INVALIDATED** |
+
+- **Soft-block baseline poisoning (`NB-CAP-2`) — PROVEN END TO END.** Through the real `capture_baseline`/`run_scan` bodies on a scratch database: a 200-OK Cloudflare wall → baseline **`ready`, `is_current=True`**; the next scan of the **real** page, 22.34 s later → **`flagged`, risk 0.9999999999997338**, cadence tightened to 15 min. Control (healthy anchor, same page, one tick later): **0.3, `changed`, 22 min**. Positive control confirms the `>= 400` guard works when it fires. → register **C11** (independently reproduced by W1-A through the live worker).
+
+- **Findings (17)**: **0 Critical, 5 High, 9 Medium, 3 Low.** W1-C states explicitly that it found no false-clean and no exploitable boundary the earlier phases had not already rated Critical, and that it **declined to escalate `AUDIT-9-1` above High** because it is a false *alarm*, not a false *clean* — which is correct per §6.4 and is overridden to Critical only because W2's `AUDIT-7-1` proved the same missing gate *does* also produce a false `clean` (register C12).
+  - **High** — `9-1` soft-block baseline poisoning → **C11**; `9-2`/`OPS-1` `update.ps1` performs **no `.env` reconciliation at all** and the live `.env` is already **14 documented keys behind** → **H20**; `9-3`/`OPS-2` `validate.ps1`'s `< 4 GB` check **does not fire at all** on this host → **H21**; `9-4`/`OPS-4` `diagnostics.ps1` **does not scrub the product's own `wk_` keys** — 9 of 16 hostile shapes escape → **H22**; `9-5`/`OPS-5` the restore path silently downgrades the schema and reports success on a partial load → **H23**.
+  - **Medium** (9) — `9-6` every `<link href>` scores 0.6 regardless of `rel`; `9-7` three comments assert a 0.35 material bar (real 0.40) and the benign-risk comment is **10× off**; `9-8` the ReDoS guarantee covers user suppression rules but **not the normaliser that runs on every scan**; `9-9` the entire backend CI gate is dead behind a 9-error `ruff check .` → merged into H3's group (`AUDIT-4E-11`); `9-11` `beat` still declares no `depends_on: db` and 3 of 7 services have no healthcheck → merged into `AUDIT-SA3-7`; `9-12` `TRUST_PROXY_HEADERS` is documented without the one condition that makes it safe → merged into `AUDIT-SA4-2`; `9-13` `/api/health` is an orphaned public route disclosing database liveness → merged into `AUDIT-SA4-9`/`4C-5`; `9-14` `celery_app.py`'s "acknowledge late" claim is false; `9-15` `/openapi.json` is public, unmetered and narrates the SSRF gate → merged into `AUDIT-4C-2`.
+  - **Low** (3) — `9-10` three dead entry points the code-walking method cannot reach; `9-16` `lib.ps1` has a Windows argument-quoting bug no current caller can reach; `9-17` the beat schedule file lives in the container's writable layer and is undocumented → merged into `AUDIT-4B-8`'s residual.
+
+- **Two briefing premises were falsified, and W1-C said so rather than accommodating them** — the correct behaviour under Rule 13. (a) *"Verify `update.ps1`'s `.env.example` vs `.env` merge behavior"* → **no merge exists**; the premise being wrong *strengthens* the finding. (b) *"Verify `diagnostics.ps1` scrubs `wk_` API keys"* → **the claim is false**. A third, `DOC-3`'s Telegram-bot DB-bypass diagram, **is not present in the repository at all** and is restated as such.
+
+- **Verified-clean results** (recorded, not dressed as findings): `docs/docs.json` navigation resolves **24/24 with zero orphans in both directions**; `ruff check .` reproduced at **exactly 9 errors**, same file, same rule; `/docs/oauth2-redirect` at **exactly 3,012 B**; the OpenAPI schema reconciled to **92,500 B live** with Session A's 99,585 B **marked superseded** (it could not be reproduced under any encoding and its provenance was not guessed).
+
+- **Coverage gaps stated honestly (Rule 8)**: the **DB-index `EXPLAIN` sweep is unverified at production scale** — its seed failed on a schema mismatch (`sites.updated_at` does not exist), so both passes are empty-table plans; N+1 absence was verified by source reading instead, and Session A's dispatcher-query numbers stand unchallenged. W1-C did not re-measure Session A's capture-side or frontend performance work (contention territory). It also caught itself nearly publishing a wrong number: an early fixture lacked screenshots, which tripped `_UNMEASURED_RISK_CEIL = 0.30` and pinned every variant at exactly 0.30; re-measured with real PNGs, the honest benign band across both sessions is **0.19–0.30**.
+
+- **New hermetic tests added**: **none committed**; zero test files added, by deliberate choice (Rule 5/10) with the reasoning recorded.
+- **Environment hygiene**: scratch database `wardress_w1c_test` created and **dropped**; live database verified clean; one artifact-root escape to `C:\data\artifacts` found, cleaned, and its redirect fixed; the Docker stack left running and healthy for its siblings.
+
+### [DONE] PROMPT-003 Audit Phase 10 — Consolidated Findings Register & Opportunities Register (Audit Completion)
+
+- **Prompt**: SESSION-B-KICKOFF.md (coordinator model — Phase 10 executed directly per §4 Wave 3)
+- **Session date**: 2026-09-30
+- **Assigned subsystem**: the entire audit. This phase reads every prior entry (Phases 1–4F), Session A's deep verification, and all four Session B scratch reports, and consolidates them into one deduplicated register.
+- **Do not touch code.** No production file was modified anywhere in this phase or this session.
+
+#### Environment attestation (Rule 13)
+
+Docker stack up and healthy at phase close: `wardress-app-1` (:8321, healthy), `wardress-worker-1`, `wardress-beat-1`, `wardress-db-1` (healthy), `wardress-redis-1` (healthy). `GET /api/health` → `200 {"status":"ok","service":"wardress-api"}`. Host: AMD Ryzen 5 5625U, 6C/12T, 15.34 GB RAM; Docker ceiling 7.429 GiB. Playwright 149.0.7827.55; `run_detection` 54.71 s cold / 0.03 s warm. Live database verified clean at close (`sites=0 scans=0 baselines=0 alerts=0`). W2's scratch database and audit containers/volumes were dropped; the pre-existing `wardress-test-pg` container from Session A remains and is the documented harness, not Session B residue.
+
+#### Rule 1 / Rule 5 attestation for the whole of Session B
+
+`git status --short` shows **zero modifications to any tracked production file** across all four subagents. The only new files are the four scratch reports and one new test file. No subagent ran a git state-changing command; none committed. No `install.ps1`/`uninstall.ps1` was ever executed (Rule 15). No throwaway data was left in the live database.
+
+#### Sources consolidated
+
+| Source | Scope | Raw finding entries |
+|---|---|---|
+| `PROMPT-003-IMPLEMENTATION-LOG.md` Phases 1–4F | 10 completed audit phases | **73** |
+| Session A (5 parallel subagents) | independent deep verification of Phases 1–4F | **45** |
+| `scratch/session-b-stress-testing.md` (W1-A) | Phases 5A+5B+5C | **20** |
+| `scratch/session-b-detection-accuracy.md` (W1-B) | Phase 8 | **15** |
+| `scratch/session-b-performance-ops.md` (W1-C) | Phase 9 | **17** |
+| `scratch/session-b-concurrency-chaos.md` (W2) | Phases 6+7 | **11** |
+| **Total raw entries** | | **181** |
+| **After deduplication (below)** | | **163 canonical** |
+
+---
+
+## 1. SEVERITY SUMMARY
+
+| Severity | Raw entries | **Canonical (deduplicated)** | Notes |
+|---|---|---|---|
+| **Critical** | 18 | **13** | 5 raw entries collapsed into canonical Criticals |
+| **High** | 41 | **27** | 14 raw entries collapsed |
+| **Medium** | 82 | **79** | 3 collapsed |
+| **Low** | 40 | **44** | 4 Low findings were *escalated* by later phases, so the canonical Low count exceeds its raw count |
+| **Total** | **181** | **163** | 18 duplicates merged; 6 severity escalations applied |
+
+**Every entry carries a disposition.** Of the 181 raw entries, 175 are **Fix-candidate** and 6 are **Accepted-risk** (each individually justified in its own entry and surfaced for the user's accept/reject decision below). **No finding is left pending.** W2's three untested chaos experiments are the only open items, and they are coverage gaps with an explicit recommendation, not undisposed findings.
+
+---
+
+## 2. MASTER FINDINGS REGISTER
+
+Deduplicated across all phases and sessions. Sorted by severity, then subsystem. **Bold canonical ID** = the surviving entry; duplicate IDs in parentheses = merged evidence from later phases. Every ID is an anchor link back into this log or into the named scratch report.
+
+### 2.1 CRITICAL (13)
+
+| # | ID | Title | Subsystem | Source | Proposed remedy category |
+|---|---|---|---|---|---|
+| C1 | **[AUDIT-SA1-1](#audit-sa1-1)** (AUDIT-5C-6) | The Playwright SSRF route guard is `page.route`-scoped: Service Workers and `window.open()` popups bypass SSRF validation completely, with full read-back into a stored artifact | `worker/fetcher.py:287-340,543,518-525` | P4 (Session A) · P5C (W1-A) | `service_workers="block"` on `browser.new_context(...)` + `context.route("**/*", guard)`; correct three docstrings |
+| C2 | **[AUDIT-4E-1](#audit-4e-1)** | The SSRF policy is skipped by three AI-provider reader paths and never re-checked on execution; the type-keyed private-network allowance reaches cloud metadata | `app/llm.py`, `app/ai_ollama.py`, `ai_config` | P4E (Session A) | Validate at the single point a `base_url` becomes a litellm deployment; review the type-keyed allowance itself |
+| C3 | **[AUDIT-4E-2](#audit-4e-2)** (AUDIT-4E-2b) | The models.dev catalog fetch is outside the SSRF policy entirely, rides an unpinned client, and falsifies a documented "never raises" contract | `ai_catalog.py` | P4E (Session A) | Route through the shared outbound-fetch factory; validate the fetched schema before trusting it |
+| C4 | **[AUDIT-4-1](#audit-4-1)** (AUDIT-8-6) | `_new_text` granularity collapses on unpunctuated pages — the "new-text-only" lexicons silently become whole-page lexicons; a benign edit reaches risk 1.0 `flagged` | `worker/detection/signatures.py` | P4 · P8 (W1-B) | Line-granularity fallback for pages with no sentence structure; cap `aggression_score`'s unbounded `Σw` as `topic_score` is capped |
+| C5 | **[AUDIT-SA2-2](#audit-sa2-2)** (AUDIT-8-1, AUDIT-8-2) | A CSP widening is recorded as a **false `clean`** (risk 0.0019–0.0031); the direction classifier cannot resolve any real relaxation and calls an attacker-added origin "stronger". HSTS neutralisation scores 0.1. | `worker/detection/metadata.py:111-172` | P4 (Session A) · P8 (W1-B) | A CSP source-expression restrictiveness table; read `<meta http-equiv>` CSP |
+| C6 | **[AUDIT-SA2-3](#audit-sa2-3)** (AUDIT-8-4) | Layer 7 is blind by scale: the additive ramp is anchored to `added/\|ref\|` so a conclusive cloaked banner scores **exactly 0.0** on any realistic page | `worker/detection/cloaking.py:86-118` | P4 (Session A) · P8 (W1-B) | Add an absolute-mass channel alongside the relative ramp; needs the `partial_cloaking_small_payload` corpus axis |
+| C7 | **[AUDIT-8-3](#audit-8-3)** | Layer 4 has **no area floor**: a small defaced asset with an unchanged DOM is invisible, and there is a hard cliff at ~0.1% / ~0.5% of compared area | `worker/detection/visual.py:110-201` | **P8 (W1-B) — NEW** | Tile-localised layer 4; emit a `changed_area` evidence field |
+| C8 | **[AUDIT-8-5](#audit-8-5)** (AUDIT-8-7, half of AUDIT-4-6) | **Revealing** hidden content is invisible (layer 2's sensitive channel is additive-only) and **removal-only** defacement scores exactly 0.0 on all five reference kinds | `worker/detection/dom.py`, `signatures.py` | **P8 (W1-B) — ESCALATED** · P4 | Bidirectional reference diff with element identity; a removal channel with its own weight |
+| C9 | **[AUDIT-4E-4](#audit-4e-4)** | `weasyprint==69.0` ships an SSRF/arbitrary-file-read advisory, and the dependency gate the repo declares must fail on it is failing (12 advisories across 3 packages) | `backend/pyproject.toml`, `uv.lock` | P4E · P8 (Session A) | Dependency bump; triage `pyjwt`→2.14.0 and `oauthlib` (unreachable) |
+| C10 | **[AUDIT-SA5-1](#audit-sa5-1)** | The locked `pyjwt==2.13.0` carries 10 advisories; one is **live-reachable as an unauthenticated HTTP 500** (a `RecursionError` escapes `except jwt.PyJWTError`) | `app/security.py::decode_access_token` | P4E (Session A) | Bump to ≥2.14.0 **and** harden the decode path against non-`PyJWTError` exceptions |
+| C11 | **[AUDIT-5C-1](#audit-5c-1)** (AUDIT-9-1) | A **200-OK non-content page** (paywall, onboarding dialog, login wall) is promoted to a site's trust anchor; the next scan of the *real* page flags at risk **0.99999** | `worker/scan_tasks.py:109-118,262-272`, `worker/fetcher.py:166-201` | **P5C (W1-A) · P9 (W1-C) — TWO INDEPENDENT REPRODUCTIONS** | A content-shape gate at the baseline-promotion boundary (vendor-independent); see O-9A |
+| C12 | **[AUDIT-7-1](#audit-7-1)** | A **truncated/malformed HTTP response with a 200 status** is silently promoted to a trust anchor (39-byte empty page), and the site then reads **`clean` forever** at risk 0.0063 | `worker/scan_tasks.py`, `worker/probe.py` | **P7 (W2) — NEW, OPPOSITE FAILURE DIRECTION to C11** | As C11, plus a minimum-plausible-content check on the stored artifact |
+| C13 | **[AUDIT-6-1](#audit-6-1)** | At its **own configured concurrency** the worker exhausts the Docker memory ceiling: the kernel OOM-kills Chromium (killing other concurrent work), Celery's hard time limit SIGKILLs children, and the Docker management API becomes unusable for ~9 minutes | `worker` prefork, `Dockerfile.worker:36`, `docker-compose.yml:89-116` | **P6 (W2) — NEW** | Bound `torch.get_num_threads()` to 1 per child; cap prefork concurrency against the *Docker* ceiling, not the host's RAM; a `max_tasks_per_child` that actually works |
+
+> **Coordinator note on C11/C12 — the most important synthesis in this register.** These two are the *same missing gate* producing **opposite** failure directions from the same code path. C11 poisons the anchor with junk and then alerts forever (a false **flag**). C12 poisons the anchor with an empty page and then never alerts at all (a false **`clean`**). C12 is graded Critical on §6.4's explicit "a false 'clean' on an actual attack pattern" clause; C11 is Critical because it is a **data-integrity** failure — the system's trust anchor is a lie — not merely because it is noisy. W1-A reproduced C11 through the live Docker worker; W1-C reproduced it independently through the real function bodies on a scratch database. Two methods, one defect.
+
+### 2.2 HIGH (27)
+
+| # | ID | Title | Subsystem | Source | Proposed remedy category |
+|---|---|---|---|---|---|
+| H1 | **[AUDIT-3-1](#audit-3-1)** | A generic banner-fallback selector clicks a non-banner control that navigates into a Cloudflare interstitial, captured with `cloudflare_challenge_detected: False` and `capture_quality: "full"` | `worker/banner_dismiss.py`, `fetcher.py` | P3 (Session A) | Re-validate the challenge gate after any click; make the fallback selector-specific |
+| H2 | **[AUDIT-3-4](#audit-3-4)** | Non-atomic artifact writes that run *before* the DB commit leave a truncated `page.html` behind a row still reading `completed`; nothing ever deletes a `Scan` or `Baseline` row | `worker/artifacts.py`, `scan_tasks.py` | P3 (Session A) | Write-then-rename; move storage after commit; add retention |
+| H3 | **[AUDIT-2-4](#audit-2-4)** | `NOISE_FLOOR`/`MATERIAL_CHANGE_RISK` overfitting, now a **measured alert rate**: 36 of 323 benign rows in the model's own training data reach 0.40, **34 exceed the flag threshold**; `vendor_script_added` (benign) averages 0.7538 | `worker/detection/fusion.py` | P2 (Session A) | Re-derive the constant from a benign population including the 7 omitted axes; assert max-per-axis in the corpus validator |
+| H4 | **[AUDIT-4-2](#audit-4-2)** | Layer 6 reads **current-side** probe transients as measured evidence: a TLS failure fuses to **0.5502** — above the default flag threshold | `worker/probe.py`, `detection/metadata.py` | P4 (Session A) | Treat current-side probe failure as a degraded channel, not evidence of change |
+| H5 | **[AUDIT-4-5](#audit-4-5)** | Empty/unparseable captures are a measured 1.0 (binary junk → risk 0.9833 → `flagged`); **both sides empty reads `clean`**, inverting the system's own "provably zero vs unmeasured" distinction | `worker/detection/*` | P4 (Session A) | A content-type/parseability guard; refuse the `clean` verdict on an empty pair |
+| H6 | **[AUDIT-4-4](#audit-4-4)** (AUDIT-8-10, AUDIT-8-11) | Over-broad suppression permanently blinds layers 2/3/5/8 with **no coverage signal**; the `bbox` rule type blinds layer 4 too (conclusive defacement → 0.1372 `changed`) | `worker/detection/suppress.py:87-169` | P4 · P8 (W1-B) | Emit a per-rule coverage fraction in evidence and the UI; scope/limit `bbox` rules |
+| H7 | **[AUDIT-8-14](#audit-8-14)** (AUDIT-8-12, AUDIT-5A-2, AUDIT-5A-3) | **Layer 4 has no notion of *why* pixels differ.** A legitimate webfont swap flags at **0.9995 — louder than the glyph hijack it is paired with**; a responsive breakpoint change with byte-identical HTML flags at **1.0000**; a 0.65% height delta on BBC News flags at 0.7633 | `worker/detection/visual.py` | **P8 (W1-B) · P5A (W1-A) — NEW CLASS** | A `capture_context` channel on `PageData` (viewport, device class, colour scheme, font stack) that fusion treats as *explanation*; see O-8-1 |
+| H8 | **[AUDIT-SA2-1](#audit-sa2-1)** (AUDIT-8-15, AUDIT-5A-1) | Layer 3 has **no notion of element identity**, so a rotating third-party widget scores identically to a brand-new injection. Measured live: ad/prebid host rotation predicts `1-exp(-0.9)=0.5934` and measures **exactly 0.5934** | `worker/detection/dom.py:640-734` | P4 (Session A) · P8 · P5A | Element-identity-aware ref diff; classify `src` rotation as a value change; recalibrate the additive weights |
+| H9 | **[AUDIT-SA1-2](#audit-sa1-2)** (AUDIT-5B-1, AUDIT-5B-2, AUDIT-5A-7, AUDIT-5A-4) | `looks_like_challenge_page` recognises **Cloudflare markers only** and the scan path has no `http_status` gate. 6 non-Cloudflare walls stored as `capture_quality: "full"`; **58% of Tier B's real consecutive-visit pairs FLAGGED** with no attack present | `worker/fetcher.py:166-201`, `scan_tasks.py:262-272` | P4 (Session A) · P5A/P5B (W1-A) | A vendor-agnostic wall-page classifier as a separate gate; an `http_status >= 400` gate on the scan path |
+| H10 | **[AUDIT-4B-1](#audit-4b-1)** | Alert/remediation creation is unreachable on the redelivery path — a worker death in the post-commit window loses the alert permanently (window measured at 10.1 ms median / 26.8 ms max; the DB-hiccup variant is unbounded) | `worker/scan_tasks.py` | P4B (Session A) | Create the alert row inside the terminal transaction; a recovery sweep for completed-and-alertless scans |
+| H11 | **[AUDIT-4D-1](#audit-4d-1)** | A mid-delivery crash permanently orphans every channel after the crash point — **now deterministically reachable from a CR/LF in a user-controlled site name**; the resweep predicate can never re-arm it | `worker/alert_tasks.py` | P4D (Session A) | Per-channel delivery rows created up front; fix the resweep predicate to include zero-row partials |
+| H12 | **[AUDIT-4E-8](#audit-4e-8)** | Heuristic redaction lets a 9-character custom-endpoint key survive into the dict persisted as layer-8 `ScanFinding.evidence` and into an HTTP 503 body — **reaching a Viewer** | `app/llm.py:60-79` | P4E (Session A) | Value-aware redaction against the configured key set, not shape heuristics |
+| H13 | **[AUDIT-4E-10](#audit-4e-10)** | `pnpm audit --audit-level high` is now **exit 1** with 2 HIGH `undici` advisories, and the deployed `walkthrough/` tree has **no audit gate at all** | `frontend/package.json`, `walkthrough/` | P4E (Session A) | Bump `vitest` ≥4.1.11; add the same gate to the `walkthrough` workflow |
+| H14 | **[AUDIT-SA3-1](#audit-sa3-1)** | The dispatcher's schedule claim is never released: a single broker blip becomes a **silent one-interval scan gap**, and the tick's stats contain no error/lost-publish bucket | `worker/beat_tasks.py:160-221` | P4B (Session A) | Mark the freshly-inserted row failed on publish failure; add a `lost_publish` counter |
+| H15 | **[AUDIT-SA3-2](#audit-sa3-2)** | **No retention policy exists** for scans, findings, artifacts, alerts, deliveries, remediation executions, or the audit log — monotonic growth on a product premised on unattended months-long operation | absence of any deletion path | P4B (Session A) | Time-bounded retention per table with a documented horizon; a scheduled prune with per-run budgets |
+| H16 | **[AUDIT-SA3-3](#audit-sa3-3)** | A failed capture orphans its artifact tree permanently — the janitor keys on row *existence*, not row *state* or age | `worker/beat_tasks.py:271-291` | P4B (Session A) | Key the janitor on state and age |
+| H17 | **[AUDIT-SA3-4](#audit-sa3-4)** | The worker's broker publish has no fail-fast bound: **10.7 s on the first failure, 63.8 s on every subsequent one** — an infra blip becomes wasted scan capacity | `worker/celery_app.py` | P4B (Session A) | Give the worker publisher the same bounded retry policy as the API client |
+| H18 | **[AUDIT-8-8](#audit-8-8)** | `<base href>` and same-origin event-handler payloads are invisible to layer 3, which resolves references against `PageData.final_url` rather than the document's own base | `worker/detection/dom.py:596-676` | **P8 (W1-B) — NEW** | Resolve refs against the document base; add `base_href` and `on*`-target collectors |
+| H19 | **[AUDIT-8-13](#audit-8-13)** | Legitimate large content and layout changes flag: 40 added articles, an A/B hero swap, a grid redesign and a one-paragraph edit all alert | `worker/detection/*` | **P8 (W1-B) — NEW** | A third verdict state; gate `changed` on the content-layer peak excluding l1 **and** the generic churn term (O-SA-9) |
+| H20 | **[AUDIT-9-2](#audit-9-2)** (OPS-1) | `update.ps1` performs **no `.env` reconciliation at all** — the brief's premise of a broken merge was itself wrong, which strengthens the finding. The live `.env` is already **14 documented keys behind** `.env.example` | `scripts/update.ps1`, `.env.example` | **P9 (W1-C) — NEW** | One shared `Get-WardressEnv` primitive; reconcile on update |
+| H21 | **[AUDIT-9-3](#audit-9-3)** (OPS-2) | `validate.ps1` green-lights a memory configuration the measured deployment cannot survive — the `< 4 GB` check **does not fire at all** on this host (`7.4 -lt 4` → `False`), while 12 warm children are 79% of the ceiling. No disk or port checks either | `scripts/validate.ps1` | **P9 (W1-C) — NEW** | Check Docker's `MemTotal`, not the host's; add disk and port preflight |
+| H22 | **[AUDIT-9-4](#audit-9-4)** (OPS-4) | `diagnostics.ps1` **does not scrub the product's own `wk_` API keys** — 9 of 16 hostile shapes escape a bundle the script tells the user is safe to share (incl. JWTs, Fernet keys, Apprise URLs) | `scripts/diagnostics.ps1` | **P9 (W1-C) — NEW** | Extract the rule table into a tested module; run a hostile corpus in CI (O-9F) |
+| H23 | **[AUDIT-9-5](#audit-9-5)** (OPS-5) | The documented restore path silently downgrades the schema below the running binary and **reports success on a partial load** | `scripts/uninstall.ps1` backup/restore | **P9 (W1-C) — NEW** | Pin the schema revision in the backup; verify-and-fail on a partial restore |
+| H24 | **[AUDIT-6-2](#audit-6-2)** | The worker leaks **exactly 2.0 zombie processes per scan cycle, linearly and without bound** (1,444 → 1,546 over a 50-cycle soak) | `worker` child reaping | **P6 (W2) — NEW** | Reap children; or bound the soak-visible process table growth |
+| H25 | **[AUDIT-6-3](#audit-6-3)** | Scan cost inflates **9–16× at full concurrency** while throughput improves only 1.3–1.6×; **83–94% of the wall clock is outside the capture** (12 children × 6 torch threads on 6 cores) | `worker/detection/semantics.py`, worker config | **P6 (W2) — NEW** | `torch.set_num_threads(1)` per child; batched MiniLM (O-SA-2) |
+| H26 | **[AUDIT-7-2](#audit-7-2)** | The metadata probe has **no total deadline**: a 90-second header slow-loris costs **271.9 s — 13.6× its own 20 s budget and 57% of the scan's hard time limit** | `worker/probe.py` | **P7 (W2) — NEW** | A wall-clock deadline across the whole probe, not per-operation |
+| H27 | **[AUDIT-7-3](#audit-7-3)** (NB-CAP-1) | `probe.py` buffers the **entire** hostile response before slicing: peak heap scales linearly with attacker-chosen body size and is unbounded (+13.9 / +50.4 / +141.1 MB for 10 / 60 / 200 MB) | `worker/probe.py:170,223` | **P7 (W2) — NEW** | Stream with an incremental cap; abort past the limit |
+
+### 2.3 MEDIUM (79)
+
+Presented in subsystem groups for readability; severity is uniform (Medium) throughout.
+
+**Capture & stealth**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-3-2](#audit-3-2) | Late-attaching consent iframes never dismissed (single frame snapshot + a viewport test that never scrolls into view: `y=78.4` dismissed, `y=2578.4` not) | P3 |
+| [AUDIT-3-3](#audit-3-3) | SSRF rebinding window on the Playwright path; the verdict cache key omits the port — **largely subsumed by C1** | P3 |
+| [AUDIT-3-5](#audit-3-5) | Capture-completeness facts never reach detection — **17 of 19 `capture_evidence` keys have zero production readers** | P3 |
+| [AUDIT-SA1-4](#audit-sa1-4) | `apply_stealth` fails open only when the package is *absent*; a raising library strands the scan row in `running` | P4 (SA) |
+| [AUDIT-5A-5](#audit-5a-5) (AUDIT-7-4) | A transient DNS failure is surfaced as `SSRFBlockedError`, which the retry contract **permanently excludes from retrying**; a blackholed resolver freezes the event loop for 8.004 s | P5A · P7 |
+| [AUDIT-5A-6](#audit-5a-6) | The mandated stress runner **cannot detect the failure mode Tier B exists to catch** — it records a bot-wall capture as a clean PASS | P5A |
+| [AUDIT-5B-4](#audit-5b-4) | `net::ERR_HTTP2_PROTOCOL_ERROR` is classified TRANSIENT and retried, and still fails 3/3 | P5B |
+| [AUDIT-5B-5](#audit-5b-5) | Catalog category drift, measured and timestamped (15 rows) — logged per the catalog's own protocol | P5B |
+| [AUDIT-5C-2](#audit-5c-2) (AUDIT-5B-3) | The height-only screenshot guard fails on 7 of 52 Tier B/C sites; widths of 4,000 px and 1,378 px captured uncapped with `capture_quality: "full"` | P5B/P5C |
+| [AUDIT-5C-3](#audit-5c-3) | Pages whose scrollable content lives in an inner container are captured as a single viewport and reported `full` | P5C |
+| [AUDIT-5C-4](#audit-5c-4) | `apnews.com` reproduces the scroll-shrink path live: `initial_height 15368 → final_height 768`, still reported `full` (confirms AUDIT-3-8) | P5C |
+| [AUDIT-5C-5](#audit-5c-5) | `india.gov.in` returns 403 to Wardress's browser but 200/607 KB to Wardress's own probe — the block is on the browser client, not the UA | P5C |
+
+**Detection**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-2-1](#audit-2-1) | Taxonomy gaps: three attack families genuinely absent from the corpus | P2 |
+| [AUDIT-2-3](#audit-2-3) | Redirect-based cloaking and staged/time-delayed payloads — **the redirect half is now largely closed by real renders** (see §4) | P2 |
+| [AUDIT-2-5](#audit-2-5) | `ScanFinding` has no `degraded` column, so a findings-only consumer cannot tell "provably zero" from "dark channel" | P2 |
+| [AUDIT-4-3](#audit-4-3) | A statically expired certificate scores 0.5 on **every** scan → fused 0.4857, verdict `changed` forever, permanently inside the LLM escalation band | P4 |
+| [AUDIT-4-6](#audit-4-6) | Layer 3 is removal-blind (all five reference kinds score exactly 0.0) — **the higher-severity halves escalated to C8** | P4 |
+| [AUDIT-4-7](#audit-4-7) | Specification: how layers should consume capture-completeness flags (narrowed — layer 4 already top-crops) | P4 |
+| [AUDIT-4-8](#audit-4-8) | Specification: which layers consume linked-stylesheet bytes (hidden-state resolution is already symmetric per side) | P4 |
+| [AUDIT-2B-1](#audit-2b-1) | External stylesheet bytes are never captured — stylesheet-hidden content is invisible to every DOM-based layer | P2B |
+| [AUDIT-2B-2](#audit-2b-2) | Sub-threshold emission gaps persist and their corpus rows were **dropped**, so no standing guard covers them | P2B |
+| [AUDIT-SA2-4](#audit-sa2-4) | `sanity_benign_quiet` fuses to 0.6583; layers 1/2/3/6/8 are individually incapable of reaching 0.40 | P4 (SA) |
+| [AUDIT-8-9](#audit-8-9) | A defacement inside `<noscript>` is invisible to Wardress's own screenshot; a `title=` tooltip payload is invisible to every channel | P8 (W1-B) |
+| [AUDIT-8-11](#audit-8-11) | A suppression rule that times out manufactures the delta it was meant to silence (isolated with a clean control) — **merged into H6** | P8 (W1-B) |
+| [AUDIT-9-6](#audit-9-6) | Every `<link href>` scores 0.6 regardless of `rel`, so five routine relations are indistinguishable from a stylesheet hijack | P9 (W1-C) |
+
+**Orchestration, scheduling & data**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-1-2](#audit-1-2) | The below-target Phase-13 capture categories were closed with aggregate attributions, not the per-site root causes Rule 19 demands | P1 |
+| [AUDIT-4B-2](#audit-4b-2) (AUDIT-6-5) | Overload amplification — **confirmed live and worse than predicted**: the trigger is *age*, not backlog depth; supersession fires at K=5, 15, 30, 60 alike | P4B · P6 |
+| [AUDIT-4B-3](#audit-4b-3) | Adaptive cadence consumes raw fused risk without the degradation signal; **4 consecutive clean scans** are needed to return to base, so a daily-transient site never returns | P4B |
+| [AUDIT-4B-5](#audit-4b-5) | Stale-row recovery is bounded by `next_scan_at` (worst case 24 h 20 min); **stuck baselines have no beat-side stale sweep at all** — the site is permanently unmonitored with no signal | P4B |
+| [AUDIT-4B-6](#audit-4b-6) | The beat heartbeat is written on the success path only, so any dispatcher failure turns the operator's only scheduling signal red | P4B |
+| [AUDIT-SA3-5](#audit-sa3-5) | A failing `_schedule_next` silently converts a site into a once-per-tick scan loop | P4B (SA) |
+| [AUDIT-SA3-6](#audit-sa3-6) | The in-flight unique index firing inside the dispatcher is absorbed into no stats bucket | P4B (SA) |
+| [AUDIT-SA3-8](#audit-sa3-8) | Migrations run only from `install.ps1`/`update.ps1`, never at container start | P4B (SA) · P9 |
+| [AUDIT-SA3-10](#audit-sa3-10) | `missing-prereqs` is the only scan-failure path that leaves `verdict` NULL | P4B (SA) |
+| [AUDIT-SA3-11](#audit-sa3-11) | `pool_pre_ping=True` is unreachable and every Celery task pays ~88 ms to build and tear down an engine (measured 95.06 fresh vs 5.32 ms pooled) | P4B (SA) · P9 |
+| [AUDIT-6-4](#audit-6-4) | At 5× the failure rate is highly non-deterministic: **0/60 → 8/60 → 17/60 across three identical passes** | P6 (W2) |
+| [AUDIT-7-5](#audit-7-5) | A worker SIGKILL leaves the scan row `running` forever; **the broker does not redeliver** (`task_reject_on_worker_lost` defaults False) | P7 (W2) |
+| [AUDIT-2B-3](#audit-2b-3) | Remediation claim "crash-after-claim" window: an executor crash leaves a terminal `confirmed` row that is never re-runnable | P2B |
+
+**Alert & remediation delivery**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-4D-2](#audit-4d-2) | Alert delivery's idempotence guard is check-then-act, not an atomic claim | P4D |
+| [AUDIT-4D-3](#audit-4d-3) | The favicon resolver fetches through an unpinned httpx client | P4D |
+| [AUDIT-4D-4](#audit-4d-4) | "Downloads are size-capped (64 KiB)" is not delivered — a 32 MiB body produces a 64.2 MiB heap peak before truncation | P4D · P9 |
+| [AUDIT-4C-1](#audit-4c-1) | Single-site create with a dead broker answers 503 after the site is already committed; the invited retry 409s | P4C |
+| [AUDIT-2B-4](#audit-2b-4) | `imports.py` still enqueues baseline captures synchronously on the event loop | P2B |
+
+**API, auth & rate limiting**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-4C-2](#audit-4c-2) (AUDIT-9-15) | `/docs`, `/redoc`, `/openapi.json` **and `/docs/oauth2-redirect`** are public and unmetered; the 92,500 B schema narrates the SSRF gate | P4C · P9 |
+| [AUDIT-SA4-1](#audit-sa4-1) | A password reset does not invalidate outstanding access tokens and does not revoke API keys — exactly one of three credential classes dies | P4C (SA) |
+| [AUDIT-SA4-2](#audit-sa4-2) (AUDIT-9-12) | The per-IP rate limiter is fully bypassable by a client-supplied `X-Forwarded-For` under the *documented* configuration (8/8 allowed); IPv6 is not normalised | P4C (SA) · P9 |
+| [AUDIT-SA4-3](#audit-sa4-3) | The per-account login lockout is an unauthenticated, effectively permanent DoS — one request per 15 min holds it indefinitely | P4C (SA) |
+| [AUDIT-SA4-4](#audit-sa4-4) | The account lockout is a **user-enumeration oracle**: the 401→429 transition after exactly 5 requests requires no timing analysis | P4C (SA) |
+| [AUDIT-SA4-5](#audit-sa4-5) | `CORS_ALLOWED_ORIGINS=*` reflects any origin with `Access-Control-Allow-Credentials: true`, contradicting the stated contract | P4C (SA) |
+| [AUDIT-SA4-8](#audit-sa4-8) | `GET /api/sites` is unbounded and silently ignores `limit`/`offset`: 600 sites = 364,581 bytes in one response | P4C (SA) |
+| [AUDIT-SA4-9](#audit-sa4-9) (AUDIT-9-13, AUDIT-4C-5) | `GET /api/health` returns **200 in both the healthy and the database-down branch**, so status-code probes report healthy through a total DB outage | P4C (SA) · P9 |
+| [AUDIT-9-14](#audit-9-14) | `celery_app.py`'s "acknowledge late so a crashed worker never silently drops a scan" is **false** | P9 (W1-C) |
+
+**AI & supply chain**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-4E-3](#audit-4e-3) | A hung provider stalls its caller **one full 30 s timeout per key/deployment** (6 passes: 31.61/30.05/30.03/31.39/30.03/30.08 s) | P4E |
+| [AUDIT-4E-5](#audit-4e-5) | Every runtime image is a floating tag; the worker's MiniLM weights are an unpinned floating reference whose failed pre-download is swallowed by `\|\| echo` | P4E (SA) |
+| [AUDIT-4E-11](#audit-4e-11) (AUDIT-9-9) | The backend CI job cannot report success: `ruff check .` fails on the **first** command (9 errors), so `ruff format --check`, `pip-audit`, `check_torch_osv` and `pytest` **never execute** | P4E · P9 |
+| [AUDIT-SA5-3](#audit-sa5-3) | No Fernet key ring or version prefix: rotating the key **silently destroys** every stored credential and the AI layer then keeps working *with no credential at all* | P4E (SA) |
+| [AUDIT-SA5-4](#audit-sa5-4) | **Neither Dockerfile is built in CI at all**, and `walkthrough/` has no audit, lint, typecheck or test gate | P4E (SA) |
+| [AUDIT-SA5-2](#audit-sa5-2) | `litellm` logs the full LLM prompt and raw response in plaintext at DEBUG, and `turn_off_message_logging` is never set | P4E (SA) |
+
+**Frontend**
+| ID | Title | Source |
+|---|---|---|
+| [AUDIT-1-1](#audit-1-1) | "Changed, not clean" on benign dynamic content — **downgraded** to Medium with justification; the logged cause was the minor part, and the proposed remedy would not have worked | P1 (SA) |
+| [AUDIT-4F-2](#audit-4f-2) | A scan whose detection channels went **dark** renders with the same vocabulary as a measured-identical scan; `consecutive_degraded_scans` is read by **zero** files | P4F |
+| [AUDIT-4F-3](#audit-4f-3) | 6 of 19 malformed payload shapes blank the whole dashboard, at 3 unguarded expressions across 4 of 10 routes | P4F |
+| [AUDIT-SA4-6](#audit-sa4-6) | Zero `aria-live`/`role="status"` regions anywhere in `src/` — polling state changes are never announced | P4C (SA) |
+| [AUDIT-SA4-7](#audit-sa4-7) | Keyboard users cannot use the bulk-import CSV control; three `<Label>` elements label nothing; no data table has a caption | P4C (SA) |
+| [AUDIT-9-7](#audit-9-7) | Three code comments assert a 0.35 material-change bar (the constant is 0.40) and the benign-risk comment is **10× off** | P9 (W1-C) |
+| [AUDIT-9-8](#audit-9-8) | The ReDoS guarantee is enforced for user suppression rules, **absent for the normaliser that runs on every scan**, and the docs read as global | P9 (W1-C) |
+
+### 2.4 LOW (44)
+
+| Subsystem | IDs |
+|---|---|
+| Capture | [AUDIT-3-6](#audit-3-6) per-scan request multiplication × adaptive cadence = WAF escalation · [AUDIT-3-7](#audit-3-7) latent `content_sha256(None)` crash + a provably dead TLS-parsing branch · [AUDIT-3-8](#audit-3-8) `auto_scroll_page` counts a shrinking height as stable · [AUDIT-SA1-3](#audit-sa1-3) `dismiss_banners` burns ~3.09–3.14 s on every banner-free capture (~28% of a 10.4–11.1 s capture) · [AUDIT-SA1-5](#audit-sa1-5) the screenshot guard is dimension-asymmetric (caps height only, no width key) · [AUDIT-5A-8](#audit-5a-8) `archive.org`'s `noscript` fallback stored as a complete capture · [AUDIT-5A-9](#audit-5a-9) runner budget exhaustion / a site lost to the DNS outage |
+| Detection | [AUDIT-2-6](#audit-2-6) `capture_meta["headers"]` has one write and no reader |
+| Orchestration | [AUDIT-2B-6](#audit-2b-6) stale dependency declarations · [AUDIT-4B-4](#audit-4b-4) re-baseline does not arbitrate in-flight scans (**accepted-risk is correct — recorded so it is not re-litigated**) · [AUDIT-4B-7](#audit-4b-7) worker memory ceiling, no child recycling · [AUDIT-4B-8](#audit-4b-8) deployment drift → **file-drift half INVALIDATED**, residual only (AUDIT-9-17) · [AUDIT-SA3-7](#audit-sa3-7) `beat` declares no `depends_on: db` (AUDIT-9-11) · [AUDIT-SA3-9](#audit-sa3-9) `via` accepted and discarded by three service functions · [AUDIT-SA3-12](#audit-sa3-12) `wardress.ping` is an orphan registration; every task result is stored in Redis 24 h for a consumer that does not exist · [AUDIT-SA3-13](#audit-sa3-13) Redis runs with no AOF and no `maxmemory` · [AUDIT-6-6](#audit-6-6) Chrome Desktop UA / model-catalog task-naming drift |
+| API/frontend | [AUDIT-4C-3](#audit-4c-3) two mute implementations with divergent audit snapshots · [AUDIT-4C-4](#audit-4c-4) `DELETE /api/sites/{id}` has no in-flight guard and no cascade disclosure · [AUDIT-4C-5](#audit-4c-5) readiness docstring cites a dead healthcheck (→ AUDIT-9-13) · [AUDIT-4C-6](#audit-4c-6) three routes double-charge the per-user rate limit (effective budget 10 of 20) · [AUDIT-4C-7](#audit-4c-7) `DELETE /api/users/{id}` hard-deletes regardless of usage, with no UI caller · [AUDIT-2-6](#audit-2-6) · [AUDIT-2B-5](#audit-2b-5) stale gauge comment (now closed into an executable guard) · [AUDIT-4F-1](#audit-4f-1) `capture-health.test.tsx` flake — measured at exactly 1000 ms, load-independent · [AUDIT-4F-4](#audit-4f-4) severity colour defined eight ways · [AUDIT-4F-5](#audit-4f-5) `risk-gauge.tsx` asserts a moved constant · [AUDIT-4F-6](#audit-4f-6) bidi isolation / language marking · [AUDIT-4F-7](#audit-4f-7) unnamed `role="application"` gauge · [AUDIT-4F-8](#audit-4f-8) unconditional-red unmeasured risk chip · [AUDIT-4F-9](#audit-4f-9) duplicate scan-list fetch on two timers · [AUDIT-SA4-10](#audit-sa4-10) 12 dead client functions leave 11 admin routes caller-less · [AUDIT-SA4-11](#audit-sa4-11) initial JS payload 1,077 kB / 404 kB gzip vs 268 kB / 83 kB with a route-level split · [AUDIT-SA4-12](#audit-sa4-12) the audit-log `actor` filter treats `%` and `_` as LIKE wildcards · [AUDIT-SA4-13](#audit-sa4-13) four dead symbols and a degraded predicate duplicated across two routers |
+| AI/infra | [AUDIT-4E-6](#audit-4e-6) the Ollama default endpoint is a Docker-only constant with a self-contradicting fallback chain · [AUDIT-4E-7](#audit-4e-7) the model-pull stream has no deadline of any kind · [AUDIT-4E-9](#audit-4e-9) dependency-hygiene residue · [AUDIT-SA5-5](#audit-sa5-5) `.dockerignore` excludes git-tracked ignores, baking local scratch logs into the shipped image · [AUDIT-SA5-6](#audit-sa5-6) both runtime images run as root with no `cap_drop`/`read_only`/`no-new-privileges` · [AUDIT-SA5-6b](#audit-sa5-6b) alert delivery has no retry and no circuit breaker under a provider outage · [AUDIT-SA5-7](#audit-sa5-7) `LOGIN_RATE_LIMIT_PER_IP` is read by the code, exercised by tests, and documented in **neither** file (and compose never forwards it, so it is unsettable) · [AUDIT-SA5-7b](#audit-sa5-7b) remediation webhook payloads carry no authentication and no replay protection · [AUDIT-SA5-8](#audit-sa5-8) `actions/checkout` leaves `persist-credentials` at its default |
+| Ops/docs (W1-C) | [AUDIT-9-10](#audit-9-10) three dead entry points the code-walking method cannot reach · [AUDIT-9-16](#audit-9-16) `lib.ps1` has a Windows argument-quoting bug no current caller can reach · [AUDIT-9-17](#audit-9-17) the beat schedule file lives in the container's writable layer and is undocumented |
+
+---
+
+## 3. DEDUPLICATION MAP (what collapsed, and why)
+
+| Canonical finding | Merged duplicates | Why they are the same finding |
+|---|---|---|
+| **AUDIT-SA1-1** (C) | AUDIT-5C-6 | W1-A found a *controlling* Service Worker on `web.whatsapp.com` under the production context. Same defect, same file, live confirmation rather than a new defect. |
+| **AUDIT-5C-1** (C) | AUDIT-9-1 | Two **independent** reproductions of one defect: W1-A through the live Docker worker (risk 0.99999), W1-C through the real `capture_baseline`/`run_scan` bodies on a scratch DB (risk 0.9999999999997338). |
+| **AUDIT-7-1** (C) | *(none)* | Same *missing gate* as 5C-1 but the **opposite** failure direction (false `clean`, not false `flag`). Kept separate because the fix shape and the severity clause differ. |
+| **AUDIT-SA2-3** (C) | AUDIT-8-4 | W1-B sharpened the mechanism: the score is a **step function of page size** (0.10–0.13 small, exactly 0.0 on realistic pages), which is the same scale-blindness with a sharper description. |
+| **AUDIT-SA2-2** (C) | AUDIT-8-1, AUDIT-8-2 | W1-B confirmed the false `clean` and extended it: a `<meta http-equiv>` CSP is never read at all, and HSTS neutralisation is the same "no direction classifier" defect. |
+| **AUDIT-4-1** (C) | AUDIT-8-6 | W1-B **extended the blast radius**: the collapse also false-flags *punctuated* pages, so the "unpunctuated pages only" mitigation does not hold. |
+| **AUDIT-8-5** (C) | AUDIT-8-7, half of AUDIT-4-6 | Removal-blindness and un-hiding-blindness are the two directions of one bidirectional-diff defect. Escalated Medium→Critical. |
+| **AUDIT-4-4** (H) | AUDIT-8-10, AUDIT-8-11 | W1-B **refined** it: content rules do *not* blind layer 4 (they reduce rather than suppress), but the `bbox` type is total. The escalation is preserved. |
+| **AUDIT-SA2-1** (H) | AUDIT-8-15, AUDIT-5A-1 | Three independent measurements of one missing element-identity notion, including an *exact* predicted-vs-measured match (0.5934). |
+| **AUDIT-8-14** (H) | AUDIT-8-12, AUDIT-5A-2, AUDIT-5A-3 | One new class: layer 4 has no *explanation* channel, so benign visual changes flag louder than the attacks they were paired with. |
+| **AUDIT-3-4** (H) | AUDIT-SA3-3 | The retention half of the artifact-lifecycle defect, from the orchestration side. |
+| **AUDIT-SA3-2** (H) | AUDIT-SA3-13, AUDIT-SA5-5 | The retention class (XS-4): unbounded growth in every store the product writes to. |
+| **AUDIT-SA1-2** (H) | AUDIT-5B-1, AUDIT-5B-2, AUDIT-5A-7, AUDIT-5A-4 | W1-A's per-site wall evidence and the 58% Tier-B false-flag rate are the live instance of Session A's predicted detector defect. |
+| **AUDIT-5A-5** (M) | AUDIT-7-4 | W2 reproduced W1-A's live observation and root-caused it to `ssrf.py:55-58`, plus found the event-loop freeze. |
+| **AUDIT-4B-2** (M) | AUDIT-6-5 | W2 ran the overload live (Session A deliberately did not) and found the trigger is *age*, not backlog depth. |
+| **AUDIT-3-8** (L) | AUDIT-5C-4 | `apnews.com` reproduces the scroll-shrink path live. |
+| **AUDIT-4E-11** (M) | AUDIT-9-9 | The same dead CI gate, re-measured exactly (9 errors, same file, same rule). |
+| **AUDIT-4C-2** (M) | AUDIT-9-15, AUDIT-4C-5 | The public-schema exposure, re-measured live at 92,500 B with the fourth route confirmed at 3,012 B. |
+| **AUDIT-SA4-9** (M) | AUDIT-9-13, AUDIT-4C-5 | `/api/health` returns 200 in both branches — the concrete form of the docstring drift. |
+| **AUDIT-SA3-7** (M) | AUDIT-9-11 | `beat` has no `depends_on: db`; three of seven services have no healthcheck. |
+| **AUDIT-4B-8** (L) | AUDIT-9-17 | The file-drift half was **invalidated** (57/57 file comparisons matched); the residual is the undocumented beat schedule file. |
+| **AUDIT-4E-8** (H) | *(severity escalation)* | Medium→High after W-1 re-measurement showed the leak reaches a Viewer via layer-8 evidence and an HTTP 503 body. |
+| **AUDIT-4E-10** (H) | *(severity escalation)* | Low→High: the gate status changed from "2 moderate, exit 0" to **exit 1 with 2 HIGH**. |
+
+**Not merged, deliberately:** AUDIT-7-1 with AUDIT-5C-1 (opposite failure direction, different fix clause); AUDIT-8-3 with AUDIT-8-14 (area floor vs missing explanation channel — different mechanisms inside one layer); AUDIT-6-1 with AUDIT-6-2 (OOM cascade vs an unbounded leak — one is a bound, the other is the absence of one).
+
+---
+
+## 4. CLAIMS THIS AUDIT INVALIDATED, CORRECTED, OR COULD NOT REPRODUCE
+
+Recorded because a remediation author must not act on a number this audit has shown to be wrong.
+
+**Invalidated outright (do not spend remediation effort here):**
+| Claim | Disposition |
+|---|---|
+| "Fusion reload is a bottleneck" | **INVALIDATED** — 0 `json.loads` across 6,000 `layer9_fusion()` calls; 0.0135 ms/call; cached per process, and `_model_lock` cannot contend across processes. |
+| O-SA-3 "resize once per layer-4 call" | **INVALIDATED** — the sign flips between two plausible screenshot heights: **+34.3 ms (9.5%)** at 1280×3000, **−21.9 ms (−3.6%)** at 1280×4000, n=5+5 interleaved. Do not implement. |
+| "Regex compilation cost" | **INVALIDATED** — 17 module-level `re.compile` at import; the hot inline site costs **1.725 µs**. No recompilation anywhere. |
+| `AUDIT-2-2`'s "subtle single-word tampering is genuinely absent" | **INVALIDATED** — measured **0.6718 `flagged`**. A one-word edit on a punctuated page **is** caught, via layer 4. |
+| `AUDIT-2-3`'s "meta-refresh / `location.replace` cloaking evades" | **REFUTED** — a 0-second meta-refresh fires *during* Playwright capture, so the screenshot is the attacker's page: **1.0000 `flagged`** for both. A *non-zero-delay* refresh would still evade (a corpus gap, not a detection gap). |
+| `AUDIT-2-2`'s "only a new-domain phishing overlay is caught" | **INVALIDATED** — same-origin **0.9993 `flagged`** with a real screenshot. |
+| `AUDIT-4B-8`'s file-drift half | **INVALIDATED** — 57/57 file comparisons matched across three independent subagents. The "rebuild before verification" prerequisite is **already satisfied**. |
+| `AUDIT-4C-2`'s "`wk_` key prefix in the public schema" | **INVALIDATED** — 0 hits across the schema; the prefix lives in `app/apikeys.py`. The finding stands on 8 stronger items. |
+| `AUDIT-4-4`'s "60 pathological nodes cost nodes × 2 s" | **INVALIDATED** — one timeout aborts the whole element loop; cost is bounded at ~2.0 s per *rule per side*. Confirmed by W2 independently. |
+
+**Corrected / reconciled:**
+| Claim | Correction |
+|---|---|
+| Session A "layer 8 is 66% of detection cost" vs W1-C "93–95%" | **Both correct at their own scale.** The durable statement: **L8 is bounded by design (saturates at 2.4–3.0 s); layers 2/3/5 are not** (L2: 1.12 → 138.90 ms from 0.3 KB → 171 KB, linear and unbounded). |
+| `scan_tasks.py:48` "(~0.03)" benign risk | **~10× too low.** Honest band across both sessions: **0.19–0.30**. |
+| OpenAPI schema "92,500 B" and "99,585 B" | **92,500 B is current**; 99,585 B could not be reproduced under any encoding and is **marked superseded**. |
+| `AUDIT-4B-2` "amplification begins at 15–60 pending rows" | **Worse than predicted** — the trigger is **age, not backlog depth**; supersession fires at K=5, 15, 30 and 60 alike. |
+| `AUDIT-4B-7` "12 warm children can OOM-spiral" | **Verified** — 582.6 MB/child measured, 75.4% of ceiling at the OOM instant, 85.8–87.8% running. But the soak shows worker memory **plateaus** from cycle ~36, so the projection is a *bound*, not a leak. The genuinely unbounded resource is a **different one** (AUDIT-6-2, zombies). |
+| `AUDIT-SA2-3` "layer 7 is exactly 0.0" | **Partially refuted, direction confirmed and sharpened** — it is a **step function of page size**, not a flat zero. |
+| `AUDIT-4-4` "content rules blind layers 5 and 8" | **Refined** — content rules do not blind layer 4; the **`bbox`** rule type does, and that is the primitive that matters. |
+| W1-B's own summary count | Its detail tables show **4 Critical / 9 High / 2 Medium**; its summary line said 5/8/2. The **detail tables are authoritative** and are what this register uses. |
+
+**The single most important methodological note in this audit.** W1-B and Session A report *different numbers for the same fixtures*, and the difference is **method, not product**. Session A's synthetic fixtures had **no screenshots**, so layer 4 was `degraded` and contributed nothing; W1-B ran **real Chromium 149 renders on both sides**, so layer 4 carried signal. **Production always has screenshots.** Where the two diverge, **W1-B's numbers are the more faithful measurement of deployed behaviour**, and the apparently-alarming "Session A was wrong" items above are mostly Session A measuring a *degraded* channel. This is recorded so a remediation author does not read it as two sources in conflict.
+
+---
+
+## 5. CONSOLIDATED OPPORTUNITIES / INNOVATION REGISTER (Rule 17)
+
+Not severity-scored. Consolidated from O-1…O-3 (P1), O-7/O-8 (P2B), O-4D-1…3, O-4E-1…4, and Session A's O-SA-1…13, plus Session B's O-8-1…11, O-9A…F, and W2's.
+
+**Tier 1 — closes a whole defect class with one change (highest value):**
+| # | Idea | Closes | Where |
+|---|---|---|---|
+| O-9A | **A "poisoned anchor" content-shape gate at baseline promotion** — refuse (or flag `suspect`) a candidate baseline whose document is implausibly small relative to its own screenshot, below a visible-text floor, or in the bottom percentile for that site. Vendor-independent: it catches paywalls, consent walls and captchas from *every* vendor, today and tomorrow, for three arithmetic checks on data the capture already produced. | C11, C12 | `worker/scan_tasks.py` |
+| O-SA-1 | **One outbound-fetch factory** (`safe_async_client()`) that always installs the pinning transport, plus a test asserting no module builds a bare `httpx.AsyncClient`; and for the browser, one armoured-context constructor that both blocks service workers and installs a context-scoped guard. Makes "forgot the policy" unrepresentable. | C1, C2, C3, H6-adjacent | `app/ssrf_transport.py`, `worker/fetcher.py`, `ai_catalog.py`, `site_icons.py`, `ai_ollama.py` |
+| O-8-1 | **A `capture_context` channel on `PageData`** (viewport, device class, `prefers-color-scheme`, declared font stack, resolved `@font-face` sources) that fusion treats as *explanations*, not evidence. Converts "the pixels differ" into "the pixels differ **and nothing else could explain it**" — the only thing that lets layer 4's 26.26 coefficient be defended on a real page. | H7, H8 | `types.py`, `fetcher.py`, `visual.py`, `fusion.py` |
+| O-9C | **One `.env` reconciliation primitive shared by install, update, validate and diagnostics** (`Get-WardressEnv` with `Get-RequiredKey`/`Get-MissingKeys -Against .env.example`). Turns the OPS-1 reconciliation into a one-line call instead of a fourth drifted implementation. | H20, H21 | `scripts/lib.ps1` |
+| O-9F | **Ship the diagnostics scrubber as a tested module, not a PowerShell literal** — a data-file rule table plus a hostile-corpus test asserting zero escapes. | H22 | `scripts/` |
+| O-8-8 / O-SA-12 | **A standing benign-population gate that fails the build** — every benign axis needs ≥8 corpus rows, and `validate()` must assert the **maximum** fused risk per benign axis, not just the attack peak. Converts AUDIT-2-4 from a one-time measurement into a permanent red signal. | H3, H19 | `backend/tools/build_regression_corpus.py` |
+
+**Tier 2 — measured optimisations with a stated payoff:**
+| # | Idea | Measured payoff | Note |
+|---|---|---|---|
+| O-SA-2 | **Batched MiniLM encoding** | **1.76× / −261.7 ms per scan** (W2/W1-C; Session A measured 1.68× / −253 ms) | The single highest-value optimisation found. 24 individual calls 606.8 ms → 1 batched 345.0 ms |
+| O-SA-7 | **A process-scoped DB engine for Celery tasks** | **95.06 → 5.32 ms per task (17.9×)** | Makes `pre_ping` and `recycle` meaningful for the first time |
+| O-SA-4 | **Event-driven banner wait** + scroll a consent-iframe control into view | **−3.09–3.14 s from every banner-free capture (~28%)** | The largest single capture-latency win; also converts a measured `dismissed: False` into a real dismissal |
+| O-SA-5 | **Parallel `probe_site` UA fetches** (`asyncio.gather`) | ~2× on the probe leg | `max_connections=4` is already provisioned and idle for 3 of 4 slots |
+| O-8-2 | **Tile-localised layer 4** (grid-cell SSIM/pHash, max or 90th-percentile aggregation) | Fixes the 0.1%/0.5% area cliff; makes a *partial* `@font-face` hijack detectable | Needs a corpus re-baseline — a deliberate trade |
+| O-8-5 | **An absolute-mass channel for layer 7** | C6 | Needs the `partial_cloaking_small_payload` axis first |
+| O-8-6 | **A CSP source-expression restrictiveness table** | C5 | Turns a set comparison into a comparison; gives the additive direction a correct sign |
+| O-8-7 | **A typography/`<base>`/event-handler reference surface for layer 3**, keyed on `tag+index+stable-attr` | H8, H7, H18 | Gives layer 3 the element-identity notion it has never had |
+| O-8-3 | **A suppression-coverage meter** (chars/elements removed per rule, in evidence *and* the UI) | H6 | The cheapest possible mitigation for the entire suppression-adversary class |
+| O-SA-6 | **Route-level `lazy()` in the SPA** | **1,077 kB / 404 kB gzip → 268 kB / 83 kB** (−809 kB raw / −321 kB gzip) | 205 kB is inlined provider logos; 146 kB is Markdown machinery for 2 of 10 routes |
+| O-6-1 | **Bind `torch.get_num_threads(1)` per child** and cap prefork concurrency against the *Docker* ceiling | C13, H25 | 83–94% of the wall clock is thread contention, not capture |
+| O-8-4 | **A "what a JS-disabled visitor sees" secondary render** as a low-weight, separately-attributed layer-4 input | AUDIT-8-9 | One extra context with `java_script_enabled=False`; also yields a new *progressive-enhancement diff* signal class |
+| O-8-10 | **A `changed_area` evidence field on every layer-4 result** | C7 | Would have made AUDIT-8-3 a one-line diagnosis; costs one extra array |
+| O-8-11 | **Cross-check layer 1 against a *structural* hash** (tag counts + ref sets + text shingles) | AUDIT-1-1's unresolved remedy | Makes a hash-gate collision *detectable* rather than merely absent |
+
+**Tier 3 — operator visibility and self-diagnosis:**
+| # | Idea | Why |
+|---|---|---|
+| O-9D | **An operator-facing "expected vs actual scans in 24 h" surface, extended to the anchor** | Would have made C11 self-diagnosing: a permanently-`flagged` site with a week-old unchanged anchor is a *shape*, not a log line |
+| O-9B | **Make `looks_like_challenge_page` a vendor registry with a coverage test** | Turns "every vendor in the stress catalog has a registry entry" from an unknown unknown into a tracked gap |
+| O-9E | **Make the layer-cost curve a test, not a comment** — assert L8's cost is flat across 30 KB→300 KB while L2's is super-proportional | Makes "layer 2 is what will bite at scale" a checked property. The fusion-reload invalidation is the proof of concept: a two-point A/B killed a plausible optimisation |
+| O-SA-3 | — | **WITHDRAWN — measured and invalidated.** Do not implement |
+| O-1…O-3, O-7, O-8, O-4D-1…3, O-4E-1…4, O-8-9, O-9C, O-9F | UA-era freshness signal · fleet-level "banners we could not dismiss" aggregation · challenge-gate wait duration in evidence · machine-readable blast-radius manifest · a "comment-asserts-constant" drift spot-check · adversarial fixtures as a first-class committed artifact | Carried forward from earlier phases; unchanged |
+
+---
+
+## 6. WHAT WAS **NOT** TESTED — honest coverage gaps (per §6.3's spirit, stated even here)
+
+1. **Three chaos experiments have 0 passes.** W2's Postgres-restart-mid-scan, Redis-connection-loss and network-partition scenarios were budgeted but not run. They are listed with a recommendation, not silently dropped.
+2. **The >10 MB DOM scenario has 1 pass, not 3.** W2 recorded the reason rather than repeating a 3-pass run it could not justify the cost of. Rule 18 is therefore **not fully satisfied for that one scenario**.
+3. **The backup → restore end-to-end replay is UNVERIFIED.** Rule 15 forbade running `install.ps1`/`uninstall.ps1`, which would have destroyed the live volumes three sibling subagents were testing against. W1-C substituted static analysis plus a bidirectional artifact-coverage cross-check at **medium-high confidence** and labelled it as such. A remediation prompt should schedule a real replay.
+4. **The DB-index `EXPLAIN` sweep is untested at production scale.** W1-C's seed hit a schema mismatch, so both passes returned empty-table plans. N+1 absence was verified by source reading instead.
+5. **W1-C did not re-measure Session A's capture-side or frontend performance work** (O-SA-4/5, O-SA-6) — contention territory. Those figures stand on Session A's measurements.
+6. **The `DOC-3` "Telegram bot direct DB bypass" diagram is not in the repository.** W1-C searched `docs/**`, `README.md` and the Mintlify skill and found no such claim. If Session A read one, it is not under version control and cannot be audited. Restated as "the claim is not present".
+7. **All latency figures from W1-A, W1-B and W1-C were taken under CPU/memory contention** with two or three sibling subagents on a 6-core host. They are labelled as such in each report and should be treated as *relative* comparisons. **W2's numbers were taken with the machine to itself** and are the clean ones.
+8. **No remediation was attempted, designed, or specified at the implementation level.** This audit diagnoses. Per §8, the user authors the remediation prompt.
+
+---
+
+## 7. AUDIT STATUS DECLARATION
+
+> ### The PROMPT-003 audit is **COMPLETE**.
+>
+> All **17 audit phases** have been executed and logged. Phases 1–4F and Session A's deep verification were completed in earlier sessions; Phases 5A, 5B, 5C, 6, 7, 8, 9 and 10 were completed in this session by four subagents and the coordinator respectively. **Nothing is left pending. Every finding carries a disposition.**
+
+**Total finding counts by severity, deduplicated across all 17 phases and two sessions:**
+
+| Severity | Count |
+|---|---|
+| **Critical** | **13** |
+| **High** | **27** |
+| **Medium** | **79** |
+| **Low** | **44** |
+| **TOTAL** | **163** |
+
+*(181 raw entries across 11 reporting units; 18 merged as duplicates; 6 severity escalations applied by later phases.)*
+
+**Dispositions:** 175 of 181 raw entries are **Fix-candidate**; **6 are Accepted-risk**, each individually justified in its own entry. The six are: **AUDIT-1-2** (PROMPT-002's aggregate close-out, now superseded by P5A's per-case work), **AUDIT-4B-4** (re-baseline non-arbitration — Session A's independent re-assessment confirmed accepted-risk is the correct call), **AUDIT-4B-8**'s file-drift half (**invalidated**), **AUDIT-4C-2**'s `wk_` sub-claim (**invalidated**), **AUDIT-5A-9** (runner budget exhaustion, an environment limit), and **AUDIT-6-4**'s 5× non-determinism, which is fully root-caused in the OOM cascade at C13 and therefore disposed as a Fix-candidate of that finding rather than a separate risk. **These are surfaced for the user's accept/reject decision.**
+
+**The three clusters a remediation prompt should sequence first, because each is a single defect class that a phase-by-phase process structurally could not see:**
+
+- **The trust anchor is not trustworthy.** C11 + C12 are one missing gate producing opposite failure directions, reproduced twice by independent methods. A site can be monitored against a paywall, a login wall, or a 39-byte truncated response and the system will not say so — it will either alert forever or never alert at all. This is the single most consequential finding in the audit.
+- **The SSRF policy is applied per call site rather than structurally.** C1, C2, C3 (+ H6) are one shape — *someone remembered to add the check* — across four subsystems, with one shared fix.
+- **Degradation and "proved nothing" are the same object to every operator-facing surface.** XS-1: six findings, one chain, from 17 of 19 unread `capture_evidence` keys to a dashboard that renders `Clean` / `0%` for a scan that measured nothing.
+
+**Verified-clean results worth recording** (measured, not doc-trusted — these are the parts of the system that held up): the SSRF policy blocked **27/27** redirect and internal-target probes across W2's full matrix; the layer-1 hash gate resisted **10/10** whitespace and normalisation bypass shapes; pipeline determinism is **exact** (pstdev 0.000000 across 273 invocations); churn padding does not dilute an attack (a defacement + 40 articles scores 1.0000); the capture→screenshot path returned a measured layer 4 on **85/85** visual fixtures with zero crashes; `docs.json` navigation is clean in both directions (24/24, zero orphans); and every Session A headline number W1-B re-measured was **confirmed digit-for-digit** (36/34, 0.7538/0.8269, 0.6583, 0/56).
+
+> ### This is **not** a Clean Bill of Health.
+> §6.3 reserves that for a remediation effort that has closed these findings and re-verified them. 13 Critical and 27 High findings stand open. §8.1's charter thresholds are met on all three counts (any Critical exists; any High exists; ≥3 Medium in the same subsystem), so a remediation prompt is warranted.
+
+**PROMPT-003 does NOT auto-generate PROMPT-004 or any remediation prompt, and this audit has not authored one.** The user will review this register and create their own remediation prompt with whatever scope, architecture and priorities they choose. Per §8.2, that prompt should end in a Re-Audit & Sign-Off phase that re-runs the regression suite, re-executes the stress catalog, and re-verifies every finding using the exact original reproduction — the four characterization test files in `backend/tests/` (150 tests) and W1-B's `test_phase8_adversarial_detection.py` are the durable baseline for exactly that.
+
+---
+
+## 8. FULL REGRESSION RESULTS (Session B)
+
+| Suite | Result | Owner |
+|---|---|---|
+| Detection 12-file batch | **222 passed** — exact match to the recorded baseline | W1-B |
+| Detection 10-file batch + Session A file + new Phase 8 file | **331 passed, 20 xfailed** | W1-B |
+| `test_phase8_adversarial_detection.py` (new) | **12 passed, 20 xfailed**, `ruff check` + `ruff format --check` clean | W1-B |
+| Full backend suite | **1471 passed, 1 failed, 20 xfailed** | W2 |
+| The single failure | `test_confirm_cancel_race_single_winner` — **agent subsystem, not W2's**; passes in isolation. Not a regression from this session. | W2 |
+| W1-C | No test files added; zero production files touched | W1-C |
+| `pnpm build` / `vitest` / `tsc -b` / `oxlint` | Not re-run by W1-C (out of its assigned subsystem); baselines stand from Session A (144 tests / 0 failed) | — |
+
+**Rule 5 status: no regression.** Every suite is at or above its recorded baseline. The one failing test is a pre-existing flake in an excluded subsystem that passes in isolation.
+
+**New hermetic tests added this session (uncommitted):**
+
+| File | Tests | Covers |
+|---|---|---|
+| `backend/tests/test_phase8_adversarial_detection.py` | **12 passed, 20 xfailed** | W1-B's Phase 8 fixtures: the visual-only attack/twin pairs, the layer-4 area curve, the layer-1 bypass resistance corpus, the layer-7 scale step function, the ReDoS position-sensitivity matrix, and a re-derivation of the corpus guard (0 of 56 benign rows over 0.40) from the artifact. The 20 `xfail` entries are the **characterization guards** a remediation prompt will flip as it fixes each finding (Rule 5). |
+| *(Session A's three files, carried forward)* | **138 passed** | `test_session_a2_detection_findings.py` (107), `test_phase_sa3_orchestration_deep.py` (22), `test_phase_sa5_ai_infra_repros.py` (9) |
+
+**Together: 150 committed-characterization tests** that assert *current* behaviour and are the executable form of the register above.
+
+---
+
+## 9. FINDINGS ROUTED OUT OF SCOPE (recorded, not investigated)
+
+- **AUDIT-SA2-2's** CSP direction classifier remedy needs a token-semantics table — a CSP-spec design question, confined to `worker/detection/metadata.py` (now has a concrete shape: O-8-6).
+- **AUDIT-SA2-3's** cloaking re-tune requires the `partial_cloaking_small_payload` corpus axis first (O-8-5, O-8-8).
+- **Layer 4's behaviour on live interactive pages at scale** — answered positively by W1-B (L4 0.0031–0.0149, 16× below the bar) but only for a synthetic interactive fixture, not for 121 live sites.
+- **W2's three unrun chaos experiments** (§6.1) — recommended for a remediation prompt's own verification phase.
+- **The `DOC-3` Telegram-bot diagram** — not present under version control.
+- **Ops agent + Telegram surfaces** remain excluded per §0, consistent across every phase.
+
+---
+
+- **Commit**: *pending — the user has not requested a commit. The working tree holds this log entry, four Session B scratch reports, and one new characterization test file. **Zero production files modified across Session B.***
+
+### ✅ PROMPT-003 AUDIT COMPLETE — 17 of 17 phases, 163 canonical findings (13 Critical / 27 High / 79 Medium / 44 Low), every finding disposed. Awaiting the user's own remediation prompt.
+

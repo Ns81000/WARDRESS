@@ -272,6 +272,36 @@ https://www.haaretz.co.il/
 
 ---
 
+## Catalog drift corrections — verified 2026-09-30 (Audit Phase 5A+5B+5C, W1-A)
+
+Per the "How to extend this catalog" rule above, measured category drift is recorded **here** rather than only in the log. Every row below was re-verified against live response headers, challenge-page fingerprints and `server`/`x-*` vendor headers on **2026-09-30**, with per-site evidence in `scratch/session-b-stress-testing.md` (finding `AUDIT-5B-5`). **Re-verify before relying on any of it in a future cycle — this is exactly the staleness the Verification protocol exists to surface.**
+
+### Re-filed (wrong category in the original list)
+| Site | Originally filed under | Measured to be | Basis |
+|---|---|---|---|
+| `https://www.yelp.com/` | PerimeterX / HUMAN | **DataDome** | DataDome challenge cookies/headers |
+| `https://www.etsy.com/` | Harder e-commerce | **DataDome** | DataDome challenge cookies/headers |
+| `https://www.sncf-connect.com/` | DataDome | **Cloudflare** | `cf-ray` + Cloudflare challenge DOM |
+
+### Refuted (the category claim does not hold at all)
+| Site | Originally filed under | Finding |
+|---|---|---|
+| `https://www.footlocker.com/` | DataDome | Not behind a DataDome wall on 2026-09-30; the capture path is not exercised by this entry |
+| `https://unsplash.com/` | Harder lazy-load | Not the multi-library / API-gated scroll shape the category describes |
+| `https://en.wikipedia.org/wiki/List_of_largest_selling_pharmaceutical_products` | Extremely large pages | Not a multi-megabyte DOM / very tall archive at capture time |
+| `https://www.nasa.gov/image-of-the-day/` | Extremely large pages | Not a multi-megabyte DOM / very tall archive at capture time |
+| `https://apnews.com/hub/ap-top-news` | Extremely large pages | Not a multi-megabyte DOM at capture time (it *did* exercise the scroll-shrink path instead — see `AUDIT-5C-4`) |
+
+### New category the original list did not contain
+**Proof-of-Work / Anubis gates.** W1-A found a **401 Anubis PoW gate** in the Tier B population that this catalog does not list at all. Anubis is a self-hosted, open-source interstitial that returns **HTTP 401** and requires a client-side proof-of-work before serving the page — a distinct failure shape from the Cloudflare/DataDome/PerimeterX classes above, and one the captured-as-content path (H9) handles no better. Any future cycle should carry at least one Anubis-hosted site explicitly.
+
+### Notes for the next cycle
+- The **Tier A catalog lists 88 entries but only 69 unique URLs** — 19 sites appear in two category blocks. Executing the list literally repeats 19 sites (~27% wasted capture time). Deduplicate by URL, then map each result back to every category that URL belongs to.
+- The three "Extremely large pages" entries above are the weakest block in the catalog; a future cycle should source replacements that genuinely exceed 10 MB of DOM.
+- **`https://www.reuters.com/` serves its bot wall on HTTP 200**, which is the one shape that can be promoted to a *healthy baseline* (findings C11/C12). It is in Tier A, not Tier B, and is worth keeping in that position deliberately: it is the cheapest available reproduction of the audit's most consequential defect.
+
+---
+
 ## How to extend this catalog
 
 If Audit Phase 5A/5B/5C finds a category is thin, under-represented, or a listed site has drifted out of its category, **add to this file, don't just note it in the log** — this catalog is meant to accumulate across audit cycles (including any future re-run of PROMPT-003 per its §8.3), the same way PROMPT-002's own site list was a living artifact of that effort. Append new entries under the correct tier/category heading, keep the verification-protocol discipline, and note the date added.
