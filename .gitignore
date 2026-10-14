@@ -17,7 +17,6 @@ build/
 Audit
 react-bits-main
 .agents
-.claude
 presentation
 # Build-log litter from failed image builds (scripts/lib.ps1 keeps them in
 # .build-logs/; the root-level patterns are defense-in-depth for older checkouts).
